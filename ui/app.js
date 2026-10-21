@@ -16,7 +16,7 @@ const MATCH = {
 };
 const state = {
   session: read(), overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
-  open: new Set(), connected: true, loginError: '', busy: false, toast: '', q: '', filter: 'all'
+  open: new Set(), changes: null, connected: true, loginError: '', busy: false, toast: '', q: '', filter: 'all'
 };
 let timer = null;
 let regions = null; // live containers of the mounted shell; patched in place so selection and scroll survive polling
@@ -121,6 +121,12 @@ async function select(id) {
   // One-column layout: bring the conversation into view after choosing from the list.
   if (window.matchMedia('(max-width: 1100px)').matches) document.querySelector('.detail')?.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
+async function loadChanges(id) {
+  state.changes = {task_id: id, loading: true}; patch();
+  try { state.changes = {task_id: id, data: await api(`tasks/${id}/changes`)}; }
+  catch (error) { state.changes = {task_id: id, error: error.message}; }
+  patch();
+}
 async function cancel(id) {
   if (!confirm('Hủy task này? Các thay đổi file dở dang sẽ được giữ lại, không tự hoàn tác.')) return;
   try { await api(`tasks/${id}/cancel`, {method: 'POST'}); notify('Đã hủy task'); await refresh(); } catch (error) { notify(error.message); }
@@ -193,6 +199,35 @@ function details(key, title, ...body) {
   return el;
 }
 
+const CHANGE_LABEL = {modified: 'Sửa', deleted: 'Xóa', added: 'Thêm', 'type-changed': 'Đổi kiểu'};
+function changesBody(task) {
+  const c = state.changes && state.changes.task_id === task.task_id ? state.changes : null;
+  const refresh = h('button', {class: 'btn small', onclick: () => loadChanges(task.task_id), disabled: Boolean(c && c.loading), text: c && c.data ? 'Làm mới' : 'Xem thay đổi'});
+  if (!c) return [h('p', {class: 'muted', text: 'Đọc trạng thái git của workspace, chỉ đọc: chỉ hiện tên file và số dòng, không hiện nội dung file.'}), refresh];
+  if (c.loading) return [h('div', {class: 'typing'}, h('span', {class: 'spinner'}), 'Đang đọc thay đổi…')];
+  if (c.error) return [h('div', {class: 'callout bad', text: c.error}), refresh];
+  const d = c.data;
+  if (!d.available) return [h('div', {class: 'callout warn', text: d.reason || 'Không đọc được thay đổi.'}), refresh];
+  const rows = [
+    ...d.changes.map(item => h('li', {class: 'change-row'}, h('span', {class: `change-kind ${item.status}`, text: CHANGE_LABEL[item.status] || item.status}),
+      h('span', {class: 'change-path mono', text: item.path}),
+      h('span', {class: 'change-count mono', text: item.added === null ? 'nhị phân' : `+${item.added} −${item.deleted}`}))),
+    ...d.untracked.map(item => h('li', {class: 'change-row'}, h('span', {class: 'change-kind untracked', text: 'Mới'}),
+      h('span', {class: 'change-path mono', text: item.path}), h('span', {class: 'change-count mono', text: item.bytes === null ? '' : bytes(item.bytes)})))
+  ];
+  return [
+    h('div', {class: 'change-head'}, h('strong', {text: rows.length ? `${d.changes.length} file đã sửa hoặc xóa · ${d.untracked.length} file mới chưa theo dõi` : 'Không có thay đổi nào so với HEAD.'}), refresh),
+    h('p', {class: 'muted', text: `So với commit ${d.head ? d.head.slice(0, 8) : '(repo chưa có commit)'}; gồm cả thay đổi đã có từ trước khi task chạy. Chỉ hiện tên file và số dòng, không có nội dung.`}),
+    rows.length ? h('ul', {class: 'change-list'}, rows) : null,
+    d.truncated ? h('div', {class: 'callout warn', text: 'Chỉ hiện 500 mục đầu tiên của mỗi nhóm.'}) : null
+  ];
+}
+function changesPanel(task) {
+  const el = details('changes', 'Thay đổi trong workspace', ...changesBody(task));
+  el.addEventListener('toggle', () => { if (el.open && (!state.changes || state.changes.task_id !== task.task_id)) loadChanges(task.task_id); });
+  return el;
+}
+
 function logTabs(task) {
   return ['stdout', 'stderr'].map(tab => h('button', {
     'aria-pressed': String(state.logTab === tab), onclick: () => { state.logTab = tab; signatures.detail = null; patch(); }, text: `${tab} (${bytes(task[`${tab}_bytes`])})`
@@ -246,6 +281,7 @@ function detailView() {
     h('pre', {class: 'log', id: 'log-pre', text: logText(task)}));
 
   return h('article', {class: 'card detail'}, head, facts, h('div', {class: 'convo'}, asked, replied),
+    changesPanel(task),
     details('logs', 'Log của tiến trình agy', logs),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);
 }
@@ -347,7 +383,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, d && {...d, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, d && {...d, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();

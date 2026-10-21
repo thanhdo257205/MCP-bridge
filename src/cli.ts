@@ -5,7 +5,10 @@ import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { paths } from './paths.js';
+import { existsSync } from 'node:fs';
 import { addSessionWorkspaces } from './config.js';
+import { renderSetup, type Client, type Shell } from './setup.js';
+import { configuredPort } from './http.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
   checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
@@ -21,6 +24,7 @@ Usage: ${BIN} [command] [options]
   start (default)         Run the HTTP server (default http://127.0.0.1:3000, web UI at /ui)
       --port <0-65535>      Port to listen on (same as the PORT variable)
       --workspace <dir>     Also allow <dir> (for example .) for this run only; repeatable, not saved
+      --open                Open the web UI in your default browser once the server is up
       --no-update-check     Do not ask the npm registry whether a newer version exists
   check                   Call antigravity_environment on the running server
   workspaces list|add <dir>|remove <dir>
@@ -29,6 +33,8 @@ Usage: ${BIN} [command] [options]
                           Switch delegation to Antigravity on or off immediately (no restart)
   skill install --client codex|claude|both [--project <dir>]
                           Install the antigravity-bridge skill for the chosen client
+  setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
+                          Print the exact client configuration and token commands (changes nothing)
   config [--json]         Show where config, state and the token file live (never prints the token)
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
   probe-stream            Capture the real agy stream-json event shape (one tiny AI call)
@@ -76,6 +82,7 @@ async function start(args: string[]) {
     if (args[i] === '--port' && args[i + 1] !== undefined) process.env.PORT = args[++i];
     else if (args[i] === '--workspace' && args[i + 1] !== undefined) directories.push(path.resolve(args[++i]));
     else if (args[i] === '--no-update-check') process.env.BRIDGE_NO_UPDATE_CHECK = '1';
+    else if (args[i] === '--open') process.env.BRIDGE_OPEN_BROWSER = '1';
     else if (args[i] === '--port' || args[i] === '--workspace') throw new Error(`${args[i]} needs a value (see ${BIN} help)`);
     else throw new Error(`Unknown option for start: ${args[i]} (see ${BIN} help)`);
   }
@@ -106,6 +113,25 @@ async function updateCommand(args: string[]) {
   const status = runGlobalInstall(pkg.name, latest);
   if (status === 0) console.log(`Updated to ${latest}. Restart a running server (Ctrl+C, then ${BIN}) to use it.`);
   process.exitCode = status;
+}
+
+function setup(args: string[]) {
+  const target = args[0];
+  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(`Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash]`);
+  let port = process.env.PORT !== undefined && process.env.PORT !== '0' ? configuredPort(process.env.PORT) : 3000;
+  let shell: Shell[] = process.platform === 'win32' ? ['powershell', 'cmd'] : ['bash'];
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--port' && args[i + 1] !== undefined) port = configuredPort(args[++i]);
+    else if (args[i] === '--shell' && args[i + 1] !== undefined) {
+      const chosen = args[++i];
+      if (chosen !== 'powershell' && chosen !== 'cmd' && chosen !== 'bash') throw new Error('--shell must be powershell, cmd or bash');
+      shell = [chosen];
+    } else throw new Error(`Unknown option for setup: ${args[i]}`);
+  }
+  if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
+  const tokenFile = path.join(paths.stateDirectory, 'http-token');
+  const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
+  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN}));
 }
 
 async function workspaces(args: string[]) {
@@ -141,6 +167,7 @@ async function main(argv: string[]) {
       else for (const [key, value] of Object.entries(info)) console.log(`${key.replace(/_/g, ' ')}: ${value}`);
       return;
     }
+    case 'setup': return setup(rest);
     case 'workspaces': return workspaces(rest);
     case 'update': return updateCommand(rest);
     default: throw new Error(`Unknown command: ${command}\n\n${HELP}`);
