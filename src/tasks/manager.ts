@@ -10,7 +10,7 @@ import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
-import {packageRoot} from '../paths.js';
+import {helperDirectory} from '../paths.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
@@ -310,7 +310,7 @@ export class TaskManager {
   }
   /** Models offered by the installed Antigravity CLI (read on demand, never at startup). */
   availableModels(): Promise<ModelInfo[]> {
-    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, packageRoot, this.config.extra_env_passthrough);
+    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, helperDirectory(), this.config.extra_env_passthrough);
   }
   currentModel(): Promise<string | null> { return readModel(this.runtime.stateDirectory); }
 
