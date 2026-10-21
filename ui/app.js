@@ -59,8 +59,13 @@ function duration(ms) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}p ${s % 60}s`;
 }
 function agoEl(iso, className) { return h('span', {class: className, 'data-ago': iso, title: clock(iso), text: ago(iso)}); }
+function agoElPrefix(prefix, iso) { return h('span', {}, prefix, agoEl(iso)); }
 function elapsedEl(iso, prefix = '') { return h('span', {'data-elapsed': iso, 'data-prefix': prefix, text: prefix + duration(Date.now() - Date.parse(iso))}); }
 function tick() {
+  for (const bar of document.querySelectorAll('[data-bar-start]')) {
+    const ratio = (Date.now() - Date.parse(bar.getAttribute('data-bar-start'))) / Number(bar.getAttribute('data-bar-total'));
+    bar.firstChild.style.width = `${Math.min(100, Math.max(0, ratio * 100)).toFixed(1)}%`;
+  }
   for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(el.getAttribute('data-ago'));
   for (const el of document.querySelectorAll('[data-elapsed]')) el.textContent = (el.getAttribute('data-prefix') || '') + duration(Date.now() - Date.parse(el.getAttribute('data-elapsed')));
 }
@@ -106,6 +111,7 @@ async function refresh(force) {
     state.detail = state.selected ? await api(`tasks/${state.selected}`).catch(() => null) : null;
   } catch (error) { if (state.session) state.connected = false; }
   if (force || !regions) render(); else patch();
+  followChanges();
 }
 function start() { stop(); schedule(); }
 function stop() { if (timer) clearTimeout(timer); timer = null; }
@@ -121,11 +127,21 @@ async function select(id) {
   // One-column layout: bring the conversation into view after choosing from the list.
   if (window.matchMedia('(max-width: 1100px)').matches) document.querySelector('.detail')?.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
-async function loadChanges(id) {
-  state.changes = {task_id: id, loading: true}; patch();
+let changesAt = 0;
+// `silent` keeps the current list on screen while a running task's changes are refreshed in the background.
+async function loadChanges(id, silent) {
+  changesAt = Date.now();
+  if (!silent) { state.changes = {task_id: id, loading: true}; patch(); }
   try { state.changes = {task_id: id, data: await api(`tasks/${id}/changes`)}; }
-  catch (error) { state.changes = {task_id: id, error: error.message}; }
+  catch (error) { if (!silent) state.changes = {task_id: id, error: error.message}; }
   patch();
+}
+// While the selected task runs and its changes panel is open, files appearing in the workspace are the most direct sign of progress.
+function followChanges() {
+  const task = state.detail?.task;
+  if (!task || task.status !== 'running' || !state.open.has('changes') || Date.now() - changesAt < 6000) return;
+  if (state.changes?.task_id !== task.task_id || state.changes.loading) return;
+  void loadChanges(task.task_id, true);
 }
 async function cancel(id) {
   if (!confirm('Hủy task này? Các thay đổi file dở dang sẽ được giữ lại, không tự hoàn tác.')) return;
@@ -254,6 +270,11 @@ function detailView() {
     h('div', {}, h('h2', {}, 'Task ', h('span', {class: 'mono', text: task.task_id.slice(0, 8)}), pill(task.status)),
       h('div', {class: 'muted mono', text: task.workspace})),
     running || queued ? h('button', {class: 'btn danger small', onclick: () => cancel(task.task_id), text: 'Hủy task'}) : null);
+  const activity = state.detail?.activity;
+  const progress = running ? h('div', {class: 'progress', 'aria-label': 'Tiến độ'},
+    h('div', {class: 'bar', 'data-bar-start': task.started_at, 'data-bar-total': String((request?.timeout_seconds ?? 300) * 1000), role: 'presentation'}, h('span', {})),
+    h('div', {class: 'muted'}, elapsedEl(task.started_at, 'Đã chạy '), ` / giới hạn ${request?.timeout_seconds ?? '—'}s · `,
+      activity?.last_output_at ? agoElPrefix('Output cuối: ', activity.last_output_at) : 'chưa có output từ agy (bình thường ở chế độ print/json: agy chỉ in khi xong)')) : null;
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
@@ -289,7 +310,7 @@ function detailView() {
     h('div', {id: 'log-note'}, task[`${state.logTab}_truncated`] ? h('div', {class: 'callout warn', text: 'Log đã bị cắt vì vượt giới hạn.'}) : null),
     h('pre', {class: 'log', id: 'log-pre', text: logText(task)}));
 
-  return h('article', {class: 'card detail'}, head, facts, h('div', {class: 'convo'}, asked, replied),
+  return h('article', {class: 'card detail'}, head, progress, facts, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
     details('logs', 'Log của tiến trình agy', logs),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);

@@ -89,3 +89,24 @@ jobs:
       - name: Publish using npm Trusted Publishing
         if: steps.registry.outputs.publish_needed == 'true'
         run: npm publish --access public
+      # Each release gets notes on GitHub (the merged pull requests since the previous tag). Missing releases for older tags are filled in, oldest first.
+      # A failure here never fails the release itself: the package is already published.
+      - name: Create GitHub Releases with generated notes
+        if: steps.prepare.outputs.ready == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=version:refname | tail -n1)"
+          prev=""
+          for tag in $(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=version:refname); do
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              args=(--verify-tag --generate-notes --title "$tag")
+              if [ -n "$prev" ]; then args+=(--notes-start-tag "$prev"); fi
+              if [ "$tag" = "$latest" ]; then args+=(--latest); else args+=(--latest=false); fi
+              gh release create "$tag" "${args[@]}"
+            fi
+            prev="$tag"
+          done

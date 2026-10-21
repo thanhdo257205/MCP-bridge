@@ -195,6 +195,20 @@ test('web UI: cancel and delegation switch work; env lock is respected; failed l
     assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token})})).status,429);
   } finally {if(saved===undefined)delete process.env.BRIDGE_DELEGATION;else process.env.BRIDGE_DELEGATION=saved;await client.close();await bridge.close();}
 });
+test('web UI: a running task reports when its process last produced output',async()=>{
+  const {bridge,workspace,manager}=await setup('hang');
+  try {
+    const session=await signIn(bridge);
+    const task=await manager.delegate({task:'mock hang',workspace,acceptance_criteria:['mock']});
+    const early=await (await ui(bridge,`tasks/${task.task_id}`,{},session)).json() as {activity:{last_output_at:string|null}};
+    for(let i=0;i<50&&!(await (await ui(bridge,`tasks/${task.task_id}`,{},session)).json() as {activity:{last_output_at:string|null}}).activity.last_output_at;i++)await new Promise(r=>setTimeout(r,100));
+    const later=await (await ui(bridge,`tasks/${task.task_id}`,{},session)).json() as {activity:{last_output_at:string|null}};
+    assert.ok(early.activity.last_output_at===null||typeof early.activity.last_output_at==='string');
+    assert.match(String(later.activity.last_output_at),/^\d{4}-\d\d-\d\dT/);
+    assert.ok(!('activity' in await manager.get(task.task_id)),'MCP task data stays unchanged');
+    await manager.cancel(task.task_id);
+  } finally {await bridge.close();}
+});
 test('client identity: modern clients are named by clientInfo, legacy ones fall back to the User-Agent',async()=>{
   const {bridge,workspace,manager}=await setup('delayed');
   try {
