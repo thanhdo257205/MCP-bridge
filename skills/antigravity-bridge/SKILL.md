@@ -19,19 +19,19 @@ A decline for one task does not change the setting for later tasks; ask again on
 
 ## Auto-split mode (only when the user opts in)
 
-This changes the rule above only after the user clearly says that you may decide, task by task, what goes to Antigravity (for example "tự phân loại việc", "give the easy tasks to Antigravity and do the hard ones yourself"). Without that, delegate only on an explicit request. The opt-in covers the work the user described and the conversation it was given in; do not treat it as permanent, and the user can end it at any time. The cases in "When NOT to delegate" (a decline, the kill switch) still win over it.
+This changes the rule above only after the user clearly says that you may decide, task by task, what goes to Antigravity (for example "tự phân loại việc", "tiết kiệm token bên Codex", "give the easy tasks to Antigravity and do the hard ones yourself"). Without that, delegate only on an explicit request. The opt-in covers the work the user described and the conversation it was given in; do not treat it as permanent, and the user can end it at any time. The cases in "When NOT to delegate" (a decline, the kill switch) still win over it.
 
-In this mode, delegate a part of the work only when **all** of these hold (defaults; if the user states their own limits, use theirs):
+In this mode, work like this to keep your own token use down:
 
-- one goal, touching at most 3 files plus their tests;
-- concrete acceptance criteria that you can check from the diff or by running tests;
-- no dependence on context outside the repository or on long multi-step reasoning;
-- not security, authentication or secrets, data migrations or deletion, deployment, dependency, build or CI configuration, or public API/contract changes;
-- `agy_permissions` allows what the task needs (at `default`, expect writes and commands to be denied; then do it yourself or tell the user).
+- **Easy work**: one goal, touching at most 3 files plus their tests, concrete acceptance criteria, no dependence on context outside the repository, and none of the exclusions below. Delegate it whole: ask Antigravity to read the files it needs, make the change, run the checks the user has authorized, and report. Antigravity can run commands only when `agy_permissions` allows it (at `default`, expect writes and commands to be denied; then run the checks yourself). Then review the diff.
+- **Hard work** (design or architecture decisions, many interdependent files, ambiguous requirements, a bug with an unknown cause): you analyze it and fix the scope and design first. Delegate only the implementation of parts you have specified well enough to give acceptance criteria, one task at a time. Do the risky parts yourself, or review them line by line.
+- **Never delegate**, in any mode: security, authentication or secrets, data migrations or deletion, deployment, dependency, build or CI configuration, public API or contract changes. When unsure whether work is easy, treat it as hard.
+- **Avoid reading twice**: do not read the whole codebase before delegating. Give Antigravity only the context the task needs (paths, contracts, your findings) and let it read the rest.
+- **Watch less**: use a few long waits, take the report when the task ends, and do not keep reading logs.
+- **Check just enough**: Antigravity's own check results are a lead, not proof (the bridge always reports `acceptance_verified=false`). You may skip re-running minor, low-risk checks that it reported as passing. Run the key check that covers the change (tests, build or lint) yourself once at the end, always for risky changes, and again after any edit you make afterwards.
+- **Report briefly**: files changed, check results and remaining problems, plus which parts Antigravity did and which you did. Say in one line what you are delegating and why before you do it.
 
-Do the work yourself when any of these holds: design or architecture decisions, many interdependent files, debugging with an unknown cause, ambiguous requirements, or anything in the exclusions above. When unsure, treat the work as hard and do it yourself.
-
-For mixed work, do the hard part yourself and delegate only the separable easy parts, one task at a time. Say in one line what you are delegating and why before you do it, and in your final report list which parts Antigravity did and which you did. Review every delegated diff as usual. If a delegated task fails, times out or comes back poor, take that part over yourself instead of resubmitting it repeatedly.
+Review every delegated diff. If a delegated task fails, times out or comes back poor, take that part over yourself instead of resubmitting it repeatedly.
 
 ## Before delegating
 

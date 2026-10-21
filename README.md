@@ -250,9 +250,18 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 
 `completed` chỉ là CLI chạy xong và có envelope hợp lệ. Luôn `review_required=true`, `acceptance_verified=false`. SUCCESS/exit 0 vẫn có thể bị bridge đánh dấu failed do permission denial hoặc timeout. Prompt mẫu review/sửa tiếp: [docs/PROMPTS.md](docs/PROMPTS.md).
 
-### Để Codex/Claude tự chia việc dễ khó (chế độ tùy chọn)
+### Để Codex/Claude tự chia việc dễ khó và tiết kiệm token (chế độ tùy chọn)
 
-Mặc định agent chỉ giao việc khi bạn nhắc Antigravity. Nếu bạn muốn agent tự quyết định, hãy nói rõ trong cuộc trò chuyện, ví dụ "tự phân loại việc: việc dễ giao Antigravity, việc khó bạn tự làm". Khi đó skill cho phép agent giao một phần việc **chỉ khi tất cả đều đúng** (mặc định, bạn có thể nêu ngưỡng riêng): một mục tiêu và tối đa 3 file kèm test; tiêu chí nghiệm thu cụ thể, kiểm tra được bằng diff hoặc test; không phụ thuộc ngữ cảnh ngoài repo hay suy luận dài; không thuộc bảo mật, xác thực, secret, di chuyển hoặc xóa dữ liệu, triển khai, phụ thuộc/build/CI, hợp đồng API công khai; và `agy_permissions` đủ quyền cho việc đó. Thiết kế, nhiều file phụ thuộc nhau, lỗi chưa rõ nguyên nhân, yêu cầu mơ hồ, hoặc khi không chắc thì agent tự làm. Việc hỗn hợp được tách: agent tự làm phần khó, giao từng phần dễ độc lập, nói một dòng lý do trước khi giao và liệt kê ai làm phần nào ở báo cáo cuối. Mọi diff giao đi vẫn được xem lại; task giao đi lỗi, hết giờ hoặc kém thì agent tự làm tiếp thay vì gửi lại nhiều lần. Bạn kết thúc chế độ bất cứ lúc nào bằng cách bảo agent tự làm hết; công tắc giao việc và lời từ chối của bạn luôn có hiệu lực trước. Đây là chỉ dẫn cho agent, không phải rào chắn kỹ thuật, và việc phân loại dựa trên phán đoán của agent. Các tình huống kiểm tra thủ công ở [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) (11 đến 15).
+Mặc định agent chỉ giao việc khi bạn nhắc Antigravity. Nếu muốn agent tự quyết định, hãy nói rõ trong cuộc trò chuyện, ví dụ "tự phân loại việc" hoặc "tiết kiệm token bên Codex". Khi đó agent làm theo quy trình sau (do skill quy định):
+
+- **Việc dễ** (một mục tiêu, tối đa 3 file kèm test, tiêu chí nghiệm thu cụ thể, không phụ thuộc ngữ cảnh ngoài repo): giao trọn cho Antigravity đọc file cần thiết, sửa, chạy các kiểm tra bạn đã cho phép và báo cáo; agent xem diff. Antigravity chỉ chạy được lệnh khi mức quyền `agy_permissions` cho phép; ở mức mặc định lệnh bị từ chối, nên agent tự chạy kiểm tra.
+- **Việc khó** (thiết kế, nhiều file phụ thuộc nhau, yêu cầu mơ hồ, lỗi chưa rõ nguyên nhân): agent tự phân tích phạm vi và thiết kế trước, chỉ giao phần triển khai đã đủ rõ để viết tiêu chí nghiệm thu, từng task một; phần rủi ro tự làm hoặc review kỹ.
+- **Không bao giờ giao** (kể cả trong chế độ này): bảo mật, xác thực, secret; di chuyển hoặc xóa dữ liệu; triển khai; phụ thuộc, build, CI; thay đổi API công khai. Không chắc thì coi là việc khó.
+- **Tránh đọc trùng:** không đọc cả codebase trước khi giao; chỉ đưa ngữ cảnh cần thiết. **Theo dõi ít:** dùng vài lượt chờ dài, lấy báo cáo khi xong, không đọc log liên tục.
+- **Kiểm tra vừa đủ:** kết quả kiểm tra do Antigravity báo chỉ là gợi ý, không phải bằng chứng (bridge luôn báo `acceptance_verified=false`). Agent có thể bỏ qua việc chạy lại các kiểm tra nhỏ, ít rủi ro mà Antigravity báo đã qua, nhưng **tự chạy một lần** kiểm tra chính bao phủ thay đổi (test, build hoặc lint) ở cuối, luôn làm vậy với thay đổi rủi ro, và chạy lại sau mọi sửa đổi thêm của chính nó.
+- **Báo cáo ngắn:** file đã đổi, kết quả kiểm tra, lỗi còn lại, và phần nào do Antigravity làm, phần nào do agent làm; nói một dòng lý do trước khi giao. Mọi diff giao đi đều được xem lại; task giao đi lỗi, hết giờ hoặc kém thì agent tự làm tiếp thay vì gửi lại nhiều lần.
+
+Bạn kết thúc chế độ bất cứ lúc nào bằng cách bảo agent tự làm hết; công tắc giao việc và lời từ chối của bạn luôn có hiệu lực trước. Đây là chỉ dẫn cho agent, không phải rào chắn kỹ thuật, và việc phân loại dựa trên phán đoán của agent. Các tình huống kiểm tra thủ công ở [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) (11 đến 17).
 
 ### Khi chỉ muốn Codex/Claude tự làm
 
