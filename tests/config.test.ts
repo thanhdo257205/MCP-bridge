@@ -21,3 +21,16 @@ test('session workspaces are merged into the allowlist for this run but never wr
   assert.deepEqual(sessionOnlyWorkspaces(), [extra], 'an entry already in the file is not session-only');
   assert.equal(await readFile(file, 'utf8'), original, 'the config file is untouched');
 });
+test('the prompt goes through argv by default (the mode verified with a real agy); stdin is opt-in', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-transport-'));
+  const file = path.join(dir, 'workspaces.json');
+  process.env.ANTIGRAVITY_BRIDGE_CONFIG = file;
+  await writeFile(file, JSON.stringify({allowed_workspaces: []}));
+  assert.equal((await loadConfig()).prompt_transport, 'argv');
+  await writeFile(file, JSON.stringify({allowed_workspaces: [], prompt_transport: 'stdin'}));
+  assert.equal((await loadConfig()).prompt_transport, 'stdin');
+  await writeFile(file, JSON.stringify({allowed_workspaces: [], prompt_transport: 'pipe'}));
+  await assert.rejects(loadConfig());
+  const example = JSON.parse(await readFile(new URL('../../config/workspaces.example.json', import.meta.url), 'utf8')) as {prompt_transport: string};
+  assert.equal(example.prompt_transport, 'argv', 'the shipped example does not silently opt in to stdin');
+});

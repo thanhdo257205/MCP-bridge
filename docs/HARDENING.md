@@ -11,7 +11,7 @@
 5. Family 1.4.x phải có đủ cờ bắt buộc trong help. Patch khác 1.4.3 có cảnh báo log/environment vì chưa thực thi AI thật; minor/major khác không chạy.
 6. Môi trường child mặc định chỉ có PATH, HOME, USERPROFILE, APPDATA, LOCALAPPDATA, TEMP, TMP, TMPDIR, SystemRoot, ComSpec, LANG, LC_*, XDG_*, HTTP_PROXY, HTTPS_PROXY, NO_PROXY; tên không phân biệt hoa thường. Tên chứa TOKEN/SECRET/PASSWORD/API_KEY chỉ được truyền khi có trong `extra_env_passthrough`. Các thiết lập auth/tool phụ thuộc env khác có thể cần opt-in. Không liệt kê token điều khiển bridge.
 7. Token Windows mới được harden bằng whoami SID và icacls qua execFile, không shell. Nếu lệnh lỗi, server cảnh báo và vẫn chạy như yêu cầu; chủ máy phải bảo vệ file thủ công. Token cũ không tự đổi ACL. POSIX giữ mode 0600.
-8. Prompt mặc định dùng stdin NDJSON, một event user rồi end; stdout phải có đúng một event result hợp lệ. Có fallback argv. Cap API 24000 ký tự và output cap không thay đổi; progress/init cũng tính vào output.
+8. Prompt mặc định vẫn đi qua argv với print/json, là đường đã được chạy thật với `agy` 1.4.3. Chế độ `"prompt_transport": "stdin"` (tùy chọn, chưa mặc định) gửi NDJSON qua stdin để prompt không hiện trong danh sách tiến trình: một event user rồi end, stdout phải có đúng một event result hợp lệ. Chỉ bật khi đã xác nhận bằng một lần chạy `agy` thật; nếu định dạng không khớp, task fail và lỗi có gợi ý quay lại argv. Cap API 24000 ký tự và output cap không thay đổi; progress/init cũng tính vào output.
 9. Output được gom vào mảng chunk; decode/redact snapshot tối đa mỗi giây, cuối task flush đầy đủ. Byte counts và truncated giữ ngữ nghĩa cũ.
 10. Repeated SIGINT/SIGTERM không bỏ cleanup; in thông báo chờ.
 11. Prompt nhận clientLabel thực tế; MCP/UI version đọc manifest. Prerelease được so từng phần, numeric so bằng BigInt, ví dụ rc.2 < rc.10; build metadata không ảnh hưởng precedence.
@@ -21,11 +21,11 @@ Ví dụ các key mới trong config (merge với config hiện có, không thay
 ```json
 {
   "extra_env_passthrough": ["GOOGLE_APPLICATION_CREDENTIALS"],
-  "prompt_transport": "stdin"
+  "prompt_transport": "argv"
 }
 ```
 
-Chỉ thêm env khi cơ chế xác thực/tool của chính bạn cần nó. `"prompt_transport": "argv"` quay lại cách gửi prompt cũ và làm nội dung prompt hiện trong command line process. Không tự nới quyền CLI khi gặp permission denial.
+Chỉ thêm env khi cơ chế xác thực/tool của chính bạn cần nó. `"prompt_transport": "argv"` (mặc định) gửi prompt qua command line, nên nội dung prompt hiện trong danh sách tiến trình; `"stdin"` tránh điều đó nhưng chưa được chạy thử với `agy` thật. Không tự nới quyền CLI khi gặp permission denial.
 
 ## Bằng chứng và giới hạn kiểm thử
 
