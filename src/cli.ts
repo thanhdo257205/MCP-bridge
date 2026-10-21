@@ -10,6 +10,7 @@ import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
 import { configuredPort } from './http.js';
+import { offerSkillInstall } from './onboarding.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
   checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
@@ -27,13 +28,14 @@ Usage: ${BIN} [command] [options]
       --workspace <dir>     Also allow <dir> (for example .) for this run only; repeatable, not saved
       --open                Open the web UI in your default browser once the server is up
       --no-update-check     Do not ask the npm registry whether a newer version exists
+      --no-skill-prompt     Do not offer to install the Codex / Claude Code skill on first run
   check                   Call antigravity_environment on the running server
   workspaces list|add <dir>|remove <dir>
                           Manage the directories agents may edit (restart the server afterwards)
   delegation on|off|status
                           Switch delegation to Antigravity on or off immediately (no restart)
   skill install --client codex|claude|both [--project <dir>]
-                          Install the antigravity-bridge skill for the chosen client
+                          Install the antigravity-bridge skill for the chosen client (first run also offers it once)
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
                           Print the exact client configuration and token commands (changes nothing)
   config [--json]         Show where config, state and the token file live (never prints the token)
@@ -84,6 +86,7 @@ async function start(args: string[]) {
     if (args[i] === '--port' && args[i + 1] !== undefined) process.env.PORT = args[++i];
     else if (args[i] === '--workspace' && args[i + 1] !== undefined) directories.push(path.resolve(args[++i]));
     else if (args[i] === '--no-update-check') process.env.BRIDGE_NO_UPDATE_CHECK = '1';
+    else if (args[i] === '--no-skill-prompt') process.env.BRIDGE_NO_SKILL_PROMPT = '1';
     else if (args[i] === '--open') process.env.BRIDGE_OPEN_BROWSER = '1';
     else if (args[i] === '--port' || args[i] === '--workspace') throw new Error(`${args[i]} needs a value (see ${BIN} help)`);
     else throw new Error(`Unknown option for start: ${args[i]} (see ${BIN} help)`);
@@ -95,6 +98,12 @@ async function start(args: string[]) {
   if (updateCheckEnabled(paths.mode)) {
     const info = await checkForUpdate({stateDirectory: paths.stateDirectory, pkg});
     if (info) await offerUpdate(info);
+  }
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (interactive) {
+    const rl = createInterface({input: process.stdin, output: process.stdout});
+    try { await offerSkillInstall({stateDirectory: paths.stateDirectory, interactive, ask: question => rl.question(question)}); }
+    finally { rl.close(); }
   }
   await import('./index.js');
 }
