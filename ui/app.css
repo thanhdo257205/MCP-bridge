@@ -207,3 +207,6 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .select { max-width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font: inherit; color: inherit; }
 .select:focus { border-color: var(--accent); }
 .select:disabled { opacity: .55; cursor: not-allowed; }
+.progress { display: grid; gap: 6px; margin: 4px 0 12px; }
+.bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; border: 1px solid var(--border); }
+.bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .9s linear; }

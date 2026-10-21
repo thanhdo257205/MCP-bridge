@@ -34,6 +34,8 @@ interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
   /** Resolves `done`; set for every task that goes through the CLI. */
   finish?: () => void;
+  /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
+  lastOutputAt?: number;
   /** Validated input kept until the process starts (a queued task waits with it). */
   pending?: {input: DelegateInput; workspace: string; timeout: number};
 }
@@ -182,6 +184,7 @@ export class TaskManager {
         void terminateOwned(child).catch(() => { task.error = 'Failed to terminate owned process tree; execution lock is retained until process closes'; });
       };
       const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+        entry.lastOutputAt = Date.now();
         task[`${stream}_bytes`] += chunk.length;
         const available = this.config.max_output_bytes - lengths[stream];
         if (available > 0) {
@@ -312,7 +315,8 @@ export class TaskManager {
       task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
       ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
     },request.client) : null;
-    return {task, request, prompt};
+    const lastOutputAt = this.entries.get(id)?.lastOutputAt;
+    return {task, request, prompt, activity: {last_output_at: lastOutputAt ? new Date(lastOutputAt).toISOString() : null}};
   }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {

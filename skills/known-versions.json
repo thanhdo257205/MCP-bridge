@@ -24,6 +24,10 @@
     {
       "sha256": "afc8d8e76f977e0623b73bbb1e90f3e485cfdaf55036c36db6234328c111660b",
       "note": "clarified cancel timing, restart of queued tasks, unlock, environment limitations"
+    },
+    {
+      "sha256": "451fe5791b1753f1550275a709c561442e62d1e8b86d3fe8c4525998d8d85659",
+      "note": "model choice is the owner's setting; no step progress in the tools"
     }
   ]
 }
