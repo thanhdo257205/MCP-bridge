@@ -1,6 +1,6 @@
 {
   "name": "agy-mcp-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local authenticated HTTP MCP bridge that lets Codex and Claude Code delegate bounded coding tasks to the Antigravity CLI (agy)",
   "license": "MIT",
   "keywords": [
