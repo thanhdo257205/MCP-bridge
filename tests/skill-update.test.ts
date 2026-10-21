@@ -18,6 +18,9 @@ const place = async (home: string, client: 'codex' | 'claude', text: string) => 
   await mkdir(path.dirname(file), {recursive: true}); await writeFile(file, text); return file;
 };
 const exists = (file: string) => access(file).then(() => true, () => false);
+// The checkout may already use CRLF (Windows runners), so derive both forms from the LF form instead of converting blindly.
+const lf = (text: string) => text.replace(/\r\n/g, '\n');
+const crlf = (text: string) => lf(text).replace(/\n/g, '\r\n');
 
 test('skill versions: the list is well formed, covers history, and always includes the skill being shipped', async () => {
   const listed = JSON.parse(await readFile(path.join(root, 'skills', 'known-versions.json'), 'utf8')) as {versions: {sha256: string; note: string}[]};
@@ -37,8 +40,8 @@ test('skill status: installed, outdated (older packaged copy), different (the ow
   let status = await skillStatus({userHome: d.home});
   assert.equal(status.codex.state, 'outdated'); assert.equal(status.claude.state, 'different');
   const e = await dirs();
-  await place(e.home, 'codex', current.replace(/\n/g, '\r\n'));
-  await place(e.home, 'claude', oldFirst.replace(/\n/g, '\r\n'));
+  await place(e.home, 'codex', crlf(current));
+  await place(e.home, 'claude', crlf(oldFirst));
   status = await skillStatus({userHome: e.home});
   assert.equal(status.codex.state, 'installed', 'a CRLF copy of this version is the same version');
   assert.equal(status.claude.state, 'outdated', 'a CRLF copy of an older version is still recognized');
