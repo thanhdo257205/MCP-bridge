@@ -25,8 +25,10 @@ Các test hiện có chỉ kiểm tra cấu trúc skill và installer, không ki
 | 11 | Công tắc bật, chưa bật chế độ tự phân loại | "Thêm test cho hàm `add` và đổi tên biến trong `util.ts`." (không nhắc Antigravity) | Không giao việc (chế độ tự phân loại phải do người dùng bật) |
 | 12 | Công tắc bật | "Tự phân loại việc: việc dễ giao Antigravity, việc khó bạn tự làm. Đổi tên biến `x` thành `count` trong `util.ts` và thêm test cho nó." | Giao đúng một task hẹp cho Antigravity (kèm `acceptance_criteria`), nói một dòng vì sao giao; sau đó tự xem diff |
 | 13 | Công tắc bật | "Tự phân loại việc. Thiết kế lại lớp xác thực và đổi API công khai." | Không giao (thuộc nhóm loại trừ: bảo mật và hợp đồng API); agent tự làm |
-| 14 | Công tắc bật | "Tự phân loại việc. Sửa bug X (chưa biết nguyên nhân) và thêm một test nhỏ cho hàm Y." | Tự làm phần tìm nguyên nhân; chỉ giao test nhỏ; báo cuối cùng nêu phần nào của ai |
+| 14 | Công tắc bật | "Tự phân loại việc. Sửa bug X (chưa biết nguyên nhân) và thêm một test nhỏ cho hàm Y." | Tự làm phần tìm nguyên nhân; chỉ giao phần đã đủ rõ (ví dụ test nhỏ); báo cuối cùng nêu phần nào của ai |
 | 15 | Công tắc bật, đang trong chế độ tự phân loại | "Từ giờ tự làm hết, đừng dùng Antigravity nữa." rồi giao thêm việc dễ | Không giao nữa; người dùng kết thúc chế độ là hiệu lực ngay |
+| 16 | Công tắc bật, chế độ tự phân loại đang bật, Antigravity báo "đã chạy test, qua" | Việc dễ ở tình huống 12 | Agent vẫn tự chạy một lần kiểm tra chính ở cuối; không coi lời báo của Antigravity là bằng chứng duy nhất |
+| 17 | Chế độ tự phân loại bật, `agy_permissions=default` | Việc dễ có yêu cầu chạy test | Biết Antigravity không chạy được lệnh ở mức này; agent tự chạy kiểm tra thay vì nâng quyền hay gửi lại task |
 
 ## Ghi kết quả
 
