@@ -4,6 +4,30 @@ Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTT
 
 `npm start` hiện chạy HTTP. STDIO cũ chỉ còn là chế độ tùy chọn `npm run start:stdio`, không dùng trong các cấu hình client bên dưới. Source bridge ở thư mục phát triển riêng `MCP-bridge`, ngoài repository ứng dụng được giao sửa.
 
+## Cài từ npm (người dùng)
+
+```bash
+npm install -g agy-mcp-bridge        # cần Node.js >= 20 và Antigravity CLI `agy` 1.4.3 đã đăng nhập
+agy-mcp-bridge workspaces add /duong/dan/toi/project   # cấp quyền cho một thư mục (khởi động lại server sau khi đổi)
+agy-mcp-bridge                       # mở server http://127.0.0.1:3000 ; giao diện web ở /ui
+```
+
+Các lệnh khác: `agy-mcp-bridge check | delegation on|off|status | skill install --client codex|claude|both | config | update | help`. Cấu hình, token và lịch sử task nằm trong thư mục dữ liệu của người dùng (Linux `~/.config/agy-mcp-bridge`, macOS `~/Library/Application Support/agy-mcp-bridge`, Windows `%APPDATA%\agy-mcp-bridge`), không nằm trong thư mục cài đặt nên không mất khi cập nhật; đổi chỗ bằng `BRIDGE_HOME`. `agy-mcp-bridge config` in ra các đường dẫn thật, gồm `token file` (đọc token ở đó để dán vào giao diện web hoặc nạp vào `BRIDGE_HTTP_TOKEN` cho Codex/Claude Code). Phần dưới đây dùng `npm start`/`npm run ...` cho bản clone từ git; với bản cài từ npm hãy dùng lệnh `agy-mcp-bridge` tương ứng.
+
+**Cập nhật:** khi chạy bản cài từ npm, bridge hỏi npm registry bản mới nhất (tối đa một lần mỗi ngày, timeout 3 giây, lỗi mạng thì bỏ qua). Có bản mới và đang ở terminal tương tác thì hỏi `Update now with "npm install -g agy-mcp-bridge@X"? [y/N]`: chọn `y` mới chạy `npm install -g`, rồi thoát để bạn chạy lại bản mới; chọn `n` thì chạy tiếp và hỏi lại sau 24 giờ. Không bao giờ tự cập nhật âm thầm; ngoài terminal tương tác chỉ in thông báo; khi server đang chạy, giao diện web và log hiện thông báo kèm lệnh `agy-mcp-bridge update` (lệnh này, hoặc `update --check` để chỉ xem). Tắt hoàn toàn bằng `--no-update-check` hoặc `BRIDGE_NO_UPDATE_CHECK=1`; tự tắt khi `CI=true` và với bản clone từ git. Lần kiểm tra chỉ gửi một request GET tên gói tới registry (lộ địa chỉ IP như mọi lần `npm view`).
+
+**Đăng lên npm (người phát hành):** tên gói là `agy-mcp-bridge` (các tên `antigravity-mcp-bridge`, `antigravity-bridge`, `agy-bridge` đã có người khác dùng; kiểm tra lại trước khi đăng bằng `npm view agy-mcp-bridge` phải ra 404). Từ bản clone sạch trên nhánh `main`:
+
+```bash
+npm login                      # tài khoản npm, nên bật 2FA
+npm pack --dry-run             # xem trước danh sách file sẽ đăng (test cũng kiểm tra không lọt file test/cấu hình cục bộ)
+npm version patch              # hoặc minor/major: tăng version và tạo git tag
+npm publish                    # chạy `npm test` trước (prepublishOnly); gói public nhờ publishConfig.access
+git push --follow-tags
+```
+
+Mỗi lần đăng phải tăng version, nếu không người dùng không nhận thông báo cập nhật. Gói chưa khai báo `license` trong `package.json`: hãy chọn giấy phép trước khi đăng công khai.
+
 ## Quickstart
 
 Requires Git, Node.js ≥20 and a logged-in Antigravity CLI `agy` 1.4.3 on PATH. Works on Windows, Linux and macOS; the longer sections below use PowerShell, the equivalents are:

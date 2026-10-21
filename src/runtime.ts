@@ -1,14 +1,15 @@
 import path from 'node:path';
-import { loadConfig, projectRoot } from './config.js';
+import { loadConfig } from './config.js';
+import { paths } from './paths.js';
 import { findExecutable, inspectCli } from './antigravity/process.js';
 import { TaskManager } from './tasks/manager.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
   let cli = {version: 'unavailable', executable: '', supported: false};
-  try { cli = await inspectCli(await findExecutable(config.executable), projectRoot); }
+  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
-  const manager = new TaskManager(config, {...cli, stateDirectory: path.join(projectRoot, '.bridge-state')});
+  const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const lockWarning = await manager.lockDiagnostic();

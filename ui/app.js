@@ -143,8 +143,9 @@ function loginView() {
     h('div', {class: 'field'}, h('label', {for: 'token', text: 'Bridge token'}), input),
     h('div', {class: 'form-error', role: 'alert', text: state.loginError}),
     h('button', {class: 'btn primary', type: 'submit', disabled: state.busy, text: state.busy ? 'Đang kiểm tra…' : 'Vào giao diện'}),
-    h('div', {class: 'hint'}, 'Token nằm trong file trên máy chạy bridge:',
-      h('code', {text: 'Get-Content .bridge-state/http-token'}), h('code', {text: 'cat .bridge-state/http-token'})));
+    h('div', {class: 'hint'}, 'Token nằm trong file trên máy chạy bridge. Bản cài từ npm: chạy lệnh dưới để thấy đường dẫn "token file", rồi mở file đó.',
+      h('code', {text: 'agy-mcp-bridge config'}),
+      'Bản clone từ git:', h('code', {text: 'cat .bridge-state/http-token'})));
   return h('div', {class: 'login'}, form);
 }
 
@@ -337,9 +338,10 @@ function patch() {
   const o = state.overview;
   if (!regions || !o) return;
   setRegion('live', String(state.connected), () => [h('span', {class: `dot${state.connected ? '' : ' off'}`}), h('span', {text: state.connected ? 'Đang cập nhật trực tiếp' : 'Mất kết nối tới bridge'})]);
-  setRegion('banner', JSON.stringify([state.connected, o.warnings]), () => [
+  setRegion('banner', JSON.stringify([state.connected, o.warnings, o.update]), () => [
     !state.connected ? h('div', {class: 'banner', role: 'alert', text: 'Mất kết nối tới bridge. Dữ liệu bên dưới có thể đã cũ.'}) : null,
-    ...(o.warnings || []).map(text => h('div', {class: 'banner warn', role: 'alert', text}))].filter(Boolean));
+    ...(o.warnings || []).map(text => h('div', {class: 'banner warn', role: 'alert', text})),
+    o.update ? h('div', {class: 'banner info', role: 'status'}, `Có bản mới ${o.update.package} ${o.update.latest} (đang chạy ${o.update.current}). Dừng server (Ctrl+C) rồi chạy `, h('code', {text: o.update.command})) : null].filter(Boolean));
   if (regions.view === 'tasks') {
     setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));

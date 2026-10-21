@@ -1,5 +1,6 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { paths, packageRoot } from './paths.js';
 import * as z from 'zod/v4';
 
 const schema = z.object({
@@ -13,12 +14,12 @@ const schema = z.object({
 }).strict();
 const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3};
 export type Config = z.infer<typeof schema>;
-export const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
+export const projectRoot = packageRoot;
 export async function loadConfig(): Promise<Config> {
   const explicit = process.env.ANTIGRAVITY_BRIDGE_CONFIG;
-  const filename = explicit ?? fileURLToPath(new URL('../../config/workspaces.json', import.meta.url));
-  // config/workspaces.json is local and untracked; create it with an empty allowlist on first run (flag 'wx': never overwrite).
-  if (!explicit) await writeFile(filename, JSON.stringify({allowed_workspaces: [], ...DEFAULT_LIMITS, executable: 'agy'}, null, 2) + '\n', {flag: 'wx'}).catch(() => {});
+  const filename = explicit ?? paths.configFile;
+  // The local config file (config/workspaces.json in a checkout, otherwise in the user data directory) is created with an empty allowlist on first run (flag 'wx': never overwrite).
+  if (!explicit) await mkdir(path.dirname(filename), {recursive: true}).then(() => writeFile(filename, JSON.stringify({allowed_workspaces: [], ...DEFAULT_LIMITS, executable: 'agy'}, null, 2) + '\n', {flag: 'wx'})).catch(() => {});
   const config = schema.parse(JSON.parse(await readFile(filename, 'utf8')));
   if (config.default_timeout_seconds > config.max_timeout_seconds) throw new Error('Default timeout exceeds maximum');
   return config;

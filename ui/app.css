@@ -175,6 +175,8 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-weight: 600; box-shadow: var(--shadow); z-index: 10; }
 .banner { padding: 10px 14px; border-radius: 12px; background: var(--bad-soft); color: var(--bad); font-weight: 600; margin-bottom: 14px; overflow-wrap: anywhere; }
 .banner.warn { background: var(--warn-soft); color: var(--warn); }
+.banner.info { background: var(--accent-soft); color: var(--accent); }
+.banner code { font-family: var(--mono); padding: 1px 6px; border-radius: 6px; background: var(--surface); color: var(--text); }
 
 @media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .tasks { grid-template-columns: 1fr; } .task-list { max-height: 320px; } }
 @media (max-width: 760px) {
