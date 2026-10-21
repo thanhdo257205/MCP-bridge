@@ -11,7 +11,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { startHttpBridge, configuredPort, DEFAULT_PORT } from '../src/http.js';
 import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
-import { isAlive } from './helpers.js';
+import { waitUntilDead } from './helpers.js';
 import { loadHttpToken } from '../src/security/http-auth.js';
 
 const token = 'test_token_123456789012345678901234567890';
@@ -83,7 +83,7 @@ test('server shutdown stops acceptance, cleans child tree, closes listener and g
   try {
     const until=Date.now()+3000;while(!manager.get(id).stderr && Date.now()<until) await new Promise(r=>setTimeout(r,20));
     const descendant=Number(manager.get(id).stderr);assert.ok(descendant>0);
-    await bridge.close();assert.equal(manager.get(id).status,'canceled');assert.equal(manager.get(id).process_running,false);assert.equal(isAlive(descendant),false);
+    await bridge.close();assert.equal(manager.get(id).status,'canceled');assert.equal(manager.get(id).process_running,false);assert.equal(await waitUntilDead(descendant),true);
     await assert.rejects(manager.delegate({task:'no',workspace,acceptance_criteria:['no']}),/shutting down/);
     await assert.rejects(fetch(bridge.healthUrl,{signal:AbortSignal.timeout(2000)}));
     await assert.rejects(connect(bridge.mcpUrl));

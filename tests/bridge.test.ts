@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline';
 import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { validateWorkspace, inside } from '../src/security/workspace.js';
-import { isAlive } from './helpers.js';
+import { isAlive, waitUntilDead } from './helpers.js';
 import { delegateSchema } from '../src/security/input.js';
 import type { Config } from '../src/config.js';
 
@@ -74,7 +74,7 @@ test('cancel kills only managed process tree and leaves unrelated process alive'
     while(!manager.get(task.task_id).stderr && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
     const descendant=Number(manager.get(task.task_id).stderr);assert.ok(descendant>0);
     const done=await manager.cancel(task.task_id);assert.equal(done.status,'canceled');assert.equal(done.process_running,false);
-    assert.equal(isAlive(descendant),false);assert.equal(isAlive(unrelated.pid!),true);
+    assert.equal(await waitUntilDead(descendant),true);assert.equal(isAlive(unrelated.pid!),true);
     assert.equal((await manager.cancel(task.task_id)).status,'canceled');
     await assert.rejects(manager.cancel('unknown'),/Unknown/);
   } finally { unrelated.kill(); await manager.shutdown(); }
