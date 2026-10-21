@@ -6,7 +6,7 @@ export function inside(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-// Reject links throughout the assigned tree, including junctions. Do not follow them.
+// Dependency and Git internals are excluded. Other links must resolve inside the workspace.
 // This is a preflight check; it cannot prevent a concurrent link swap by another process.
 export async function validateWorkspace(input: string, allowlist: string[]): Promise<string> {
   if (!path.isAbsolute(input) || input.includes('\0')) throw new Error('Workspace must be an absolute path');
@@ -28,10 +28,15 @@ export async function validateWorkspace(input: string, allowlist: string[]): Pro
   while (stack.length) {
     const directory = stack.pop()!;
     for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (++visited > 200000) throw new Error('Workspace preflight exceeds 200000 entries');
       const filename = path.join(directory, entry.name);
       const info = await lstat(filename);
-      if (info.isSymbolicLink()) throw new Error('Workspace contains a symlink or junction');
+      if (info.isDirectory() && (entry.name === 'node_modules' || entry.name === '.git')) continue;
+      if (++visited > 200000) throw new Error('Workspace preflight exceeds 200000 entries');
+      if (info.isSymbolicLink()) {
+        const target = await realpath(filename).catch(() => { throw new Error('Workspace contains an unresolved symlink or junction'); });
+        if (!inside(canonical, target)) throw new Error('Workspace contains a symlink or junction pointing outside the workspace');
+        continue; // Do not follow aliases/cycles; their real in-tree targets are scanned normally.
+      }
       if (info.isDirectory()) stack.push(filename);
     }
   }
