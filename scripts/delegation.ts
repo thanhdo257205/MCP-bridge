@@ -1,13 +1,13 @@
-import { fileURLToPath } from 'node:url';
+import { paths } from '../src/paths.js';
 import { delegationState, setDelegationSwitch } from '../src/delegation.js';
 
 // Local, immediate switch for whether the running bridge accepts new delegations. No restart, no token needed.
-const stateDirectory = fileURLToPath(new URL('../../.bridge-state/', import.meta.url));
+const stateDirectory = paths.stateDirectory;
 const command = process.argv[2];
 if (command === 'off') await setDelegationSwitch(stateDirectory, false);
 else if (command === 'on') await setDelegationSwitch(stateDirectory, true);
 else if (command !== 'status') {
-  console.error('Usage: npm run delegation -- on|off|status');
+  console.error('Usage: agy-mcp-bridge delegation on|off|status (npm run delegation -- on|off|status in a git checkout)');
   process.exit(2);
 }
 const state = delegationState(stateDirectory);

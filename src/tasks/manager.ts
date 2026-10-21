@@ -45,13 +45,21 @@ export class TaskManager {
   private entries = new Map<string, Entry>();
   private busy = false;
   private queue: string[] = [];
+  private admission: Promise<void> = Promise.resolve();
   private closing = false;
   constructor(private config: Config, private runtime: Runtime) {}
 
-  async delegate(raw: DelegateInput, meta: {client?: string | null} = {}): Promise<Task> {
+  /** Calls are admitted strictly in the order they arrive: workspace validation is asynchronous and must not let a later call overtake an earlier one. */
+  delegate(raw: DelegateInput, meta: {client?: string | null} = {}): Promise<Task> {
+    const admitted = this.admission.then(() => this.admit(raw, meta));
+    this.admission = admitted.then(() => undefined, () => undefined);
+    return admitted;
+  }
+
+  private async admit(raw: DelegateInput, meta: {client?: string | null}): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
     const delegation = delegationState(this.runtime.stateDirectory);
-    if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`npm run delegation -- on\``);
+    if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`agy-mcp-bridge delegation on\` (\`npm run delegation -- on\` in a git checkout)`);
     const input = delegateSchema.parse(raw);
     const timeout = input.timeout_seconds ?? this.config.default_timeout_seconds;
     if (timeout > this.config.max_timeout_seconds) throw new Error('Timeout exceeds configured maximum');

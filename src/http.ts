@@ -47,7 +47,7 @@ export async function startHttpBridge(options: {
       res.setHeader('WWW-Authenticate', 'Bearer realm="antigravity-bridge"');
       reply(401, {error: 'Missing or invalid bearer token. Load the bridge token into BRIDGE_HTTP_TOKEN in the client terminal.'}); return;
     }
-    if (stopping) { reply(503, {error: 'Bridge is shutting down. Restart with npm start before reconnecting.'}); return; }
+    if (stopping) { reply(503, {error: 'Bridge is shutting down. Restart it (agy-mcp-bridge, or npm start in a git checkout) before reconnecting.'}); return; }
     if (req.url === '/health' && req.method === 'GET') {
       reply(200, {status: 'ok', transport: 'streamable-http', mcp_endpoint: `${baseUrl}/mcp`, ...options.manager.overview()}); return;
     }

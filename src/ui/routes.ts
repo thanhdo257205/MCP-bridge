@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { delegationControllable, delegationState, setDelegationSwitch } from '../delegation.js';
 import { tokensEqual } from '../security/http-auth.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
 import { SessionStore } from './session.js';
+import { paths } from '../paths.js';
+import { knownUpdate, readPackageInfo } from '../update.js';
 
 export interface UiContext {
   manager: TaskManager; environment: Record<string, unknown>; token: string;
@@ -19,7 +21,7 @@ const assets: Record<string, {file: string; type: string}> = {
   '/ui/app.js': {file: 'app.js', type: 'text/javascript; charset=utf-8'},
   '/ui/favicon.svg': {file: 'favicon.svg', type: 'image/svg+xml'}
 };
-const uiDirectory = fileURLToPath(new URL('../../../ui/', import.meta.url));
+const uiDirectory = paths.uiDirectory;
 // No inline script or style, no external origin: model output shown in the page can never execute.
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -59,6 +61,7 @@ async function overview(ctx: UiContext) {
     delegation: {...state, controllable: delegationControllable()},
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
+    update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
     tasks: ctx.manager.list()
   };
 }
@@ -73,7 +76,7 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     if (method !== 'GET') { json(res, 405, {error: 'Method not allowed'}); return true; }
     try {
       const headers: Record<string, string> = pathname.endsWith('/') || pathname === '/ui' ? {'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY'} : {};
-      send(res, 200, await readFile(fileURLToPath(new URL(asset.file, `file://${uiDirectory}`))), asset.type, headers);
+      send(res, 200, await readFile(path.join(uiDirectory, asset.file)), asset.type, headers);
     } catch { json(res, 500, {error: 'UI asset unavailable'}); }
     return true;
   }

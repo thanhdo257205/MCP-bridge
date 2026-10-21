@@ -1,10 +1,46 @@
 {
-  "name": "antigravity-mcp-bridge",
+  "name": "agy-mcp-bridge",
   "version": "0.1.0",
-  "private": true,
+  "description": "Local authenticated HTTP MCP bridge that lets Codex and Claude Code delegate bounded coding tasks to the Antigravity CLI (agy)",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "antigravity",
+    "agy",
+    "codex",
+    "claude-code",
+    "bridge"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thanhdo257205/MCP-bridge.git"
+  },
+  "homepage": "https://github.com/thanhdo257205/MCP-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/thanhdo257205/MCP-bridge/issues"
+  },
   "type": "module",
+  "bin": {
+    "agy-mcp-bridge": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/src/",
+    "dist/scripts/check.js",
+    "dist/scripts/delegation.js",
+    "dist/scripts/install-skill.js",
+    "dist/scripts/probe-stream.js",
+    "ui/",
+    "skills/",
+    "docs/",
+    "config/workspaces.example.json",
+    "README.md",
+    "!**/*.map"
+  ],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -16,15 +52,16 @@
     "skill:install": "node dist/scripts/install-skill.js",
     "test": "npm run build && node dist/scripts/run-tests.js",
     "probe:stream": "node dist/scripts/probe-stream.js",
-    "test:live": "npm run build && node dist/scripts/live.js"
+    "test:live": "npm run build && node dist/scripts/live.js",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
     "zod": "^4.2.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^24.0.0",
     "typescript": "^6.0.0"
   }

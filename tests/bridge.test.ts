@@ -236,3 +236,10 @@ test('no lock means no diagnostic; the running bridge own lock is not a warning'
   assert.equal(await manager.lockDiagnostic(),null);
   await manager.delegate(input);assert.equal(await manager.lockDiagnostic(),null);await manager.shutdown();
 });
+test('concurrent delegate calls are admitted in call order: first runs, the rest queue in order',async()=>{
+  const {manager,input}=await setup('hang',{max_queued_tasks:3,max_retained_tasks:10});
+  const started=await Promise.all([manager.delegate(input),manager.delegate(input),manager.delegate(input)]);
+  assert.deepEqual(started.map(task=>task.status),['running','queued','queued']);
+  assert.ok(started[1].queued_at!<=started[2].queued_at!);
+  await manager.shutdown();
+});

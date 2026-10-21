@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { paths } from '../src/paths.js';
 import { findExecutable, startProcess, terminateOwned } from '../src/antigravity/process.js';
 import { loadConfig } from '../src/config.js';
 
@@ -30,11 +30,11 @@ for (const event of events) {
   for (const key of Object.keys(event ?? {})) entry.keys.add(key);
   kinds.set(kind, entry);
 }
-const results = path.join(fileURLToPath(new URL('../../test-results/', import.meta.url)));
+const results = paths.resultsDirectory;
 await mkdir(results, {recursive: true});
 await writeFile(path.join(results, 'stream-probe.ndjson'), stdout);
 await writeFile(path.join(results, 'stream-probe.stderr.txt'), stderr);
-console.log(`agy exit code: ${code}; ${lines.length} stdout line(s); raw output saved to test-results/stream-probe.ndjson (gitignored)`);
+console.log(`agy exit code: ${code}; ${lines.length} stdout line(s); raw output saved to ${path.join(results, 'stream-probe.ndjson')} (not committed)`);
 for (const [kind, {count, keys}] of kinds) console.log(`- ${kind} x${count}: keys = ${[...keys].join(', ')}`);
 console.log(events.every(Boolean) ? 'Every stdout line is a JSON object.' : 'Some stdout lines are not JSON; see the raw file.');
 console.log('Share the event names and keys above (not the raw file, which may contain paths) to build progress reporting on the real format.');

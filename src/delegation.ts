@@ -14,7 +14,7 @@ export function delegationState(stateDirectory: string, env: NodeJS.ProcessEnv =
   const value = env.BRIDGE_DELEGATION?.trim().toLowerCase();
   if (value === 'off') return {enabled: false, reason: 'BRIDGE_DELEGATION=off'};
   if (value !== undefined && value !== '' && value !== 'on') return {enabled: false, reason: 'BRIDGE_DELEGATION has an invalid value (use on or off)'};
-  if (existsSync(path.join(stateDirectory, SWITCH_FILE))) return {enabled: false, reason: 'delegation switched off with `npm run delegation -- off`'};
+  if (existsSync(path.join(stateDirectory, SWITCH_FILE))) return {enabled: false, reason: 'delegation switched off with `agy-mcp-bridge delegation off` (`npm run delegation -- off` in a git checkout)'};
   return {enabled: true, reason: null};
 }
 

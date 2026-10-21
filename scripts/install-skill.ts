@@ -1,12 +1,13 @@
 import { readFile, mkdir, writeFile, stat, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { paths } from '../src/paths.js';
 
 export type Client = 'codex' | 'claude' | 'both';
 export async function installSkill(options: {client: Client; project?: string; userHome?: string}) {
   if (!['codex', 'claude', 'both'].includes(options.client)) throw new Error('--client must be codex, claude or both');
-  const source = fileURLToPath(new URL('../../skills/antigravity-bridge/SKILL.md', import.meta.url));
+  const source = path.join(paths.skillsDirectory, 'antigravity-bridge', 'SKILL.md');
   const content = await readFile(source, 'utf8');
   let root = options.userHome ?? homedir();
   if (options.project !== undefined) {

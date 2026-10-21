@@ -22,3 +22,14 @@ jobs:
       - run: npm ci
       # Builds, then runs the mock-based suite. No Antigravity CLI or AI call is needed.
       - run: npm test
+      # Install the packed tarball into a throw-away global prefix and run the real bin layout.
+      - name: Smoke-test the packed CLI
+        shell: bash
+        run: |
+          npm pack --silent
+          PREFIX="$RUNNER_TEMP/global"
+          npm install -g --prefix "$PREFIX" ./agy-mcp-bridge-*.tgz
+          ROOT="$(npm root -g --prefix "$PREFIX")"
+          node "$ROOT/agy-mcp-bridge/dist/src/cli.js" --version
+          BRIDGE_HOME="$RUNNER_TEMP/bridge-home" node "$ROOT/agy-mcp-bridge/dist/src/cli.js" config
+          BRIDGE_HOME="$RUNNER_TEMP/bridge-home" node "$ROOT/agy-mcp-bridge/dist/src/cli.js" delegation status

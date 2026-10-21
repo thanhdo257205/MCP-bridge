@@ -8,3 +8,4 @@ test-results/
 !.env.example
 *.log
 config/workspaces.json
+*.tgz
