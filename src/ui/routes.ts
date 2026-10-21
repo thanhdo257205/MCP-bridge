@@ -9,6 +9,7 @@ import { SessionStore } from './session.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
+import { validModelId, writeModel } from '../models.js';
 import { inside } from '../security/workspace.js';
 
 export interface UiContext {
@@ -61,6 +62,7 @@ async function overview(ctx: UiContext) {
     },
     limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], session_workspaces: env.session_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
+    model: await ctx.manager.currentModel(),
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
@@ -125,6 +127,24 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       if (!delegationControllable()) { json(res, 409, {error: 'Delegation is locked by BRIDGE_DELEGATION in the server environment'}); return true; }
       await setDelegationSwitch(ctx.manager.stateDirectory, body.enabled);
       json(res, 200, {...delegationState(ctx.manager.stateDirectory), controllable: true}); return true;
+    }
+    if (pathname === '/ui/api/models' && method === 'GET') {
+      const current = await ctx.manager.currentModel();
+      try { json(res, 200, {models: await ctx.manager.availableModels(), current}); }
+      catch (error) { json(res, 200, {models: [], current, error: error instanceof Error ? redact(error.message) : 'Could not list models'}); }
+      return true;
+    }
+    if (pathname === '/ui/api/model' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.model !== null && !validModelId(body.model)) { json(res, 400, {error: 'model must be a model id or null'}); return true; }
+      // Only ids that `agy models` lists are accepted; if the list cannot be read, the choice cannot be verified, so it is refused.
+      if (body.model !== null) {
+        const listed = await ctx.manager.availableModels().catch(() => null);
+        if (!listed) { json(res, 409, {error: 'Cannot verify the model: `agy models` is not available'}); return true; }
+        if (!listed.some(model => model.id === body.model)) { json(res, 400, {error: 'Unknown model; choose one listed by `agy models`'}); return true; }
+      }
+      await writeModel(ctx.manager.stateDirectory, body.model);
+      json(res, 200, {current: body.model}); return true;
     }
     json(res, 404, {error: 'Not found'});
   } catch (error) {

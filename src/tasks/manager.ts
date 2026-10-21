@@ -10,6 +10,8 @@ import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
+import {packageRoot} from '../paths.js';
+import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
@@ -25,7 +27,9 @@ export interface Task {
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
-export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null; }
+export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null;
+  /** Model chosen in the web UI when the task was accepted (null: Antigravity's own default). Absent in older records. */
+  model?: string | null; }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
   /** Resolves `done`; set for every task that goes through the CLI. */
@@ -36,6 +40,8 @@ interface Entry {
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
+  /** Replaces running `agy models` (tests). */
+  models?: () => Promise<ModelInfo[]>;
 }
 
 export class TaskManager {
@@ -90,7 +96,8 @@ export class TaskManager {
       request: {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
-        client: meta.client ? redact(meta.client).slice(0, 100) : null
+        client: meta.client ? redact(meta.client).slice(0, 100) : null,
+        model: await readModel(this.runtime.stateDirectory)
       }
     };
     this.entries.set(task.task_id, entry);
@@ -146,7 +153,7 @@ export class TaskManager {
       task.started_at = new Date().toISOString();
       await this.persist(task);
       checkStarting();
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport);
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null);
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
@@ -291,6 +298,12 @@ export class TaskManager {
       .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null}))
       .sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
   }
+  /** Models offered by the installed Antigravity CLI (read on demand, never at startup). */
+  availableModels(): Promise<ModelInfo[]> {
+    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, packageRoot, this.config.extra_env_passthrough);
+  }
+  currentModel(): Promise<string | null> { return readModel(this.runtime.stateDirectory); }
+
   /** Full record for the web UI: the request, the exact prompt shape sent to the CLI (redacted), and the task with logs. */
   detail(id: string) {
     const task = this.get(id);
