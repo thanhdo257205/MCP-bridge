@@ -14,6 +14,7 @@ async function main() {
   console.error(`[bridge] MCP endpoint: ${bridge.mcpUrl}`);
   console.error(`[bridge] Health check: ${bridge.healthUrl} (bearer authentication required)`);
   console.error(`[bridge] Token source: ${source} (value never logged)`);
+  console.error(`[bridge] Web UI: ${bridge.baseUrl}/ui  (open in a browser on this machine; sign in with the token from the source above)`);
   console.error('[bridge] Client disconnected: tasks continue. Ctrl+C: cancel owned tasks and stop server.');
   if (updateCheckEnabled(paths.mode)) {
     // Never blocks startup and never changes anything: it only lets the log and the web UI say that a newer version exists.

@@ -83,7 +83,11 @@ Mặc định bind duy nhất `127.0.0.1:3000`. Khi cổng còn trống, termina
 [bridge] HTTP server: http://127.0.0.1:3000
 [bridge] MCP endpoint: http://127.0.0.1:3000/mcp
 [bridge] Health check: http://127.0.0.1:3000/health (bearer authentication required)
+[bridge] Token source: <đường dẫn file token hoặc BRIDGE_HTTP_TOKEN> (value never logged)
+[bridge] Web UI: http://127.0.0.1:3000/ui  (open in a browser on this machine; sign in with the token from the source above)
 ```
+
+Dòng `Web UI` là đường dẫn tới giao diện web; nhấn giữ Ctrl (hoặc Cmd) và bấm vào nó trong terminal hỗ trợ liên kết để mở trình duyệt.
 
 Cổng bị chiếm: server báo lỗi, thoát mã 1, không tự đổi cổng hoặc địa chỉ bind. Chọn cổng khác:
 

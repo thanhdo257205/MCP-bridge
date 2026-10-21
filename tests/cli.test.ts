@@ -76,6 +76,7 @@ test('cli: start serves the UI, keeps state in BRIDGE_HOME, and announces an upd
     assert.match(log, /\[update\] agy-mcp-bridge 99\.0\.0 is available/, 'announced before starting');
     assert.match(log, /Update available: agy-mcp-bridge 99\.0\.0/, 'announced while running');
     assert.equal((await fetch(`${base}/ui`)).status, 200);
+    assert.ok(log.includes(`[bridge] Web UI: ${base}/ui`), 'the terminal shows the link to the web UI');
     const login = await (await fetch(`${base}/ui/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})).json() as {session: string};
     const overview = await (await fetch(`${base}/ui/api/overview`, {headers: {'x-bridge-session': login.session}})).json() as {update: {latest: string; command: string}};
     assert.equal(overview.update.latest, '99.0.0');
