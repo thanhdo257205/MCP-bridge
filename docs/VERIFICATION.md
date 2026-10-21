@@ -2,6 +2,8 @@
 
 ## Bổ sung HTTP độc lập
 
+Bổ sung skill `skills/antigravity-bridge/SKILL.md` và installer chủ động `npm run skill:install`. Tổng 26/26 test đạt sau bổ sung; 3 test mới xác minh cài đúng nội dung, cài lặp không đổi, không ghi đè tùy chỉnh, scope user/project và CLI chạy từ thư mục khác. Test dùng thư mục tạm, không cài vào profile thật. Skill đã qua `quick_validate.py`; đây là kiểm tra cấu trúc và installer, không phải behavioral eval hay cam kết agent luôn tuân thủ hướng dẫn.
+
 `npm start` hiện chạy Streamable HTTP tại 127.0.0.1, PORT mặc định 3000; PORT=0 chỉ chọn cổng động khi người dùng yêu cầu. `/mcp` và `/health` đều yêu cầu bearer token. Mẫu client HTTP thay cho command/args ở `config/codex-mcp.windows.toml`, bổ sung `config/claude-mcp.http.json`. Các mục khảo sát CLI bên dưới giữ lại bằng chứng ban đầu; STDIO hiện chỉ là tùy chọn riêng `npm run start:stdio`.
 
 Đã chạy 23/23 unit/integration test: auth, Host/Origin, HTTP body cap, startup giữ sống khi stdin đóng, cổng mặc định bị chiếm, PORT khác, kết nối modern và legacy, mất kết nối lúc task đang chạy, kết nối lại lấy kết quả, và đóng server khi task có child tree. Các test này dùng executable giả và CLI không tồn tại, không gọi AI.

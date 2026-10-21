@@ -23,7 +23,11 @@ Nếu đã clone, mở terminal tại thư mục gốc của bản clone (nơi c
 
 Mặc định bridge tìm `agy` trong PATH, không phụ thuộc tên tài khoản Windows hay thư mục cài đặt của tác giả. Nếu không tìm thấy, kiểm tra `Get-Command agy`; thêm thư mục cài CLI vào PATH rồi mở terminal mới, hoặc đặt `executable` trong `config/workspaces.json` thành đường dẫn tuyệt đối tới `agy.exe` trên máy của bạn.
 
-`npm ci` có thể thay `npm install` để cài đúng lockfile. Chế độ phát triển:
+`npm ci` có thể thay `npm install` để cài đúng lockfile.
+
+Repo kèm skill **antigravity-bridge** để client giao task và xử lý kết quả theo đúng hợp đồng MCP. Sau build, xem [cách cài skill cho Codex/Claude Code](#9-skill-giao-tiếp-với-antigravity) để cài bằng một lệnh. `npm install` chỉ cài dependency, không tự ghi vào thư mục cấu hình hay skill của client.
+
+Chế độ phát triển:
 
 ```powershell
 npm run dev
@@ -229,3 +233,49 @@ npm run test:live
 `test:live`: **gọi AI thật**, dùng cached login/quota. Test harness khởi động HTTP server riêng với PORT=0 và scratch workspace, dùng official SDK HTTP client, ngắt/kết nối lại khi task chạy, xác minh `BRIDGE_SMOKE_OK` và sentinel không đổi, hủy task thật, rồi kiểm tra shutdown có task đang chạy. Trên Windows, harness phát event SIGINT vào đúng handler của entry point qua IPC riêng của harness; kiểm tra Ctrl+C terminal được ghi riêng trong báo cáo. Đây không phải yêu cầu client production tự khởi động server. Kết quả ở `test-results/live-report.json`; phần sửa file thật vẫn bị chặn đến khi cấp quyền.
 
 `src/index.ts`: HTTP entry; `src/http.ts`: listener/auth/routing/shutdown; `src/runtime.ts`: CLI và TaskManager dùng chung; `src/tools`: tool; `src/antigravity`: child process; `src/security`: validation/workspace/token/redaction; `src/tasks`: lifecycle/lock/output; `scripts/check.ts`: kiểm tra server đang chạy; `scripts/live.ts`: AI smoke test. Không thay cấu hình Codex/Claude Code/Antigravity trong test.
+
+## 9. Skill giao tiếp với Antigravity
+
+Skill [antigravity-bridge](skills/antigravity-bridge/SKILL.md) hướng dẫn client dùng 5 tool theo schema thật, ghi task ID, xử lý disconnect/reconnect, timeout, permission denial, output bị cắt và review diff. Skill dùng chung chuẩn `SKILL.md` cho Codex và Claude Code. Đây là hướng dẫn cho Tech Lead, không cài vào Antigravity; prompt Developer đã được bridge gửi kèm mỗi task.
+
+Sau `npm install` và `npm run build`, chạy từ thư mục clone:
+
+```powershell
+# Chọn client bạn sử dụng; không cần chạy cả ba lệnh.
+npm run skill:install -- --client codex
+npm run skill:install -- --client claude
+npm run skill:install -- --client both
+```
+
+Đích mặc định cho người dùng hiện tại, không chứa đường dẫn riêng của tác giả:
+
+| Client | File được cài |
+|---|---|
+| Codex | `~/.agents/skills/antigravity-bridge/SKILL.md` |
+| Claude Code | `~/.claude/skills/antigravity-bridge/SKILL.md` |
+
+`~` là thư mục tài khoản hệ điều hành đang chạy lệnh. Cài cho riêng một project bằng `--project` là đường dẫn tuyệt đối tới project đã có; cài đặt sẽ tạo `.agents/skills/antigravity-bridge` và/hoặc `.claude/skills/antigravity-bridge` bên trong project đó. Ví dụ PowerShell, thay đường dẫn mẫu bằng project thật:
+
+```powershell
+npm run skill:install -- --client both --project 'C:\path\to\your-project'
+```
+
+Installer chỉ ghi `SKILL.md`, không sửa config MCP, allowlist, token, AGENTS.md/CLAUDE.md hay settings Antigravity. Nội dung giống nhau thì không ghi lại; nếu skill cùng tên đã khác nội dung, lệnh báo lỗi để bạn review/merge thủ công, không tự ghi đè hoặc xóa. Sau khi `git pull` và build bản mới, chạy lại installer để kiểm tra cập nhật; xử lý bản tùy chỉnh thủ công nếu lệnh báo khác biệt. Có thể copy thư mục skill vào đường dẫn discovery do client/môi trường của bạn hỗ trợ nếu không dùng vị trí mặc định.
+
+Mở lại client nếu skill chưa xuất hiện. Codex có thể chọn qua `/skills` hoặc gọi trong prompt:
+
+```text
+$antigravity-bridge Phân tích lỗi parseCount, giao task sửa có tiêu chí nghiệm thu
+cho Antigravity trong workspace đã cấp quyền, rồi review diff và chạy test.
+```
+
+Trong Claude Code:
+
+```text
+/antigravity-bridge Phân tích lỗi parseCount, giao task sửa có tiêu chí nghiệm thu
+cho Antigravity trong workspace đã cấp quyền, rồi review diff và chạy test.
+```
+
+Skill có thể được client tự chọn khi yêu cầu phù hợp. Cài skill không tự kết nối HTTP server hoặc đăng ký MCP tools; cần hoàn thành phần cấu hình client và workspace trước. Skill không thể bảo đảm không có lỗi CLI/model/mạng, không mở thêm quyền và không thay thế kiểm tra diff/test. Kết nối bị mất không phải lý do tự giao lại task; skill yêu cầu tìm task cũ trước để tránh chạy trùng.
+
+Vị trí và cách gọi đã đối chiếu [Codex skills](https://developers.openai.com/codex/skills/) và [Claude Code skills](https://code.claude.com/docs/en/skills). Validator kiểm tra cấu trúc skill; test installer dùng thư mục tạm, không gọi AI hay cài vào skill cá nhân. Chưa đánh giá chất lượng quyết định của agent bằng behavioral eval chỉ từ các test này.
