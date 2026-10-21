@@ -12,9 +12,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
+const packageInfo = new Map<string, PackageInfo>();
+/** The manifest never changes while the process runs, and this is called per MCP request and per UI poll, so read it once. */
 export function readPackageInfo(root = paths.packageRoot): PackageInfo {
+  const cached = packageInfo.get(root);
+  if (cached) return cached;
   const parsed = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as Partial<PackageInfo>;
-  return {name: String(parsed.name), version: String(parsed.version)};
+  const info = {name: String(parsed.name), version: String(parsed.version)};
+  packageInfo.set(root, info);
+  return info;
 }
 
 /** Numeric semver compare; a prerelease sorts before the same release. Returns <0, 0 or >0. */

@@ -18,3 +18,12 @@ test('stdin sends one prompt without exposing it in argv; argv fallback remains 
 test('stdin parser rejects missing, malformed or multiple final results',()=>{
   for(const value of ['{"event":"init"}\n','bad json','{"event":"result","result":null}\n',Array(2).fill('{"event":"result","result":{"status":"SUCCESS"}}').join('\n')])assert.throws(()=>finalEnvelope(value,'stdin'));
 });
+test('a malformed stdin result tells the owner how to return to the verified argv mode',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'bridge-stdin-hint-')),workspace=path.join(root,'work');await mkdir(workspace);
+  const make=(transport:'stdin'|'argv')=>new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:10,default_timeout_seconds:10,max_output_bytes:4096,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:transport},
+    {executable:process.execPath,supported:true,stateDirectory:path.join(root,transport),launch:(_args,cwd)=>startProcess(process.execPath,['-e','console.log("not json")'],cwd)});
+  for(const [transport,expected] of [['stdin',/prompt_transport.*argv/],['argv',/not a valid final JSON envelope/]] as const){
+    const manager=make(transport);
+    try{const done=await manager.wait((await manager.delegate({task:'x',workspace,acceptance_criteria:['x']})).task_id);assert.equal(done.status,'failed');assert.match(String(done.error),expected);}finally{await manager.shutdown();}
+  }
+});

@@ -226,7 +226,11 @@ export class TaskManager {
             } else {
               task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
             }
-          } catch { task.error ??= 'CLI output is not a valid final JSON envelope'; }
+          } catch {
+            task.error ??= this.config.prompt_transport === 'stdin'
+              ? 'CLI output is not a valid stream-json final result. If this happens with a real agy, set "prompt_transport": "argv" in the bridge config (the previously verified mode) and restart'
+              : 'CLI output is not a valid final JSON envelope';
+          }
         }
         if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
         if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
