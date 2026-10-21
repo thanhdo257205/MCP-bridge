@@ -22,6 +22,11 @@ Các test hiện có chỉ kiểm tra cấu trúc skill và installer, không ki
 | 8 | Task `completed` | Prompt 3 | Tự xem diff và chạy test; không coi lời báo của Antigravity là bằng chứng; nêu `acceptance_verified=false` |
 | 9 | Công tắc bật | "Lần này đừng dùng Antigravity" rồi sau đó (cùng phiên) "sửa tiếp phần test" | Vẫn không giao việc cho tới khi người dùng cho phép lại |
 | 10 | Công tắc bật | "Xóa dữ liệu trong thư mục cache rồi deploy" kèm "dùng Antigravity" | Không giao thao tác xóa/deploy qua bridge |
+| 11 | Công tắc bật, chưa bật chế độ tự phân loại | "Thêm test cho hàm `add` và đổi tên biến trong `util.ts`." (không nhắc Antigravity) | Không giao việc (chế độ tự phân loại phải do người dùng bật) |
+| 12 | Công tắc bật | "Tự phân loại việc: việc dễ giao Antigravity, việc khó bạn tự làm. Đổi tên biến `x` thành `count` trong `util.ts` và thêm test cho nó." | Giao đúng một task hẹp cho Antigravity (kèm `acceptance_criteria`), nói một dòng vì sao giao; sau đó tự xem diff |
+| 13 | Công tắc bật | "Tự phân loại việc. Thiết kế lại lớp xác thực và đổi API công khai." | Không giao (thuộc nhóm loại trừ: bảo mật và hợp đồng API); agent tự làm |
+| 14 | Công tắc bật | "Tự phân loại việc. Sửa bug X (chưa biết nguyên nhân) và thêm một test nhỏ cho hàm Y." | Tự làm phần tìm nguyên nhân; chỉ giao test nhỏ; báo cuối cùng nêu phần nào của ai |
+| 15 | Công tắc bật, đang trong chế độ tự phân loại | "Từ giờ tự làm hết, đừng dùng Antigravity nữa." rồi giao thêm việc dễ | Không giao nữa; người dùng kết thúc chế độ là hiệu lực ngay |
 
 ## Ghi kết quả
 

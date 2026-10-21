@@ -5,7 +5,7 @@ export const delegateSchema = z.object({
   workspace: z.string().min(1).max(4096),
   acceptance_criteria: z.array(z.string().trim().min(1).max(2000)).min(1).max(30),
   context: z.string().max(12000).optional(),
-  timeout_seconds: z.number().int().min(1).max(900).optional()
+  timeout_seconds: z.number().int().min(1).max(3600).optional()
 }).strict().refine(input => JSON.stringify(input).length <= 24000 && !JSON.stringify(input).includes('\\u0000'),
   'Combined task data must fit 24000 characters and contain no NUL characters');
 export type DelegateInput = z.infer<typeof delegateSchema>;

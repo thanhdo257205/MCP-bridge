@@ -36,6 +36,14 @@
     {
       "sha256": "066f499ccd7341c7f77c2a409b3632e4cefe16e45ed2c77e75c8154028e951f9",
       "note": "long waits (limits.max_wait_seconds), fewer polling calls"
+    },
+    {
+      "sha256": "bf96a492847e59fcdbd4eb7685a316a606699af2d217ea35a8e27dad85ccb2aa",
+      "note": "timeout guidance: split tasks, narrower follow-up after a timeout, limits.max_timeout_seconds"
+    },
+    {
+      "sha256": "83a5d812553cc79e8eec690cef825ced49b82b13e0991d4c632de5b6675b19f1",
+      "note": "opt-in auto-split mode (easy parts to Antigravity, hard parts by the Tech Lead)"
     }
   ]
 }

@@ -17,6 +17,22 @@ Delegate only when the user explicitly asks for Antigravity (or approves your pr
 
 A decline for one task does not change the setting for later tasks; ask again only if delegation would clearly help.
 
+## Auto-split mode (only when the user opts in)
+
+This changes the rule above only after the user clearly says that you may decide, task by task, what goes to Antigravity (for example "tự phân loại việc", "give the easy tasks to Antigravity and do the hard ones yourself"). Without that, delegate only on an explicit request. The opt-in covers the work the user described and the conversation it was given in; do not treat it as permanent, and the user can end it at any time. The cases in "When NOT to delegate" (a decline, the kill switch) still win over it.
+
+In this mode, delegate a part of the work only when **all** of these hold (defaults; if the user states their own limits, use theirs):
+
+- one goal, touching at most 3 files plus their tests;
+- concrete acceptance criteria that you can check from the diff or by running tests;
+- no dependence on context outside the repository or on long multi-step reasoning;
+- not security, authentication or secrets, data migrations or deletion, deployment, dependency, build or CI configuration, or public API/contract changes;
+- `agy_permissions` allows what the task needs (at `default`, expect writes and commands to be denied; then do it yourself or tell the user).
+
+Do the work yourself when any of these holds: design or architecture decisions, many interdependent files, debugging with an unknown cause, ambiguous requirements, or anything in the exclusions above. When unsure, treat the work as hard and do it yourself.
+
+For mixed work, do the hard part yourself and delegate only the separable easy parts, one task at a time. Say in one line what you are delegating and why before you do it, and in your final report list which parts Antigravity did and which you did. Review every delegated diff as usual. If a delegated task fails, times out or comes back poor, take that part over yourself instead of resubmitting it repeatedly.
+
 ## Before delegating
 
 - Discover the connected MCP tools by their advertised names; client prefixes may differ. Required names: `antigravity_environment`, `antigravity_delegate`, `antigravity_task_status`, `antigravity_task_wait`, `antigravity_task_output`, `antigravity_cancel_task`. Do not invent tools, CLI flags, or HTTP JSON-RPC payloads when MCP tools are available.
@@ -52,7 +68,7 @@ Call `antigravity_delegate` with only these fields:
 }
 ```
 
-Replace example paths and symbols with the user's actual authorized project. `context` and `timeout_seconds` are optional. Respect the server's timeout maximum (at most 900s). Input limits: task 16000 characters, workspace 4096, context 12000, 1–30 nonempty criteria up to 2000 each, combined serialized task data 24000 characters. No extra fields or NUL characters. Shorten oversized context rather than assuming it was accepted.
+Replace example paths and symbols with the user's actual authorized project. `context` and `timeout_seconds` are optional. Respect the server's timeout maximum (`limits.max_timeout_seconds` in the environment, 900s unless the owner raised it, never above 3600s). Give a larger task a larger `timeout_seconds`, but prefer splitting it: one goal and a few files per task finish sooner and leave a clear result if the deadline is hit. Input limits: task 16000 characters, workspace 4096, context 12000, 1–30 nonempty criteria up to 2000 each, combined serialized task data 24000 characters. No extra fields or NUL characters. Shorten oversized context rather than assuming it was accepted.
 
 `isError=true` is a tool error even if the client rendered text. Prefer `structuredContent`; otherwise parse the JSON text once. Do not treat the successful MCP transport as task completion. Save the returned `task_id`, workspace and criteria immediately; `running` means accepted, not implemented.
 
@@ -68,7 +84,7 @@ Client disconnect does not cancel an accepted task. Reconnect to the same runnin
 |---|---|
 | `completed` | Review actual diff and tests against the original criteria; CLI completion alone is insufficient. |
 | `failed` | Read error, exit_code, stderr, denied_actions and truncation; fix the specific cause before any retry. |
-| `timeout` / `canceled` | Check process_running and inspect partial file changes. Do not assume rollback or resend blindly. |
+| `timeout` / `canceled` | Check process_running and inspect partial file changes. Do not assume rollback or resend blindly. Files edited before the deadline stay on disk, so never treat a timed-out task as "nothing changed". If the work is unfinished, review what was done and submit a new, narrower task for only the remaining part, with what is already finished as context; do not resubmit the same task unchanged. |
 | `unsupported` | Report CLI capability/version diagnostics. Do not invent a fallback or change the version gate. |
 | `queued` | Accepted but not started: no process, no file changes yet. Keep waiting with `antigravity_task_wait` (the deadline starts when it begins running). It is refused/canceled if delegation is switched off before its turn. Cancel it through the cancel tool only if the user cancels. |
 | Still `running` | Continue within the deadline; cancel your own task through the cancel tool if the user cancels or it is demonstrably stuck. |
