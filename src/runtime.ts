@@ -1,14 +1,14 @@
 import path from 'node:path';
 import { loadConfig, sessionOnlyWorkspaces } from './config.js';
 import { paths } from './paths.js';
-import { findExecutable, inspectCli } from './antigravity/process.js';
+import { findExecutable, inspectCli, startProcess } from './antigravity/process.js';
 import { TaskManager } from './tasks/manager.js';
 import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
   let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
-  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot); }
+  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough})); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
   for(const warning of cli.warnings)console.error(`[bridge] WARNING: ${warning}`);
   const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});

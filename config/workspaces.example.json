@@ -1,6 +1,7 @@
 {
   "allowed_workspaces": ["C:/absolute/path/to/approved-project"],
   "executable": "agy",
+  "extra_env_passthrough": [],
   "max_timeout_seconds": 900,
   "default_timeout_seconds": 300,
   "max_output_bytes": 262144,

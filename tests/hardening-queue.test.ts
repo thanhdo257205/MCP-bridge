@@ -10,7 +10,7 @@ test('queued work is validated again and rejected before a process can touch cha
   const root=await mkdtemp(path.join(tmpdir(),'bridge-queue-check-'));
   const workspace=path.join(root,'work'), outside=path.join(root,'outside'), stateDirectory=path.join(root,'state');
   await mkdir(workspace);await mkdir(outside);let launches=0;
-  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:30,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:2},
+  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:30,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:2,extra_env_passthrough:[]},
     {executable:process.execPath,supported:true,stateDirectory,launch:(_args,cwd)=>{launches++;return startProcess(process.execPath,['-e','setInterval(()=>{},1000)'],cwd);}});
   try {
     const input={task:'mock',workspace,acceptance_criteria:['mock']};
@@ -24,7 +24,7 @@ test('queued work is validated again and rejected before a process can touch cha
 
 test('the queued-to-running transition is durable before the executable starts', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'bridge-queue-record-')),workspace=path.join(root,'work'),stateDirectory=path.join(root,'state');await mkdir(workspace);
-  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:30,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:1},
+  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:30,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:1,extra_env_passthrough:[]},
     {executable:process.execPath,supported:true,stateDirectory,launch:(_args,cwd)=>startProcess(process.execPath,['-e','setInterval(()=>{},1000)'],cwd)});
   try {
     const input={task:'mock',workspace,acceptance_criteria:['mock']};const active=await manager.delegate(input),queued=await manager.delegate(input);

@@ -17,9 +17,14 @@ export async function findExecutable(configured: string): Promise<string> {
   throw new Error('Antigravity executable not found (Windows requires a native .exe)');
 }
 
-export function startProcess(executable: string, args: string[], cwd: string): ChildProcess {
-  const env = {...process.env};
-  delete env.BRIDGE_HTTP_TOKEN;
+export function childEnvironment(parent:NodeJS.ProcessEnv, extra:string[]=[]):NodeJS.ProcessEnv {
+  const explicit=new Set(extra.map(key=>key.toUpperCase()));
+  const base=/^(PATH|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|TMPDIR|SYSTEMROOT|COMSPEC|LANG|LC_.*|XDG_.*|HTTP_PROXY|HTTPS_PROXY|NO_PROXY)$/i;
+  return Object.fromEntries(Object.entries(parent).filter(([key,value])=>value!==undefined&&
+    (explicit.has(key.toUpperCase())||(base.test(key)&&!/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))));
+}
+export function startProcess(executable: string, args: string[], cwd: string, options:{extraEnvPassthrough?:string[]}={}): ChildProcess {
+  const env = childEnvironment(process.env,options.extraEnvPassthrough);
   const child = spawn(executable, args, {
     cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe']

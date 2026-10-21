@@ -146,7 +146,7 @@ export class TaskManager {
       await this.persist(task);
       checkStarting();
       const args = ['--print', promptFor({...input, workspace}), '--output-format', 'json', '--print-timeout', `${timeout}s`, '--disable-slash-commands'];
-      const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace);
+      const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace, {extraEnvPassthrough:this.config.extra_env_passthrough});
       entry.child = child;
       entry.pending = undefined;
       task.status = 'running';

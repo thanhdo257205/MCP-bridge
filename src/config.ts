@@ -10,9 +10,10 @@ const schema = z.object({
   default_timeout_seconds: z.number().int().min(1).max(900).default(300),
   max_output_bytes: z.number().int().min(1024).max(1048576).default(262144),
   max_retained_tasks: z.number().int().min(1).max(200).default(50),
-  max_queued_tasks: z.number().int().min(0).max(20).default(3)
+  max_queued_tasks: z.number().int().min(0).max(20).default(3),
+  extra_env_passthrough: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100).default([])
 }).strict();
-const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3};
+const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3, extra_env_passthrough: []};
 export type Config = z.infer<typeof schema>;
 
 // Directories allowed for this run only (agy-mcp-bridge --workspace <dir>); never written to the config file.
