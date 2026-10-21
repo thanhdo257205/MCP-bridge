@@ -9,9 +9,9 @@ import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned } from '../antigravity/process.js';
 
-export type Status = 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
+export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
-  task_id: string; workspace: string; status: Status; started_at: string; ended_at: string | null;
+  task_id: string; workspace: string; status: Status; started_at: string; queued_at: string | null; ended_at: string | null;
   duration_ms: number; pid: number | null; process_running: boolean;
   exit_code: number | null; signal: string | null; stdout: string; stderr: string;
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
@@ -22,8 +22,14 @@ export interface Task {
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
-export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; }
-interface Entry { task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status; }
+export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null; }
+interface Entry {
+  task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
+  /** Resolves `done`; set for every task that goes through the CLI. */
+  finish?: () => void;
+  /** Validated input kept until the process starts (a queued task waits with it). */
+  pending?: {input: DelegateInput; workspace: string; timeout: number};
+}
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string) => ChildProcess;
@@ -32,62 +38,92 @@ export interface Runtime {
 export class TaskManager {
   private entries = new Map<string, Entry>();
   private busy = false;
+  private queue: string[] = [];
   private closing = false;
   constructor(private config: Config, private runtime: Runtime) {}
 
-  async delegate(raw: DelegateInput): Promise<Task> {
+  async delegate(raw: DelegateInput, meta: {client?: string | null} = {}): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
     const delegation = delegationState(this.runtime.stateDirectory);
     if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`npm run delegation -- on\``);
     const input = delegateSchema.parse(raw);
     const timeout = input.timeout_seconds ?? this.config.default_timeout_seconds;
     if (timeout > this.config.max_timeout_seconds) throw new Error('Timeout exceeds configured maximum');
-    // One task globally: also protects overlapping parent/child workspaces.
-    if (this.busy) throw new Error('Bridge is busy with another task');
-    this.busy = true;
+    const workspace = await validateWorkspace(input.workspace, this.config.allowed_workspaces);
+    if (this.closing) throw new Error('Bridge is shutting down');
+
+    // Everything from here to the registration of the entry is synchronous, so concurrent callers cannot both claim the slot.
+    // One task runs globally (also protects overlapping parent/child workspaces); the rest wait in a bounded queue.
+    const queued = this.runtime.supported && this.busy;
+    if (queued && this.queue.length >= this.config.max_queued_tasks) {
+      throw new Error(this.config.max_queued_tasks > 0 ? 'Bridge is busy with another task and the queue is full' : 'Bridge is busy with another task');
+    }
+    const evicted: string[] = [];
+    while (this.entries.size >= this.config.max_retained_tasks) {
+      const oldest = [...this.entries].find(([, value]) => value.task.status !== 'running' && value.task.status !== 'queued');
+      if (!oldest) throw new Error('Task retention capacity reached');
+      this.entries.delete(oldest[0]);
+      evicted.push(oldest[0]);
+    }
+    const now = new Date().toISOString();
+    const task: Task = {
+      task_id: randomUUID(), workspace, status: !this.runtime.supported ? 'unsupported' : queued ? 'queued' : 'running',
+      started_at: now, queued_at: queued ? now : null, ended_at: null, duration_ms: 0,
+      pid: null, process_running: false, exit_code: null, signal: null,
+      stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0,
+      stdout_truncated: false, stderr_truncated: false,
+      final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
+    };
+    const entry: Entry = {
+      task, done: Promise.resolve(), pending: {input, workspace, timeout},
+      request: {
+        task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
+        context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
+        client: meta.client ? redact(meta.client).slice(0, 100) : null
+      }
+    };
+    this.entries.set(task.task_id, entry);
+    if (this.runtime.supported) {
+      entry.done = new Promise<void>(resolve => { entry.finish = resolve; });
+      if (queued) this.queue.push(task.task_id); else this.busy = true;
+    }
+    await Promise.all(evicted.map(id => this.forget(id)));
+    await this.persist(task);
+
+    if (!this.runtime.supported) {
+      task.ended_at = new Date().toISOString();
+      task.error = 'Only locally verified agy 1.4.3 print/json execution is enabled';
+      return this.get(task.task_id);
+    }
+    if (queued) return this.get(task.task_id);
+    try { await this.launch(entry); }
+    catch (error) {
+      this.entries.delete(task.task_id);
+      await this.forget(task.task_id);
+      entry.finish?.();
+      this.busy = false;
+      throw error;
+    }
+    return this.get(task.task_id);
+  }
+
+  /** Starts the process for an entry that already owns the global slot (`busy`). Throws only before the process exists. */
+  private async launch(entry: Entry): Promise<void> {
+    const {task} = entry;
+    const {input, workspace, timeout} = entry.pending!;
     let ownsLock = false;
-    let createdTaskId: string | undefined;
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
-      const workspace = await validateWorkspace(input.workspace, this.config.allowed_workspaces);
       if (this.closing) throw new Error('Bridge is shutting down');
-      if (this.runtime.supported) {
-        await mkdir(this.runtime.stateDirectory, { recursive: true });
-        try { await mkdir(lock); ownsLock = true; }
-        catch { throw new Error(await this.describeLock(lock)); }
-        await writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, started_at: new Date().toISOString()}));
-      }
-      while (this.entries.size >= this.config.max_retained_tasks) {
-        const oldest = [...this.entries].find(([, value]) => !value.task.process_running);
-        if (!oldest) throw new Error('Task retention capacity reached');
-        this.entries.delete(oldest[0]);
-        await this.forget(oldest[0]);
-      }
-      const task: Task = {
-        task_id: randomUUID(), workspace, status: this.runtime.supported ? 'running' : 'unsupported',
-        started_at: new Date().toISOString(), ended_at: null, duration_ms: 0,
-        pid: null, process_running: false, exit_code: null, signal: null,
-        stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0,
-        stdout_truncated: false, stderr_truncated: false,
-        final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
-      };
-      const entry: Entry = { task, done: Promise.resolve(), request: {
-        task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
-        context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout
-      } };
-      this.entries.set(task.task_id, entry);
-      createdTaskId = task.task_id;
-      if (this.runtime.supported) await this.persist(task);
-      if (!this.runtime.supported) {
-        task.ended_at = new Date().toISOString();
-        task.error = 'Only locally verified agy 1.4.3 print/json execution is enabled';
-        this.busy = false;
-        return this.get(task.task_id);
-      }
-      if (this.closing) throw new Error('Bridge is shutting down');
+      await mkdir(this.runtime.stateDirectory, { recursive: true });
+      try { await mkdir(lock); ownsLock = true; }
+      catch { throw new Error(await this.describeLock(lock)); }
       const args = ['--print', promptFor({...input, workspace}), '--output-format', 'json', '--print-timeout', `${timeout}s`, '--disable-slash-commands'];
       const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace);
       entry.child = child;
+      entry.pending = undefined;
+      task.status = 'running';
+      task.started_at = new Date().toISOString();
       task.pid = child.pid ?? null;
       task.process_running = Boolean(child.pid);
       const started = Date.now();
@@ -111,52 +147,75 @@ export class TaskManager {
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
       const timer = setTimeout(() => requestStop('timeout'), timeout * 1000);
-      entry.done = new Promise<void>(resolve => {
-        child.once('error', () => { task.error = 'Could not start Antigravity process'; });
-        child.once('close', async (code, signal) => {
-          if (finalized) return;
-          finalized = true;
-          clearTimeout(timer);
-          task.exit_code = code; task.signal = signal; task.process_running = false;
-          task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
-          task.status = entry.stop ?? 'failed';
-          if (!entry.stop) {
-            try {
-              const result = JSON.parse(buffers.stdout.toString('utf8'));
-              task.cli_status = typeof result.status === 'string' ? result.status : null;
-              task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
-              if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
-                const value = item as Record<string, unknown> | null;
-                return {action: redact(String(value?.action ?? 'unknown')).slice(0,200), display_name: redact(String(value?.display_name ?? '')).slice(0,200)};
-              });
-              if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(buffers.stderr.toString('utf8'))) {
-                task.status = 'timeout'; task.error = 'CLI reported a print timeout (possibly with exit code 0)';
-              } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(buffers.stderr.toString('utf8'))) {
-                task.error = 'Required tool permissions were denied; approve a scoped rule interactively before retrying';
-              } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
-                task.status = 'completed';
-              } else {
-                task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
-              }
-            } catch { task.error ??= 'CLI output is not a valid final JSON envelope'; }
-          }
-          if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
-          if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
-          if (ownsLock) {
-            try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
-          }
-          await this.persist(task);
-          this.busy = false;
-          resolve();
-        });
+      child.once('error', () => { task.error = 'Could not start Antigravity process'; });
+      // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
+      void writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, child_pid: child.pid ?? null, task_id: task.task_id, started_at: task.started_at})).catch(() => {});
+      child.once('close', async (code, signal) => {
+        if (finalized) return;
+        finalized = true;
+        clearTimeout(timer);
+        task.exit_code = code; task.signal = signal; task.process_running = false;
+        task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
+        task.status = entry.stop ?? 'failed';
+        if (!entry.stop) {
+          try {
+            const result = JSON.parse(buffers.stdout.toString('utf8'));
+            task.cli_status = typeof result.status === 'string' ? result.status : null;
+            task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
+            if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
+              const value = item as Record<string, unknown> | null;
+              return {action: redact(String(value?.action ?? 'unknown')).slice(0,200), display_name: redact(String(value?.display_name ?? '')).slice(0,200)};
+            });
+            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(buffers.stderr.toString('utf8'))) {
+              task.status = 'timeout'; task.error = 'CLI reported a print timeout (possibly with exit code 0)';
+            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(buffers.stderr.toString('utf8'))) {
+              task.error = 'Required tool permissions were denied; approve a scoped rule interactively before retrying';
+            } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
+              task.status = 'completed';
+            } else {
+              task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
+            }
+          } catch { task.error ??= 'CLI output is not a valid final JSON envelope'; }
+        }
+        if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
+        if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
+        if (ownsLock) {
+          try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
+        }
+        await this.persist(task);
+        this.busy = false;
+        entry.finish?.();
+        void this.startNext();
       });
-      return this.get(task.task_id);
     } catch (error) {
-      if (createdTaskId) { this.entries.delete(createdTaskId); await this.forget(createdTaskId); }
       if (ownsLock) await rmdir(lock).catch(() => {});
-      this.busy = false;
       throw error;
     }
+  }
+
+  /** Hands the global slot to the oldest waiting task. A task that cannot start is failed here rather than thrown at a caller that has gone. */
+  private async startNext(): Promise<void> {
+    while (!this.busy && !this.closing && this.queue.length) {
+      const entry = this.entries.get(this.queue.shift()!);
+      if (!entry || entry.task.status !== 'queued') continue;
+      const delegation = delegationState(this.runtime.stateDirectory);
+      if (!delegation.enabled) {
+        await this.endWithoutRunning(entry, 'canceled', `Canceled before it started: delegation was switched off (${delegation.reason}). No files were touched`);
+        continue;
+      }
+      this.busy = true;
+      try { await this.launch(entry); }
+      catch (error) {
+        this.busy = false;
+        await this.endWithoutRunning(entry, 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
+      }
+    }
+  }
+  private async endWithoutRunning(entry: Entry, status: Status, error: string) {
+    entry.task.status = status; entry.task.ended_at = new Date().toISOString(); entry.task.error = error;
+    entry.pending = undefined;
+    await this.persist(entry.task);
+    entry.finish?.();
   }
 
   get(id: string): Task {
@@ -175,7 +234,7 @@ export class TaskManager {
   list(): (TaskSummary & {title: string | null})[] {
     return [...this.entries.entries()]
       .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null}))
-      .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+      .sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
   }
   /** Full record for the web UI: the request, the exact prompt shape sent to the CLI (redacted), and the task with logs. */
   detail(id: string) {
@@ -205,6 +264,11 @@ export class TaskManager {
   async cancel(id: string): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
+    if (entry.task.status === 'queued') {
+      this.queue = this.queue.filter(queuedId => queuedId !== id);
+      await this.endWithoutRunning(entry, 'canceled', 'Canceled before it started; no files were touched');
+      return this.get(id);
+    }
     if (entry.child && entry.task.process_running) {
       entry.stop ??= 'canceled';
       await terminateOwned(entry.child);
@@ -252,9 +316,11 @@ export class TaskManager {
         const request = parsed.task ? parsed.request ?? undefined : undefined;
         if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
         if (request) requests.set(task.task_id, request);
-        if (task.status === 'running') {
+        if (task.status === 'running' || task.status === 'queued') {
+          const wasQueued = task.status === 'queued';
           task.status = 'failed'; task.process_running = false; task.ended_at ??= new Date().toISOString();
-          task.error = 'Bridge restarted while this task was running; its process was not recovered. Inspect the workspace for partial changes';
+          task.error = wasQueued ? 'Bridge restarted while this task was queued; it never started and no files were touched'
+            : 'Bridge restarted while this task was running; its process was not recovered. Inspect the workspace for partial changes';
           this.entries.set(task.task_id, {task, request, done: Promise.resolve()});
           await this.persist(task);
           this.entries.delete(task.task_id);
@@ -262,7 +328,7 @@ export class TaskManager {
         loaded.push(task);
       } catch { /* skip unreadable or foreign files */ }
     }
-    loaded.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+    loaded.sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
     const keep = loaded.slice(0, this.config.max_retained_tasks).reverse();
     for (const task of loaded.slice(this.config.max_retained_tasks)) await this.forget(task.task_id);
     for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), done: Promise.resolve()});
@@ -283,7 +349,7 @@ export class TaskManager {
     } catch { return base; }
   }
   overview() {
-    return {accepting_tasks: !this.closing, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

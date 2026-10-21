@@ -8,9 +8,10 @@ const schema = z.object({
   max_timeout_seconds: z.number().int().min(1).max(900).default(900),
   default_timeout_seconds: z.number().int().min(1).max(900).default(300),
   max_output_bytes: z.number().int().min(1024).max(1048576).default(262144),
-  max_retained_tasks: z.number().int().min(1).max(200).default(50)
+  max_retained_tasks: z.number().int().min(1).max(200).default(50),
+  max_queued_tasks: z.number().int().min(0).max(20).default(3)
 }).strict();
-const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50};
+const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3};
 export type Config = z.infer<typeof schema>;
 export const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 export async function loadConfig(): Promise<Config> {

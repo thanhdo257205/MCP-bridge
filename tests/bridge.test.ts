@@ -17,7 +17,7 @@ const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs', impor
 async function setup(scenario = 'ok', overrides: Partial<Config> = {}) {
   const root = await mkdtemp(path.join(tmpdir(),'agy-bridge-test-'));
   const workspace = path.join(root,'work'); await mkdir(workspace);
-  const config: Config = {allowed_workspaces:[workspace], executable:process.execPath,max_timeout_seconds:5,default_timeout_seconds:3,max_output_bytes:1024,max_retained_tasks:3,...overrides};
+  const config: Config = {allowed_workspaces:[workspace], executable:process.execPath,max_timeout_seconds:5,default_timeout_seconds:3,max_output_bytes:1024,max_retained_tasks:3,max_queued_tasks:0,...overrides};
   const manager = new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
   const input = {task:'Implement safe task',workspace,acceptance_criteria:['Verified']};
   return {root,workspace,config,manager,input};
@@ -178,4 +178,43 @@ test('delegation kill switch: env, invalid value and switch file refuse new task
     if(saved===undefined) delete process.env.BRIDGE_DELEGATION; else process.env.BRIDGE_DELEGATION=saved;
     await manager.shutdown();
   }
+});
+test('queue: busy bridge accepts up to max_queued_tasks, runs them in order, and rejects the overflow',async()=>{
+  const {manager,input}=await setup('delayed',{max_queued_tasks:2,max_retained_tasks:10});
+  const a=await manager.delegate(input);const b=await manager.delegate(input);const c=await manager.delegate(input);
+  assert.deepEqual([a.status,b.status,c.status],['running','queued','queued']);
+  assert.equal(b.process_running,false);assert.ok(b.queued_at);
+  assert.deepEqual(manager.overview().queue,{queued:2,max:2});
+  await assert.rejects(manager.delegate(input),/queue is full/);
+  const [doneA,doneB,doneC]=[await manager.wait(a.task_id),await manager.wait(b.task_id),await manager.wait(c.task_id)];
+  assert.deepEqual([doneA.status,doneB.status,doneC.status],['completed','completed','completed']);
+  assert.ok(Date.parse(doneA.ended_at!)<=Date.parse(doneB.started_at)&&Date.parse(doneB.ended_at!)<=Date.parse(doneC.started_at),'strictly one at a time, in submission order');
+  assert.equal(doneB.final_response,'delayed response');
+  assert.deepEqual(manager.overview().queue,{queued:0,max:2});
+  assert.equal((await manager.delegate(input)).status,'running');await manager.shutdown();
+});
+test('queue: cancel a waiting task, switch delegation off, and shutdown never start queued work',async()=>{
+  const {manager,input,root}=await setup('hang',{max_queued_tasks:3,max_retained_tasks:10});
+  const running=await manager.delegate(input);const waiting=await manager.delegate(input);const second=await manager.delegate(input);const third=await manager.delegate(input);
+  const canceled=await manager.cancel(waiting.task_id);
+  assert.equal(canceled.status,'canceled');assert.equal(canceled.pid,null);assert.match(String(canceled.error),/before it started/);
+  assert.deepEqual(manager.overview().queue,{queued:2,max:3});
+  await writeFile(path.join(root,'state','delegation.off'),'x');
+  assert.equal((await manager.cancel(running.task_id)).status,'canceled');
+  const refused=await manager.wait(second.task_id);
+  assert.equal(refused.status,'canceled');assert.match(String(refused.error),/delegation was switched off/);assert.equal(refused.pid,null);
+  assert.equal((await manager.wait(third.task_id)).status,'canceled');
+  await rm(path.join(root,'state','delegation.off'));
+  const again=await manager.delegate(input);const queuedAgain=await manager.delegate(input);
+  await manager.shutdown();
+  assert.equal(manager.get(again.task_id).status,'canceled');assert.equal(manager.get(queuedAgain.task_id).status,'canceled');assert.equal(manager.get(queuedAgain.task_id).pid,null);
+});
+test('queue: a task queued during a crash is restored as failed and never started',async()=>{
+  const {manager,input,config,root}=await setup('hang',{max_queued_tasks:1,max_retained_tasks:10});
+  const running=await manager.delegate(input);const queued=await manager.delegate(input);
+  const reloaded=new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:path.join(root,'state')});
+  await reloaded.restore();
+  const lost=reloaded.get(queued.task_id);assert.equal(lost.status,'failed');assert.match(String(lost.error),/never started/);
+  assert.match(String(reloaded.get(running.task_id).error),/restarted while this task was running/);
+  await manager.shutdown();
 });

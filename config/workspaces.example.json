@@ -4,5 +4,6 @@
   "max_timeout_seconds": 900,
   "default_timeout_seconds": 300,
   "max_output_bytes": 262144,
-  "max_retained_tasks": 50
+  "max_retained_tasks": 50,
+  "max_queued_tasks": 3
 }

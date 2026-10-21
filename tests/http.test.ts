@@ -19,7 +19,7 @@ const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import
 const project = fileURLToPath(new URL('../../',import.meta.url));
 async function setup(scenario='hang', port=0) {
   const root=await mkdtemp(path.join(tmpdir(),'agy-http-'));const workspace=path.join(root,'work');await mkdir(workspace);
-  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10},
+  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
   const bridge=await startHttpBridge({manager,environment:{cli_version:'mock'},token,port});
   return {root,workspace,manager,bridge};
@@ -163,7 +163,7 @@ test('web UI: overview and task detail expose the request/response exchange but 
     await manager.wait(id);
     const detail=await (await ui(bridge,`tasks/${id}`,{},session)).json() as Record<string,any>;
     assert.equal(detail.task.final_response,'delayed response');
-    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20});
+    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20,client:'http-test 1'});
     assert.match(detail.prompt,/You are the Developer/);assert.match(detail.prompt,/Criterion two/);
     assert.ok(!JSON.stringify(detail).includes(token)&&!first.includes(token));
     assert.equal((await ui(bridge,'tasks/not-a-uuid',{},session)).status,404);
@@ -193,4 +193,17 @@ test('web UI: cancel and delegation switch work; env lock is respected; failed l
     for(let i=0;i<10;i++) assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token:'bad'})})).status,401);
     assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token})})).status,429);
   } finally {if(saved===undefined)delete process.env.BRIDGE_DELEGATION;else process.env.BRIDGE_DELEGATION=saved;await client.close();await bridge.close();}
+});
+test('client identity: modern clients are named by clientInfo, legacy ones fall back to the User-Agent',async()=>{
+  const {bridge,workspace,manager}=await setup('delayed');
+  try {
+    for(const [mode,expected] of [['auto',/^http-test 1$/],['legacy',/^\S+/]] as const) {
+      const client=await connect(bridge.mcpUrl,token,mode);
+      try {
+        const id=String((await call(client,'antigravity_delegate',{task:`who ${mode}`,workspace,acceptance_criteria:['x']})).task_id);
+        await manager.wait(id);
+        const label=manager.detail(id).request?.client;assert.match(String(label),expected);
+      } finally {await client.close();}
+    }
+  } finally {await bridge.close();}
 });
