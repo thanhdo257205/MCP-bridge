@@ -23,13 +23,17 @@ export function childEnvironment(parent:NodeJS.ProcessEnv, extra:string[]=[]):No
   return Object.fromEntries(Object.entries(parent).filter(([key,value])=>value!==undefined&&
     (explicit.has(key.toUpperCase())||(base.test(key)&&!/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))));
 }
-export function startProcess(executable: string, args: string[], cwd: string, options:{extraEnvPassthrough?:string[]}={}): ChildProcess {
+export interface ProcessOptions {extraEnvPassthrough?:string[];stdin?:string;}
+export function startProcess(executable: string, args: string[], cwd: string, options:ProcessOptions={}): ChildProcess {
   const env = childEnvironment(process.env,options.extraEnvPassthrough);
   const child = spawn(executable, args, {
     cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe']
   });
-  child.stdin!.end();
+  child.stdin!.on('error',error=>{
+    if(!['EPIPE','ERR_STREAM_DESTROYED'].includes((error as NodeJS.ErrnoException).code??''))child.emit('error',error);
+  });
+  child.stdin!.end(options.stdin);
   return child;
 }
 
@@ -66,7 +70,7 @@ async function terminate(child: ChildProcess): Promise<void> {
   }
 }
 
-export async function inspectCli(executable: string, cwd: string, run: typeof startProcess = startProcess) {
+export async function inspectCli(executable: string, cwd: string, run: typeof startProcess = startProcess, requireStdin=false) {
   const capture = (args: string[]) => new Promise<{code: number | null; text: string}>((resolve, reject) => {
     const child = run(executable, args, cwd);
     let text = '';
@@ -83,7 +87,7 @@ export async function inspectCli(executable: string, cwd: string, run: typeof st
   const help = await capture(['--help']);
   const actual=version.text.trim();
   const supported = version.code === 0 && /^1\.4\.\d+$/.test(actual) && help.code === 0 &&
-    ['--print', '--output-format', '--print-timeout', '--disable-slash-commands'].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
+    ['--print', '--output-format', '--print-timeout', '--disable-slash-commands',...(requireStdin?['--input-format']:[])].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
   const warnings=supported&&actual!=='1.4.3'?[`agy ${actual} is compatible by 1.4.x version/help checks, but only 1.4.3 has been verified with real agent execution`]:[];
   return { version: actual, supported, executable, warnings };
 }

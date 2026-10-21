@@ -19,7 +19,7 @@ const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import
 const project = fileURLToPath(new URL('../../',import.meta.url));
 async function setup(scenario='hang', port=0) {
   const root=await mkdtemp(path.join(tmpdir(),'agy-http-'));const workspace=path.join(root,'work');await mkdir(workspace);
-  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[]},
+  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
   const bridge=await startHttpBridge({manager,environment:{cli_version:'mock'},token,port});
   return {root,workspace,manager,bridge};

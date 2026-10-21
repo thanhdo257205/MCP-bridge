@@ -8,7 +8,7 @@ import {recoverExecutionLock} from './tasks/execution-lock.js';
 export async function createRuntime() {
   const config = await loadConfig();
   let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
-  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough})); }
+  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin'); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
   for(const warning of cli.warnings)console.error(`[bridge] WARNING: ${warning}`);
   const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});
@@ -20,7 +20,7 @@ export async function createRuntime() {
   const environment = {
     cli_version: cli.version, executable: cli.executable,
     bridge_status: cli.supported ? 'ready' : 'unsupported',
-    execution_method: cli.supported ? 'supervised-print-json' : null,
+    execution_method: cli.supported ? (config.prompt_transport==='stdin'?'supervised-stdin-stream-json':'supervised-print-json') : null,
     transport: 'streamable-http',
     supported: {delegate: cli.supported, status: true, wait: true, output: true, cancel_owned_process: true, detached_resume: false},
     allowed_workspaces: config.allowed_workspaces, session_workspaces: sessionOnlyWorkspaces(),

@@ -8,7 +8,8 @@ import { delegateSchema, promptFor, type DelegateInput } from '../security/input
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
-import { startProcess, terminateOwned } from '../antigravity/process.js';
+import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
+import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
@@ -34,7 +35,7 @@ interface Entry {
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
-  launch?: (args: string[], cwd: string) => ChildProcess;
+  launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
 }
 
 export class TaskManager {
@@ -145,8 +146,9 @@ export class TaskManager {
       task.started_at = new Date().toISOString();
       await this.persist(task);
       checkStarting();
-      const args = ['--print', promptFor({...input, workspace}), '--output-format', 'json', '--print-timeout', `${timeout}s`, '--disable-slash-commands'];
-      const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace, {extraEnvPassthrough:this.config.extra_env_passthrough});
+      const invocation=invocationFor(promptFor({...input,workspace}),timeout,this.config.prompt_transport);
+      const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
+      const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
       entry.pending = undefined;
       task.status = 'running';
@@ -188,7 +190,7 @@ export class TaskManager {
         task.status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
-            const result = JSON.parse(buffers.stdout.toString('utf8'));
+            const result = finalEnvelope(buffers.stdout.toString('utf8'),this.config.prompt_transport);
             task.cli_status = typeof result.status === 'string' ? result.status : null;
             task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
             if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
