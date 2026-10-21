@@ -102,7 +102,7 @@ export class TaskManager {
 
     if (!this.runtime.supported) {
       task.ended_at = new Date().toISOString();
-      task.error = 'Only locally verified agy 1.4.3 print/json execution is enabled';
+      task.error = 'Requires agy 1.4.x and all required print/output/timeout flags';
       return this.get(task.task_id);
     }
     if (queued) return this.get(task.task_id);

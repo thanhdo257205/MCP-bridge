@@ -61,9 +61,9 @@ async function terminate(child: ChildProcess): Promise<void> {
   }
 }
 
-export async function inspectCli(executable: string, cwd: string) {
+export async function inspectCli(executable: string, cwd: string, run: typeof startProcess = startProcess) {
   const capture = (args: string[]) => new Promise<{code: number | null; text: string}>((resolve, reject) => {
-    const child = startProcess(executable, args, cwd);
+    const child = run(executable, args, cwd);
     let text = '';
     let exceeded = false;
     const timer = setTimeout(() => { exceeded = true; void terminateOwned(child).catch(reject); }, 10000);
@@ -76,7 +76,9 @@ export async function inspectCli(executable: string, cwd: string) {
   });
   const version = await capture(['--version']);
   const help = await capture(['--help']);
-  const supported = version.code === 0 && version.text.trim() === '1.4.3' && help.code === 0 &&
-    ['--print', '--output-format', '--print-timeout', '--disable-slash-commands'].every(flag => help.text.includes(flag));
-  return { version: version.text.trim(), supported, executable };
+  const actual=version.text.trim();
+  const supported = version.code === 0 && /^1\.4\.\d+$/.test(actual) && help.code === 0 &&
+    ['--print', '--output-format', '--print-timeout', '--disable-slash-commands'].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
+  const warnings=supported&&actual!=='1.4.3'?[`agy ${actual} is compatible by 1.4.x version/help checks, but only 1.4.3 has been verified with real agent execution`]:[];
+  return { version: actual, supported, executable, warnings };
 }

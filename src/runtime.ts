@@ -7,9 +7,10 @@ import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
-  let cli = {version: 'unavailable', executable: '', supported: false};
+  let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
   try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
+  for(const warning of cli.warnings)console.error(`[bridge] WARNING: ${warning}`);
   const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});
   await recoverExecutionLock(paths.stateDirectory);
   const restored = await manager.restore();
@@ -26,7 +27,8 @@ export async function createRuntime() {
     authentication: 'Cached CLI authentication required; only a live task verifies it.',
     limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: 1, max_queued_tasks: config.max_queued_tasks},
     limitations: [
-      'Only locally verified agy 1.4.3 is enabled.',
+      'Only agy 1.4.x with all required flags is enabled; real agent execution was verified on 1.4.3.',
+      ...cli.warnings,
       'Client disconnect does not cancel accepted tasks. Finished-task records persist in .bridge-state/tasks; a task running during a restart is marked failed and its process is not recovered.',
       'CLI SUCCESS/exit 0 does not establish acceptance; tool permissions may have been denied.',
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
