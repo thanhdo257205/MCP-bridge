@@ -16,13 +16,20 @@ test('package: publishable, one bin that points at a built file with a shebang',
   assert.ok((await readFile(target, 'utf8')).startsWith('#!/usr/bin/env node\n'));
   assert.ok(manifest.dependencies['@modelcontextprotocol/client'], 'the check command needs the client at runtime');
 });
+test('package: the declared license has a matching LICENSE file that npm will ship', async () => {
+  assert.equal((manifest as unknown as {license?: string}).license, 'MIT');
+  const text = await readFile(path.join(root, 'LICENSE'), 'utf8');
+  assert.match(text, /^MIT License\r?\n/);
+  assert.match(text, /^Copyright \(c\) \d{4} \S.+$/m, 'has a copyright line with a holder');
+  assert.match(text, /Permission is hereby granted, free of charge/);
+});
 test('package: npm pack contains what the CLI needs and nothing else', () => {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const result = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {cwd: root, encoding: 'utf8', shell: process.platform === 'win32'});
   assert.equal(result.status, 0, result.stderr);
   const files = (JSON.parse(result.stdout) as {files: {path: string}[]}[])[0].files.map(file => file.path.replace(/\\/g, '/'));
   for (const needed of ['dist/src/cli.js', 'dist/src/index.js', 'dist/src/paths.js', 'dist/src/update.js', 'dist/scripts/check.js', 'dist/scripts/delegation.js',
-    'dist/scripts/install-skill.js', 'ui/index.html', 'ui/app.js', 'ui/app.css', 'ui/favicon.svg', 'skills/antigravity-bridge/SKILL.md', 'README.md', 'package.json']) {
+    'dist/scripts/install-skill.js', 'ui/index.html', 'ui/app.js', 'ui/app.css', 'ui/favicon.svg', 'skills/antigravity-bridge/SKILL.md', 'README.md', 'LICENSE', 'package.json']) {
     assert.ok(files.includes(needed), `missing ${needed}`);
   }
   for (const file of files) {
