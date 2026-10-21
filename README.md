@@ -200,6 +200,12 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 
 `completed` chỉ là CLI chạy xong và có envelope hợp lệ. Luôn `review_required=true`, `acceptance_verified=false`. SUCCESS/exit 0 vẫn có thể bị bridge đánh dấu failed do permission denial hoặc timeout. Prompt mẫu review/sửa tiếp: [docs/PROMPTS.md](docs/PROMPTS.md).
 
+### Khi chỉ muốn Codex/Claude tự làm
+
+- **Công tắc cứng (khuyến nghị):** `npm run delegation -- off` chặn mọi lần giao task mới ngay lập tức, không cần restart hay token. `npm run delegation -- on` bật lại, `-- status` xem trạng thái. Có thể đặt `BRIDGE_DELEGATION=off` trước `npm start` (giá trị khác `on`/`off` cũng bị coi là tắt). Khi tắt, `antigravity_delegate` trả lỗi nêu rõ "disabled by the bridge owner" và `antigravity_environment` trả `delegation: {enabled: false, reason}`. Task đang chạy không bị dừng và vẫn xem/hủy được.
+- **Chỉ dẫn cho agent:** skill có mục "When NOT to delegate": agent không giao việc khi bạn bảo tự làm, khi bạn không nhắc Antigravity, hoặc khi công tắc đang tắt. Đây là chỉ dẫn, không phải rào chắn; muốn chắc chắn hãy dùng công tắc. Chạy lại `npm run skill:install` sau khi pull để cập nhật skill.
+- Muốn tắt theo từng client: `enabled=false` trong cấu hình Codex hoặc `/mcp` trong Claude Code (xem mục 3, 4).
+
 ## 6. Vòng đời, giới hạn và dừng an toàn
 
 TaskManager thuộc HTTP server, không thuộc phiên MCP. Server sử dụng handler stateless cho kết nối MCP; mọi request truy cập cùng TaskManager. Disconnect, DELETE session, request cancellation hoặc client thoát không tự hủy task đã tiếp nhận. Nếu mất response giao task, tra `recent_tasks` trước khi thử lại. Một người dùng có cùng token được xem/hủy task từ cả hai client.

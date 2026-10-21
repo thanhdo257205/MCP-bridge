@@ -12,6 +12,7 @@
     "dev": "npm run build && node dist/src/index.js",
     "start:stdio": "node dist/src/stdio.js",
     "check": "node dist/scripts/check.js",
+    "delegation": "node dist/scripts/delegation.js",
     "skill:install": "node dist/scripts/install-skill.js",
     "test": "npm run build && node dist/scripts/run-tests.js",
     "test:live": "npm run build && node dist/scripts/live.js"

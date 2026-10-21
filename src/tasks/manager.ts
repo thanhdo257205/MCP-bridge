@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 import { delegateSchema, promptFor, type DelegateInput } from '../security/input.js';
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
+import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned } from '../antigravity/process.js';
 
 export type Status = 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
@@ -34,6 +35,8 @@ export class TaskManager {
 
   async delegate(raw: DelegateInput): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
+    const delegation = delegationState(this.runtime.stateDirectory);
+    if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`npm run delegation -- on\``);
     const input = delegateSchema.parse(raw);
     const timeout = input.timeout_seconds ?? this.config.default_timeout_seconds;
     if (timeout > this.config.max_timeout_seconds) throw new Error('Timeout exceeds configured maximum');
@@ -251,7 +254,7 @@ export class TaskManager {
     } catch { return base; }
   }
   overview() {
-    return {accepting_tasks: !this.closing, recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

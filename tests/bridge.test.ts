@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, symlink, writeFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,4 +154,28 @@ test('stale execution lock is diagnosed but never removed',async()=>{
   await writeFile(path.join(state,'owner.json'),JSON.stringify({server_pid:2147483646,started_at:'2020-01-01T00:00:00Z'}));
   await assert.rejects(manager.delegate(input),/may be stale.*remove the directory/);
   assert.ok((await readdir(state)).includes('execution.lock'));
+});
+test('delegation kill switch: env, invalid value and switch file refuse new tasks but keep existing ones usable',async()=>{
+  const {manager,input,root}=await setup('hang');
+  const state=path.join(root,'state');
+  const saved=process.env.BRIDGE_DELEGATION;
+  try {
+    const running=await manager.delegate(input);
+    process.env.BRIDGE_DELEGATION='off';
+    assert.equal((manager.overview().delegation as {enabled:boolean}).enabled,false);
+    await assert.rejects(manager.delegate(input),/disabled by the bridge owner.*BRIDGE_DELEGATION=off/);
+    assert.equal(manager.get(running.task_id).status,'running');
+    process.env.BRIDGE_DELEGATION='maybe';
+    await assert.rejects(manager.delegate(input),/invalid value/);
+    delete process.env.BRIDGE_DELEGATION;
+    await writeFile(path.join(state,'delegation.off'),'x');
+    await assert.rejects(manager.delegate(input),/npm run delegation/);
+    assert.equal((await manager.cancel(running.task_id)).status,'canceled');
+    await rm(path.join(state,'delegation.off'));
+    assert.deepEqual(manager.overview().delegation,{enabled:true,reason:null});
+    const again=await manager.delegate(input);assert.equal(again.status,'running');
+  } finally {
+    if(saved===undefined) delete process.env.BRIDGE_DELEGATION; else process.env.BRIDGE_DELEGATION=saved;
+    await manager.shutdown();
+  }
 });
