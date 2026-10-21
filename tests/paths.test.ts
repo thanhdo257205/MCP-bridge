@@ -17,7 +17,8 @@ test('an npm install keeps mutable data in the per-user directory, not in node_m
   assert.equal(linux.dataDirectory, '/home/u/.cfg/agy-mcp-bridge');
   assert.equal(linux.configFile, path.join('/home/u/.cfg/agy-mcp-bridge', 'workspaces.json'));
   assert.equal(linux.stateDirectory, path.join('/home/u/.cfg/agy-mcp-bridge', 'state'));
-  assert.ok(linux.uiDirectory.startsWith(root), 'read-only assets still come from the package');
+  assert.equal(linux.uiDirectory, path.join(root, 'ui'), 'read-only assets still come from the package');
+  assert.equal(linux.skillsDirectory, path.join(root, 'skills'));
   assert.equal(userDataDirectory({}, 'linux', '/home/u'), '/home/u/.config/agy-mcp-bridge');
   assert.equal(userDataDirectory({XDG_CONFIG_HOME: 'relative'}, 'linux', '/home/u'), '/home/u/.config/agy-mcp-bridge', 'a relative XDG value is ignored');
   assert.equal(userDataDirectory({}, 'darwin', '/Users/u'), '/Users/u/Library/Application Support/agy-mcp-bridge');
