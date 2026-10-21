@@ -20,17 +20,31 @@ Các lệnh khác: `agy-mcp-bridge check | setup codex|claude|both | delegation 
 
 **Cập nhật:** khi chạy bản cài từ npm, bridge hỏi npm registry bản mới nhất (tối đa một lần mỗi ngày, timeout 3 giây, lỗi mạng thì bỏ qua). Có bản mới và đang ở terminal tương tác thì hỏi `Update now with "npm install -g agy-mcp-bridge@X"? [y/N]`: chọn `y` mới chạy `npm install -g`, rồi thoát để bạn chạy lại bản mới; chọn `n` thì chạy tiếp và hỏi lại sau 24 giờ. Không bao giờ tự cập nhật âm thầm; ngoài terminal tương tác chỉ in thông báo; khi server đang chạy, giao diện web và log hiện thông báo kèm lệnh `agy-mcp-bridge update` (lệnh này, hoặc `update --check` để chỉ xem). Tắt hoàn toàn bằng `--no-update-check` hoặc `BRIDGE_NO_UPDATE_CHECK=1`; tự tắt khi `CI=true` và với bản clone từ git. Lần kiểm tra chỉ gửi một request GET tên gói tới registry (lộ địa chỉ IP như mọi lần `npm view`).
 
-**Đăng lên npm (người phát hành):** tên gói là `agy-mcp-bridge` (các tên `antigravity-mcp-bridge`, `antigravity-bridge`, `agy-bridge` đã có người khác dùng; kiểm tra lại trước khi đăng bằng `npm view agy-mcp-bridge` phải ra 404). Từ bản clone sạch trên nhánh `main`:
+**Phát hành tự động lên npm:** workflow [publish.yml](.github/workflows/publish.yml) chạy khi push tag `vX.Y.Z`. Workflow yêu cầu commit thuộc lịch sử `main`, tag khớp version trong `package.json` và `package-lock.json`, rồi chạy test trên Windows/Linux với Node 20/22 trước khi publish bằng Node 24. Test thất bại sẽ chặn publish. Chỉ hỗ trợ bản stable; tag prerelease bị từ chối để không thay nhãn `latest` bằng bản thử nghiệm. Push code lên `main` mà chưa tạo tag sẽ chỉ chạy CI.
+
+Cấu hình một lần tại [Settings của gói npm](https://www.npmjs.com/package/agy-mcp-bridge/access), phần **Trusted Publisher**, chọn GitHub Actions:
+
+- Organization or user: `thanhdo257205`
+- Repository: `MCP-bridge`
+- Workflow filename: `publish.yml` (không nhập đường dẫn đầy đủ)
+- Environment name: để trống
+- Cho phép **npm publish** để phát hành trực tiếp.
+
+Workflow dùng OIDC với `id-token: write` riêng cho job publish, không cần npm token trong GitHub Secrets hay OTP mỗi lần chạy. npm tự tạo provenance cho bản phát hành. Xem [tài liệu Trusted Publishing](https://docs.npmjs.com/trusted-publishers/). Việc cấp quyền lần đầu có thể yêu cầu 2FA; không đưa token hoặc OTP vào repo.
+
+Từ bản clone sạch trên nhánh `main`, sau khi code đã merge:
 
 ```bash
-npm login                      # tài khoản npm, nên bật 2FA
-npm pack --dry-run             # xem trước danh sách file sẽ đăng (test cũng kiểm tra không lọt file test/cấu hình cục bộ)
-npm version patch              # hoặc minor/major: tăng version và tạo git tag
-npm publish                    # chạy `npm test` trước (prepublishOnly); gói public nhờ publishConfig.access
-git push --follow-tags
+git checkout main
+git pull --ff-only
+npm ci
+npm version patch              # hoặc minor/major: tăng version, cập nhật lockfile, tạo commit và tag
+git push origin main --follow-tags
 ```
 
-Mỗi lần đăng phải tăng version, nếu không người dùng không nhận thông báo cập nhật. Gói chưa khai báo `license` trong `package.json`: hãy chọn giấy phép trước khi đăng công khai.
+Theo dõi [Actions → Publish to npm](https://github.com/thanhdo257205/MCP-bridge/actions/workflows/publish.yml). Nếu `main` được bảo vệ, hãy tăng version bằng `npm version patch --no-git-tag-version` trong PR; sau khi merge, pull `main`, tạo tag `git tag -a vX.Y.Z -m "Release vX.Y.Z"` trên commit đó rồi `git push origin vX.Y.Z`.
+
+Mỗi lần phát hành phải dùng version mới; npm không cho ghi đè version đã đăng. Không chạy `npm publish` thủ công cùng lúc với workflow. Nếu test hoặc xác thực OIDC lỗi trước khi publish, sửa nguyên nhân rồi chạy lại job trên cùng tag; nếu bản đó đã xuất hiện trên registry, không publish lại. Kiểm tra kết quả bằng `npm view agy-mcp-bridge version`; registry có thể mất vài phút để xử lý. Gói sử dụng giấy phép MIT và chứa file `LICENSE`.
 
 ## Quickstart
 
