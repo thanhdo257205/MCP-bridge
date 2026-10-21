@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { mkdir, rmdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '../config.js';
@@ -18,6 +18,8 @@ export interface Task {
   denied_actions: {action: string; display_name: string}[];
   review_required: true; acceptance_verified: false;
 }
+export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
+const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 interface Entry { task: Task; child?: ChildProcess; done: Promise<void>; stop?: Status; }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
@@ -47,13 +49,14 @@ export class TaskManager {
       if (this.runtime.supported) {
         await mkdir(this.runtime.stateDirectory, { recursive: true });
         try { await mkdir(lock); ownsLock = true; }
-        catch { throw new Error('Execution lock exists. Another bridge may be running; inspect before removing a stale lock'); }
+        catch { throw new Error(await this.describeLock(lock)); }
         await writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, started_at: new Date().toISOString()}));
       }
       while (this.entries.size >= this.config.max_retained_tasks) {
         const oldest = [...this.entries].find(([, value]) => !value.task.process_running);
         if (!oldest) throw new Error('Task retention capacity reached');
         this.entries.delete(oldest[0]);
+        await this.forget(oldest[0]);
       }
       const task: Task = {
         task_id: randomUUID(), workspace, status: this.runtime.supported ? 'running' : 'unsupported',
@@ -66,6 +69,7 @@ export class TaskManager {
       const entry: Entry = { task, done: Promise.resolve() };
       this.entries.set(task.task_id, entry);
       createdTaskId = task.task_id;
+      if (this.runtime.supported) await this.persist(task);
       if (!this.runtime.supported) {
         task.ended_at = new Date().toISOString();
         task.error = 'Only locally verified agy 1.4.3 print/json execution is enabled';
@@ -133,13 +137,14 @@ export class TaskManager {
           if (ownsLock) {
             try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
           }
+          await this.persist(task);
           this.busy = false;
           resolve();
         });
       });
       return this.get(task.task_id);
     } catch (error) {
-      if (createdTaskId) this.entries.delete(createdTaskId);
+      if (createdTaskId) { this.entries.delete(createdTaskId); await this.forget(createdTaskId); }
       if (ownsLock) await rmdir(lock).catch(() => {});
       this.busy = false;
       throw error;
@@ -152,6 +157,20 @@ export class TaskManager {
     const copy = structuredClone(entry.task);
     if (copy.process_running) copy.duration_ms = Date.now() - Date.parse(copy.started_at);
     return copy;
+  }
+  /** Status view: metadata only. Logs and the final response come from get(). */
+  summary(id: string): TaskSummary {
+    const {stdout: _stdout, stderr: _stderr, final_response: _response, ...rest} = this.get(id);
+    return rest;
+  }
+  /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
+  async waitFor(id: string, seconds: number): Promise<Task> {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error('Unknown or expired task_id');
+    let timer: NodeJS.Timeout | undefined;
+    try { await Promise.race([entry.done, new Promise<void>(resolve => { timer = setTimeout(resolve, seconds * 1000); })]); }
+    finally { if (timer) clearTimeout(timer); }
+    return this.get(id);
   }
   async wait(id: string): Promise<Task> {
     const entry = this.entries.get(id);
@@ -179,6 +198,58 @@ export class TaskManager {
     await Promise.all([...this.entries.keys()].map(id => this.cancel(id)));
   }
   stopAccepting(): void { this.closing = true; }
+
+  private get tasksDirectory() { return path.join(this.runtime.stateDirectory, 'tasks'); }
+  // Best effort: a failed write must never fail or hide a task.
+  private async persist(task: Task) {
+    if (!this.runtime.supported) return;
+    try {
+      await mkdir(this.tasksDirectory, {recursive: true, mode: 0o700});
+      const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
+      await writeFile(`${file}.tmp`, JSON.stringify(task), {mode: 0o600});
+      await rename(`${file}.tmp`, file);
+    } catch { /* history is a convenience, not a correctness requirement */ }
+  }
+  private async forget(id: string) {
+    if (this.runtime.supported) await unlink(path.join(this.tasksDirectory, `${id}.json`)).catch(() => {});
+  }
+  /** Reload finished-task history after a restart. Tasks that were running are marked failed: their process did not survive. */
+  async restore(): Promise<number> {
+    let names: string[];
+    try { names = (await readdir(this.tasksDirectory)).filter(name => TASK_FILE.test(name)); } catch { return 0; }
+    const loaded: Task[] = [];
+    for (const name of names) {
+      try {
+        const task = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as Task;
+        if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
+        if (task.status === 'running') {
+          task.status = 'failed'; task.process_running = false; task.ended_at ??= new Date().toISOString();
+          task.error = 'Bridge restarted while this task was running; its process was not recovered. Inspect the workspace for partial changes';
+          await this.persist(task);
+        }
+        loaded.push(task);
+      } catch { /* skip unreadable or foreign files */ }
+    }
+    loaded.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+    const keep = loaded.slice(0, this.config.max_retained_tasks).reverse();
+    for (const task of loaded.slice(this.config.max_retained_tasks)) await this.forget(task.task_id);
+    for (const task of keep) this.entries.set(task.task_id, {task, done: Promise.resolve()});
+    return keep.length;
+  }
+  // Diagnose only; never remove a lock automatically.
+  private async describeLock(lock: string): Promise<string> {
+    const base = 'Execution lock exists. Another bridge may be running; inspect before removing a stale lock';
+    try {
+      const owner = JSON.parse(await readFile(path.join(this.runtime.stateDirectory, 'owner.json'), 'utf8')) as {server_pid?: number; started_at?: string};
+      const pid = Number(owner.server_pid);
+      if (!Number.isInteger(pid) || pid <= 0) return base;
+      try { process.kill(pid, 0); return `${base} (owner server pid ${pid} is running)`; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return `${base} (owner server pid ${pid} is running)`;
+        return `${base}. The recorded owner server pid ${pid} (started ${owner.started_at ?? 'unknown'}) is not running, so the lock may be stale. Confirm no agy process is still running, then remove the directory ${lock} manually`;
+      }
+    } catch { return base; }
+  }
   overview() {
     return {accepting_tasks: !this.closing, recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at

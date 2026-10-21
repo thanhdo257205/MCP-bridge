@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { validateWorkspace, inside } from '../src/security/workspace.js';
+import { isAlive, waitUntilDead } from './helpers.js';
 import { delegateSchema } from '../src/security/input.js';
 import type { Config } from '../src/config.js';
 
@@ -73,7 +74,7 @@ test('cancel kills only managed process tree and leaves unrelated process alive'
     while(!manager.get(task.task_id).stderr && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
     const descendant=Number(manager.get(task.task_id).stderr);assert.ok(descendant>0);
     const done=await manager.cancel(task.task_id);assert.equal(done.status,'canceled');assert.equal(done.process_running,false);
-    assert.throws(()=>process.kill(descendant,0));process.kill(unrelated.pid!,0);
+    assert.equal(await waitUntilDead(descendant),true);assert.equal(isAlive(unrelated.pid!),true);
     assert.equal((await manager.cancel(task.task_id)).status,'canceled');
     await assert.rejects(manager.cancel('unknown'),/Unknown/);
   } finally { unrelated.kill(); await manager.shutdown(); }
@@ -111,9 +112,46 @@ test('real stdio entry emits only JSON-RPC on stdout and diagnostics on stderr',
   try {
     send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}}});await waitFor(1);
     send({jsonrpc:'2.0',method:'notifications/initialized'});
-    send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});const list=await waitFor(2);assert.equal((list.result as {tools:unknown[]}).tools.length,5);
+    send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});const list=await waitFor(2);assert.equal((list.result as {tools:unknown[]}).tools.length,6);
     send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'antigravity_environment',arguments:{}}});const env=await waitFor(3);
     assert.match(JSON.stringify(env),/unsupported/);
     assert.equal(invalid,false);assert.ok(messages.every(m=>m.jsonrpc==='2.0'));assert.match(stderr,/stdio ready/);
   } finally {child.stdin.end();await new Promise<void>(r=>child.once('close',()=>r()));lines.close();}
+});
+test('summary omits logs and waitFor returns early or after its deadline',async()=>{
+  const {manager,input}=await setup('delayed');
+  const started=await manager.delegate(input);
+  const pending=await manager.waitFor(started.task_id,0.05);assert.equal(pending.status,'running');
+  const summary=manager.summary(started.task_id) as Record<string,unknown>;
+  for(const key of ['stdout','stderr','final_response']) assert.ok(!(key in summary));
+  assert.equal(summary.status,'running');
+  const done=await manager.waitFor(started.task_id,5);assert.equal(done.status,'completed');
+  await assert.rejects(manager.waitFor('unknown',1),/Unknown/);
+});
+test('finished tasks survive a restart; a task running during a crash is marked failed',async()=>{
+  const {manager,input,config,root,workspace}=await setup();
+  const done=await manager.wait((await manager.delegate(input)).task_id);assert.equal(done.status,'completed');
+  const state=path.join(root,'state');
+  const crashed={...done,task_id:'11111111-1111-4111-8111-111111111111',status:'running',process_running:true,ended_at:null};
+  await writeFile(path.join(state,'tasks',`${crashed.task_id}.json`),JSON.stringify(crashed));
+  await writeFile(path.join(state,'tasks','not-a-task.json'),'{}');
+  const reloaded=new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:state});
+  assert.equal(await reloaded.restore(),2);
+  assert.equal(reloaded.get(done.task_id).final_response,'implemented');
+  const lost=reloaded.get(crashed.task_id);assert.equal(lost.status,'failed');assert.equal(lost.process_running,false);assert.match(String(lost.error),/restarted/);
+  assert.equal(workspace.length>0,true);
+});
+test('evicted tasks lose their persisted record',async()=>{
+  const {manager,input,root}=await setup();
+  const ids:string[]=[];
+  for(let i=0;i<4;i++) ids.push((await manager.wait((await manager.delegate(input)).task_id)).task_id);
+  const files=await readdir(path.join(root,'state','tasks'));
+  assert.equal(files.length,3);assert.ok(!files.includes(`${ids[0]}.json`));
+});
+test('stale execution lock is diagnosed but never removed',async()=>{
+  const {manager,input,root}=await setup();
+  const state=path.join(root,'state');await mkdir(path.join(state,'execution.lock'),{recursive:true});
+  await writeFile(path.join(state,'owner.json'),JSON.stringify({server_pid:2147483646,started_at:'2020-01-01T00:00:00Z'}));
+  await assert.rejects(manager.delegate(input),/may be stale.*remove the directory/);
+  assert.ok((await readdir(state)).includes('execution.lock'));
 });

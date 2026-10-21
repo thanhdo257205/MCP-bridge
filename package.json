@@ -1,5 +1,5 @@
 {
-  "name": "codex-antigravity-bridge",
+  "name": "antigravity-mcp-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "start:stdio": "node dist/src/stdio.js",
     "check": "node dist/scripts/check.js",
     "skill:install": "node dist/scripts/install-skill.js",
-    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test": "npm run build && node dist/scripts/run-tests.js",
     "test:live": "npm run build && node dist/scripts/live.js"
   },
   "dependencies": {

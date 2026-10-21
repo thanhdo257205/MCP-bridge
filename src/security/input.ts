@@ -10,6 +10,10 @@ export const delegateSchema = z.object({
   'Combined task data must fit 24000 characters and contain no NUL characters');
 export type DelegateInput = z.infer<typeof delegateSchema>;
 export const taskIdSchema = z.object({ task_id: z.uuid() }).strict();
+// Kept below the 60s tool timeout recommended for Codex so a wait never outlives the client call.
+export const MAX_WAIT_SECONDS = 25;
+export const DEFAULT_WAIT_SECONDS = 20;
+export const waitSchema = z.object({ task_id: z.uuid(), wait_seconds: z.number().int().min(1).max(MAX_WAIT_SECONDS).optional() }).strict();
 
 export function promptFor(input: DelegateInput): string {
   return [

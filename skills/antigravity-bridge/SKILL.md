@@ -9,7 +9,7 @@ Act as Tech Lead; Antigravity is the Developer. The user runs the HTTP bridge in
 
 ## Before delegating
 
-- Discover the connected MCP tools by their advertised names; client prefixes may differ. Required names: `antigravity_environment`, `antigravity_delegate`, `antigravity_task_status`, `antigravity_task_output`, `antigravity_cancel_task`. Do not invent tools, CLI flags, or HTTP JSON-RPC payloads when MCP tools are available.
+- Discover the connected MCP tools by their advertised names; client prefixes may differ. Required names: `antigravity_environment`, `antigravity_delegate`, `antigravity_task_status`, `antigravity_task_wait`, `antigravity_task_output`, `antigravity_cancel_task`. Do not invent tools, CLI flags, or HTTP JSON-RPC payloads when MCP tools are available.
 - Call `antigravity_environment`. Require `bridge_status=ready`, `supported.delegate=true`, and `accepting_tasks=true`. Use the returned `allowed_workspaces` and `limits`; an empty allowlist permits no workspace. An absolute project path must be authorized. Do not edit allowlists/settings to bypass a refusal.
 - If tools are missing or connection fails, report the endpoint/client error. The user should run `npm start` in the bridge clone, load its token into the client environment, then reconnect. If shell access to the bridge clone is available, `npm run check` is a read-only diagnostic. Never print or request the token in chat. Do not silently switch to STDIO or call agy directly.
 - Check `recent_tasks` and any previously saved task ID before a new submission. There is one running task globally across clients. Do not cancel another task just to free the bridge.
@@ -41,9 +41,9 @@ Replace example paths and symbols with the user's actual authorized project. `co
 
 ## Observe and reconnect
 
-Poll `antigravity_task_status` with `{"task_id":"the-returned-UUID"}` at a reasonable interval, starting around 2 seconds and backing off toward 5–10 seconds. Do useful independent review while waiting; do not hammer the server. Retrieve `antigravity_task_output` at termination or when diagnosing an error. Output/status calls return snapshots, not a completion wait.
+Prefer `antigravity_task_wait` with `{"task_id":"the-returned-UUID","wait_seconds":20}`: it returns as soon as the task ends, or after at most 25 seconds with `running`, so call it again while the task is within its deadline. `antigravity_task_status` is an instant, log-free snapshot for quick checks. Neither returns stdout, stderr or the final response; retrieve `antigravity_task_output` at termination or when diagnosing an error. Output/status calls return snapshots, not a completion wait.
 
-Client disconnect does not cancel an accepted task. Reconnect to the same running server and query the saved ID; `recent_tasks` in environment can recover IDs if the delegate reply was lost. If several tasks could match, inspect their status/output before deciding which is yours. Do not resubmit just because a response was lost: submission is not idempotent. History is in RAM and expires by retention or restart. Unknown/expired ID does not prove the task never ran; inspect workspace changes and reconcile before another submission.
+Client disconnect does not cancel an accepted task. Reconnect to the same running server and query the saved ID; `recent_tasks` in environment can recover IDs if the delegate reply was lost. If several tasks could match, inspect their status/output before deciding which is yours. Do not resubmit just because a response was lost: submission is not idempotent. Finished-task records persist on disk across restarts until retention expiry; a task that was running during a restart comes back as `failed` and its process is not recovered. Unknown/expired ID does not prove the task never ran; inspect workspace changes and reconcile before another submission.
 
 ## Handle terminal results
 

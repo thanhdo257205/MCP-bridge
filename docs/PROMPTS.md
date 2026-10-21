@@ -10,7 +10,7 @@ Lập kế hoạch, chia task có scope và tiêu chí đo được. Với mỗi
 antigravity_delegate trong workspace được phê duyệt. Chỉ định file được sửa,
 API/contract phải giữ, và các test command chính xác nếu cho phép agent chạy.
 Không giao deploy/xóa dữ liệu/thay đổi hệ thống. Không bỏ qua permission denial.
-Poll antigravity_task_status; lấy antigravity_task_output khi kết thúc.
+Dùng antigravity_task_wait (hoặc poll antigravity_task_status); lấy antigravity_task_output khi kết thúc.
 ```
 
 Ví dụ arguments; thay workspace bằng đường dẫn thật có trong allowlist:
