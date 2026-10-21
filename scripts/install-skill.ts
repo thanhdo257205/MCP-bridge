@@ -5,10 +5,25 @@ import { pathToFileURL } from 'node:url';
 import { paths } from '../src/paths.js';
 
 export type Client = 'codex' | 'claude' | 'both';
+const skillSource = () => path.join(paths.skillsDirectory, 'antigravity-bridge', 'SKILL.md');
+const skillFile = (root: string, client: 'codex' | 'claude') => path.join(root, client === 'codex' ? '.agents' : '.claude', 'skills', 'antigravity-bridge', 'SKILL.md');
+
+/** Where the skill is (or would be) installed for the current user, and whether the file there is ours, missing, or customized. Reads only. */
+export async function skillStatus(options: {userHome?: string} = {}) {
+  const content = await readFile(skillSource(), 'utf8');
+  const root = options.userHome ?? homedir();
+  const result = {} as Record<'codex' | 'claude', {state: 'installed' | 'missing' | 'different'; file: string}>;
+  for (const client of ['codex', 'claude'] as const) {
+    const file = skillFile(root, client);
+    const existing = await readFile(file, 'utf8').catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; });
+    result[client] = {file, state: existing === null ? 'missing' : existing === content ? 'installed' : 'different'};
+  }
+  return result;
+}
+
 export async function installSkill(options: {client: Client; project?: string; userHome?: string}) {
   if (!['codex', 'claude', 'both'].includes(options.client)) throw new Error('--client must be codex, claude or both');
-  const source = path.join(paths.skillsDirectory, 'antigravity-bridge', 'SKILL.md');
-  const content = await readFile(source, 'utf8');
+  const content = await readFile(skillSource(), 'utf8');
   let root = options.userHome ?? homedir();
   if (options.project !== undefined) {
     if (!path.isAbsolute(options.project)) throw new Error('--project must be an absolute path to an existing project');
@@ -16,7 +31,7 @@ export async function installSkill(options: {client: Client; project?: string; u
     if (!(await stat(root)).isDirectory()) throw new Error('--project must be a directory');
   }
   const clients = options.client === 'both' ? ['codex', 'claude'] : [options.client];
-  const destinations = clients.map(client => path.join(root, client === 'codex' ? '.agents' : '.claude', 'skills', 'antigravity-bridge', 'SKILL.md'));
+  const destinations = clients.map(client => skillFile(root, client as 'codex' | 'claude'));
   const planned = [];
   // Check all destinations first. Never overwrite a locally customized skill.
   for (const filename of destinations) {

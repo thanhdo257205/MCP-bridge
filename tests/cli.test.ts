@@ -190,3 +190,24 @@ test('cli: --open hands the UI address to the system browser opener (Linux only:
     assert.equal((await readFile(record, 'utf8')).trim(), base);
   } finally { child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); }
 });
+
+test('cli: a non-interactive start never offers or installs the skill', async () => {
+  const dir = await home();
+  const fakeHome = path.join(dir, 'home'); await mkdir(fakeHome);
+  const data = path.join(dir, 'data'); await mkdir(data);
+  await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(dir, 'missing')}));
+  const env: NodeJS.ProcessEnv = {...process.env, HOME: fakeHome, USERPROFILE: fakeHome, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: 'cli_test_token_123456789012345678901234567', PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  delete env.BRIDGE_NO_SKILL_PROMPT; delete env.CI;
+  const child = spawn(process.execPath, [cli, 'start'], {env, stdio: ['ignore', 'pipe', 'pipe']});
+  let log = ''; child.stderr.on('data', chunk => log += chunk);
+  try {
+    const until = Date.now() + 10000;
+    while (!/MCP endpoint:/.test(log) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.match(log, /MCP endpoint:/);
+    assert.doesNotMatch(log, /\[skill\]/);
+    assert.equal((await import('node:fs')).existsSync(path.join(fakeHome, '.claude')) || (await import('node:fs')).existsSync(path.join(fakeHome, '.agents')), false);
+  } finally { child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); }
+});
+test('cli: --no-skill-prompt is accepted and listed in help', () => {
+  assert.match(run(['help']).stdout, /--no-skill-prompt/);
+});
