@@ -129,9 +129,22 @@ export class TaskManager {
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
       if (this.closing) throw new Error('Bridge is shutting down');
+      if (task.queued_at) {
+        try { await validateWorkspace(workspace, this.config.allowed_workspaces); }
+        catch (error) { throw new Error(`Queued workspace validation failed before execution: ${error instanceof Error ? error.message : 'invalid workspace'}`); }
+      }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       try { await mkdir(lock); ownsLock = true; }
       catch { throw new Error(await this.describeLock(lock)); }
+      const checkStarting = () => {
+        if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
+      };
+      checkStarting();
+      // Persist the transition before spawning: after a crash we must not claim queued work never ran.
+      task.status = 'running';
+      task.started_at = new Date().toISOString();
+      await this.persist(task);
+      checkStarting();
       const args = ['--print', promptFor({...input, workspace}), '--output-format', 'json', '--print-timeout', `${timeout}s`, '--disable-slash-commands'];
       const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace);
       entry.child = child;
@@ -221,7 +234,7 @@ export class TaskManager {
       try { await this.launch(entry); }
       catch (error) {
         this.busy = false;
-        await this.endWithoutRunning(entry, 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
+        await this.endWithoutRunning(entry, this.closing || entry.stop === 'canceled' ? 'canceled' : 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
       }
     }
   }
@@ -278,7 +291,8 @@ export class TaskManager {
   async cancel(id: string): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
-    if (entry.task.status === 'queued') {
+    if (entry.task.status === 'queued' || (entry.pending && !entry.child)) {
+      entry.stop = 'canceled';
       this.queue = this.queue.filter(queuedId => queuedId !== id);
       await this.endWithoutRunning(entry, 'canceled', 'Canceled before it started; no files were touched');
       return this.get(id);
