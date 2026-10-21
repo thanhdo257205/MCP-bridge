@@ -15,6 +15,7 @@
     "delegation": "node dist/scripts/delegation.js",
     "skill:install": "node dist/scripts/install-skill.js",
     "test": "npm run build && node dist/scripts/run-tests.js",
+    "probe:stream": "node dist/scripts/probe-stream.js",
     "test:live": "npm run build && node dist/scripts/live.js"
   },
   "dependencies": {

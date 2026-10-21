@@ -192,7 +192,7 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 | Tool | Công dụng |
 |---|---|
 | `antigravity_environment` | CLI/version/allowlist/giới hạn và recent_tasks để tìm lại task ID |
-| `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?; trả running/task_id |
+| `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?; trả `running` (hoặc `queued` nếu bridge đang bận và hàng đợi còn chỗ) cùng task_id |
 | `antigravity_task_status` | Trạng thái/process/thời gian/lỗi/denied_actions/số byte theo task_id, không kèm log (rẻ để poll) |
 | `antigravity_task_wait` | Chờ tối đa `wait_seconds` (1–25, mặc định 20) tới khi task kết thúc, trả cùng nội dung như status; còn chạy thì gọi lại |
 | `antigravity_task_output` | Phản hồi cuối, stdout/stderr, lỗi, denied_actions, truncation theo task_id |
@@ -210,6 +210,8 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 
 TaskManager thuộc HTTP server, không thuộc phiên MCP. Server sử dụng handler stateless cho kết nối MCP; mọi request truy cập cùng TaskManager. Disconnect, DELETE session, request cancellation hoặc client thoát không tự hủy task đã tiếp nhận. Nếu mất response giao task, tra `recent_tasks` trước khi thử lại. Một người dùng có cùng token được xem/hủy task từ cả hai client.
 
+**Hàng đợi:** chỉ một task chạy tại một thời điểm, nhưng khi bridge đang bận, tối đa `max_queued_tasks` task nữa (mặc định 3, cấu hình 0–20 trong `config/workspaces.json`) được nhận với trạng thái `queued` và chạy lần lượt theo thứ tự gửi. `0` trả về hành vi cũ: từ chối ngay với "busy". Task đang chờ chưa có tiến trình, chưa đụng file, có thể hủy; thời hạn (`timeout`) chỉ tính từ lúc bắt đầu chạy. Nếu công tắc giao việc bị tắt trước khi đến lượt thì task bị hủy; server dừng thì hủy hết; crash giữa chừng thì task đang chờ được nạp lại ở trạng thái `failed` ("never started"). Queue không làm thay đổi quy tắc "một task toàn cục": không có chạy song song.
+
 Mặc định giữ 50 task (tối đa cấu hình 200); task cũ hoàn tất bị loại bỏ. Bản ghi task được lưu tại `.bridge-state/tasks/<task_id>.json` (mode 0600 trên POSIX; nội dung đã qua lọc secret) và nạp lại khi khởi động, nên tra được kết quả sau restart. Task đang chạy lúc server dừng đột ngột được nạp lại với trạng thái `failed` ("Bridge restarted…"): tiến trình `agy` không được khôi phục, hãy kiểm tra diff dở dang. Đây là lịch sử kết quả, không phải durable task recovery. Task vẫn timeout nếu không có client theo dõi. Chỉ một task chạy toàn cục, khóa giữa các process dùng cùng bản cài tại `.bridge-state/execution.lock`; không điều phối editor/agent ngoài hoặc bản cài bridge khác.
 
 Nhấn **Ctrl+C một lần** tại terminal server:
@@ -219,7 +221,7 @@ Nhấn **Ctrl+C một lần** tại terminal server:
 3. Đóng MCP handler, cho kết nối đang có tối đa 3 giây để drain sau khi cleanup; sau đó đóng cưỡng bức socket còn lại.
 4. In `[bridge] Stopped` khi thành công. Không rollback file đã sửa. Xem diff trước lần chạy tiếp theo.
 
-Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Khi gặp lỗi lock, thông báo cho biết PID server chủ lock còn chạy hay không; nếu PID đã chết, lock có thể cũ — xác nhận không còn tiến trình `agy` rồi tự xóa thư mục lock được nêu trong thông báo. Bridge không tự xóa lock hoặc kill process Antigravity khác. Force kill server/đóng terminal/OS crash không bảo đảm cleanup: chưa có Windows Job Object. Sau crash, kiểm tra process và `.bridge-state/owner.json` trước khi xử lý lock; PID cũ có thể đã tái sử dụng.
+Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Khi gặp lỗi lock, thông báo cho biết PID server chủ lock còn chạy hay không; nếu PID đã chết, lock có thể cũ — xác nhận không còn tiến trình `agy` rồi tự xóa thư mục lock được nêu trong thông báo. Bridge không tự xóa lock hoặc kill process Antigravity khác. Force kill server/đóng terminal/OS crash không bảo đảm cleanup: chưa có Windows Job Object. Sau crash, kiểm tra process và `.bridge-state/owner.json` trước khi xử lý lock; PID cũ có thể đã tái sử dụng. Khi khởi động, server in cảnh báo (và giao diện web hiện banner) nếu còn lock của bridge khác: nêu PID server cũ, và nếu `owner.json` ghi PID `agy` mà PID đó vẫn đang chạy thì báo là có thể tiến trình mồ côi vẫn đang sửa workspace. Bridge chỉ cảnh báo, không bao giờ tự kill hay tự xóa lock; bảo đảm dọn dẹp thật khi crash trên Windows vẫn cần Job Object hoặc môi trường cách ly (Node không tạo được Job Object nếu không có module native).
 
 Giới hạn mặc định: task 300s, tối đa 900s; output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON tối đa 24000 ký tự cho command line Windows; HTTP body tối đa 128 KiB. Status không cung cấp phần trăm tiến độ; JSON cuối thường chỉ tới khi agy kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
 
@@ -309,7 +311,14 @@ Khi `npm start` đang chạy, mở `http://127.0.0.1:3000/ui` (đúng cổng đ�
 
 | Màn hình | Nội dung |
 |---|---|
-| Task | Tổng quan (trạng thái bridge, phiên bản `agy`, công tắc giao việc, số task đang chạy); danh sách task; với mỗi task là cuộc trao đổi **Tech Lead → Antigravity** (yêu cầu, tiêu chí nghiệm thu, ngữ cảnh) và **Antigravity → Tech Lead** (phản hồi cuối, thao tác bị từ chối quyền, lỗi), log stdout/stderr, prompt đầy đủ gửi tới `agy`. Tự cập nhật; nút Hủy task cho task đang chạy |
+| Task | Tổng quan (trạng thái bridge, phiên bản `agy`, công tắc giao việc, số task đang chạy); danh sách task; với mỗi task là cuộc trao đổi **Tech Lead → Antigravity** (yêu cầu, tiêu chí nghiệm thu, ngữ cảnh) và **Antigravity → Tech Lead** (phản hồi cuối, thao tác bị từ chối quyền, lỗi), log stdout/stderr, prompt đầy đủ gửi tới `agy`. Tên client đã giao (từ `clientInfo` của MCP, hoặc User-Agent nếu client dùng giao thức cũ; có thể trống hoặc chỉ là `node`), trạng thái hàng đợi, lọc theo trạng thái và tìm kiếm. Cập nhật từng vùng nên bôi đen log/văn bản vẫn giữ nguyên khi task đang chạy; nút Hủy task cho task đang chạy hoặc đang chờ |
 | Cài đặt | Công tắc giao việc cho Antigravity (cùng cơ chế với `npm run delegation`, bị khóa nếu đặt `BRIDGE_DELEGATION`), endpoint MCP, thông tin CLI, workspace được phép, giới hạn, lưu ý. Workspace và giới hạn chỉ đọc: sửa trong `config/workspaces.json` rồi khởi động lại |
 
 Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển thị dạng văn bản thuần, trang dùng CSP không cho script/style nội tuyến hay tải từ nơi khác, nên output của model không thể thực thi. Yêu cầu của Tech Lead được lưu cùng bản ghi task trong `.bridge-state/tasks` (đã qua lọc secret nhận diện được) để xem lại sau khi restart; đừng đưa secret vào task. Giao diện chỉ đọc, ngoại trừ hai thao tác cần phiên đăng nhập: hủy task và bật/tắt giao việc. Mã nguồn giao diện nằm ở `ui/` (HTML/CSS/JS thuần, không cần build), phần máy chủ ở `src/ui/`.
+
+## 11. Ghi chú thiết kế và việc chưa làm
+
+- **Tiến độ thật của task:** `agy` có `--output-format stream-json` (init, step_update, result) nhưng tên trường chính xác chưa được xác minh với bản 1.4.3 và bridge vẫn chạy bằng `json` đã kiểm chứng. Chạy `npm run probe:stream` trên máy có `agy` (một lần gọi AI rất nhỏ, ghi `test-results/stream-probe.ndjson`) để lấy định dạng thật; sau đó mới làm hiển thị từng bước.
+- **`outputSchema` cho tool MCP:** đã thử và bỏ. Schema đầy đủ làm danh sách tool tăng từ khoảng 3,9 KB lên 12,1 KB; nếu client đưa vào ngữ cảnh của agent thì tốn thêm token ở mỗi lượt, trái với mục tiêu giữ chi phí thấp.
+- **Đánh giá hành vi của skill:** xem [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md): bộ tình huống và tiêu chí chấm để chạy thủ công với Codex/Claude Code; chưa được chạy tự động.
+- **Dọn tiến trình khi crash trên Windows:** xem mục 6; mới có cảnh báo, chưa có bảo đảm.
