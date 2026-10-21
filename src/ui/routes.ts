@@ -57,7 +57,7 @@ async function overview(ctx: UiContext) {
       version: env.cli_version, executable: env.executable, bridge_status: env.bridge_status,
       execution_method: env.execution_method, authentication: env.authentication
     },
-    limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], limitations: env.limitations ?? [],
+    limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], session_workspaces: env.session_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),

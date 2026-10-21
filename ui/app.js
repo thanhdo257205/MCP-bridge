@@ -285,7 +285,7 @@ function settingsView(o) {
           row('Cách chạy', o.cli.execution_method || '—')),
         h('p', {text: o.cli.authentication})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Workspace được phép'}),
-        o.allowed_workspaces.length ? h('ul', {class: 'path-list'}, o.allowed_workspaces.map(p => h('li', {text: p})))
+        o.allowed_workspaces.length ? h('ul', {class: 'path-list'}, o.allowed_workspaces.map(p => h('li', {}, p, (o.session_workspaces || []).includes(p) ? h('span', {class: 'tag', text: 'chỉ lần chạy này'}) : null)))
           : h('div', {class: 'callout warn', text: 'Chưa có workspace nào. Thêm đường dẫn tuyệt đối vào config/workspaces.json rồi khởi động lại.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Giới hạn'}),
         h('dl', {class: 'rows'}, row('Timeout tối đa', `${o.limits.max_timeout_seconds ?? '—'}s`), row('Output mỗi luồng', bytes(o.limits.max_output_bytes_per_stream ?? 0)),
@@ -352,7 +352,7 @@ function patch() {
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
   } else {
-    setRegion('settings', JSON.stringify([o.cli, o.delegation, o.limits, o.allowed_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }

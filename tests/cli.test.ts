@@ -76,6 +76,7 @@ test('cli: start serves the UI, keeps state in BRIDGE_HOME, and announces an upd
     assert.match(log, /\[update\] agy-mcp-bridge 99\.0\.0 is available/, 'announced before starting');
     assert.match(log, /Update available: agy-mcp-bridge 99\.0\.0/, 'announced while running');
     assert.equal((await fetch(`${base}/ui`)).status, 200);
+    assert.ok(log.includes(`[bridge] Web UI: ${base}/ui`), 'the terminal shows the link to the web UI');
     const login = await (await fetch(`${base}/ui/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})).json() as {session: string};
     const overview = await (await fetch(`${base}/ui/api/overview`, {headers: {'x-bridge-session': login.session}})).json() as {update: {latest: string; command: string}};
     assert.equal(overview.update.latest, '99.0.0');
@@ -107,4 +108,50 @@ test('cli: --no-update-check makes no registry request', async () => {
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(hits, 0);
   } finally { child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); registry.close(); }
+});
+async function startWith(args: string[], options: {cwd?: string; data: string}) {
+  const token = 'cli_test_token_123456789012345678901234567';
+  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: options.data, BRIDGE_HTTP_TOKEN: token, PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  await mkdir(options.data, {recursive: true});
+  await writeFile(path.join(options.data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(options.data, 'missing')}));
+  const child = spawn(process.execPath, [cli, 'start', ...args], {env, cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe']});
+  let log = ''; child.stderr.on('data', chunk => log += chunk); child.stdout.on('data', chunk => log += chunk);
+  const exited = new Promise<number | null>(resolve => child.once('close', resolve));
+  const until = Date.now() + 10000;
+  while (!/MCP endpoint:/.test(log) && child.exitCode === null && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+  const base = /MCP endpoint: (http:\/\/127\.0\.0\.1:\d+)\/mcp/.exec(log)?.[1];
+  const overview = async () => {
+    const login = await (await fetch(`${base}/ui/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})).json() as {session: string};
+    return await (await fetch(`${base}/ui/api/overview`, {headers: {'x-bridge-session': login.session}})).json() as {allowed_workspaces: string[]; session_workspaces: string[]};
+  };
+  const stop = async () => { child.kill('SIGINT'); return exited; };
+  return {log: () => log, base, overview, stop, exited};
+}
+
+test('cli: start --workspace allows a directory for this run only, including "." as the current directory', async () => {
+  const dir = await home();
+  const project = path.join(dir, 'My Project'); await mkdir(project);
+  const other = path.join(dir, 'other'); await mkdir(other);
+  const server = await startWith(['--workspace', '.', '--workspace', other], {cwd: project, data: path.join(dir, 'data')});
+  try {
+    assert.ok(server.base, server.log());
+    const overview = await server.overview();
+    const real = (await import('node:fs/promises')).realpath;
+    assert.deepEqual(overview.allowed_workspaces, [await real(project), await real(other)]);
+    assert.deepEqual(overview.session_workspaces, overview.allowed_workspaces);
+    assert.match(server.log(), /allowed for this run only \(not saved\)/);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, 'data', 'workspaces.json'), 'utf8')).allowed_workspaces, [], 'nothing was saved');
+  } finally { await server.stop(); }
+});
+test('cli: start --workspace refuses a bad directory before the server starts', async () => {
+  const dir = await home();
+  for (const bad of [path.join(dir, 'missing'), root]) {
+    const server = await startWith(['--workspace', bad], {data: path.join(dir, 'data')});
+    assert.equal(await server.exited, 1);
+    assert.equal(server.base, undefined, 'no server was started');
+    assert.match(server.log(), /does not exist|bridge installation/);
+  }
+  const server = await startWith(['--workspace'], {data: path.join(dir, 'data')});
+  assert.equal(await server.exited, 1);
+  assert.match(server.log(), /--workspace needs a value/);
 });

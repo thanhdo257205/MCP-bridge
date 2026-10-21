@@ -12,6 +12,8 @@ agy-mcp-bridge workspaces add /duong/dan/toi/project   # cấp quyền cho một
 agy-mcp-bridge                       # mở server http://127.0.0.1:3000 ; giao diện web ở /ui
 ```
 
+**Cách nhanh nhất:** mở terminal tại thư mục dự án rồi chạy `agy-mcp-bridge --workspace .` (cho phép thư mục hiện tại **chỉ trong lần chạy này**, không lưu vào cấu hình; có thể lặp lại cờ cho nhiều thư mục, và log in ra từng thư mục đã được cho phép; thư mục sai hoặc là chính thư mục cài bridge thì dừng ngay, không khởi động server). Muốn lưu lâu dài thì dùng `agy-mcp-bridge workspaces add .`. Trong giao diện web, mục Cài đặt đánh dấu "chỉ lần chạy này" bên cạnh các thư mục này.
+
 Các lệnh khác: `agy-mcp-bridge check | delegation on|off|status | skill install --client codex|claude|both | config | update | help`. Cấu hình, token và lịch sử task nằm trong thư mục dữ liệu của người dùng (Linux `~/.config/agy-mcp-bridge`, macOS `~/Library/Application Support/agy-mcp-bridge`, Windows `%APPDATA%\agy-mcp-bridge`), không nằm trong thư mục cài đặt nên không mất khi cập nhật; đổi chỗ bằng `BRIDGE_HOME`. `agy-mcp-bridge config` in ra các đường dẫn thật, gồm `token file` (đọc token ở đó để dán vào giao diện web hoặc nạp vào `BRIDGE_HTTP_TOKEN` cho Codex/Claude Code). Phần dưới đây dùng `npm start`/`npm run ...` cho bản clone từ git; với bản cài từ npm hãy dùng lệnh `agy-mcp-bridge` tương ứng.
 
 **Cập nhật:** khi chạy bản cài từ npm, bridge hỏi npm registry bản mới nhất (tối đa một lần mỗi ngày, timeout 3 giây, lỗi mạng thì bỏ qua). Có bản mới và đang ở terminal tương tác thì hỏi `Update now with "npm install -g agy-mcp-bridge@X"? [y/N]`: chọn `y` mới chạy `npm install -g`, rồi thoát để bạn chạy lại bản mới; chọn `n` thì chạy tiếp và hỏi lại sau 24 giờ. Không bao giờ tự cập nhật âm thầm; ngoài terminal tương tác chỉ in thông báo; khi server đang chạy, giao diện web và log hiện thông báo kèm lệnh `agy-mcp-bridge update` (lệnh này, hoặc `update --check` để chỉ xem). Tắt hoàn toàn bằng `--no-update-check` hoặc `BRIDGE_NO_UPDATE_CHECK=1`; tự tắt khi `CI=true` và với bản clone từ git. Lần kiểm tra chỉ gửi một request GET tên gói tới registry (lộ địa chỉ IP như mọi lần `npm view`).
@@ -81,7 +83,11 @@ Mặc định bind duy nhất `127.0.0.1:3000`. Khi cổng còn trống, termina
 [bridge] HTTP server: http://127.0.0.1:3000
 [bridge] MCP endpoint: http://127.0.0.1:3000/mcp
 [bridge] Health check: http://127.0.0.1:3000/health (bearer authentication required)
+[bridge] Token source: <đường dẫn file token hoặc BRIDGE_HTTP_TOKEN> (value never logged)
+[bridge] Web UI: http://127.0.0.1:3000/ui  (open in a browser on this machine; sign in with the token from the source above)
 ```
+
+Dòng `Web UI` là đường dẫn tới giao diện web; nhấn giữ Ctrl (hoặc Cmd) và bấm vào nó trong terminal hỗ trợ liên kết để mở trình duyệt.
 
 Cổng bị chiếm: server báo lỗi, thoát mã 1, không tự đổi cổng hoặc địa chỉ bind. Chọn cổng khác:
 

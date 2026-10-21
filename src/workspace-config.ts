@@ -24,13 +24,19 @@ async function save(file: string, config: Record<string, unknown>) {
 
 export async function listWorkspaces(file: string): Promise<string[]> { return entries(await readConfig(file)); }
 
-/** Adds an existing directory (stored as its real path). Refuses the bridge's own source tree, which an agent must never be allowed to edit. */
-export async function addWorkspace(file: string, input: string, bridgeRoot: string): Promise<{added: boolean; path: string}> {
+/** Real path of an existing directory an agent may be allowed to edit. Refuses the bridge's own source tree. */
+export async function resolveWorkspaceDirectory(input: string, bridgeRoot: string): Promise<string> {
   if (!path.isAbsolute(input) || input.includes('\0')) throw new Error('Workspace must be an absolute path');
   const canonical = await realpath(input).catch(() => { throw new Error(`Directory does not exist: ${input}`); });
   if (!(await stat(canonical)).isDirectory()) throw new Error(`Not a directory: ${canonical}`);
   const own = await realpath(bridgeRoot);
   if (inside(own, canonical) || inside(canonical, own)) throw new Error('Refusing a workspace that contains or lies inside the bridge installation itself');
+  return canonical;
+}
+
+/** Adds an existing directory (stored as its real path). */
+export async function addWorkspace(file: string, input: string, bridgeRoot: string): Promise<{added: boolean; path: string}> {
+  const canonical = await resolveWorkspaceDirectory(input, bridgeRoot);
   const config = await readConfig(file);
   const current = entries(config);
   if (current.includes(canonical)) return {added: false, path: canonical};
