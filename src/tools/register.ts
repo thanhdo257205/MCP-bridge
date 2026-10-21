@@ -1,8 +1,18 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { CLIENT_INFO_META_KEY, McpServer } from '@modelcontextprotocol/server';
+import { requestContext } from '../request-context.js';
 import * as z from 'zod/v4';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
+
+/** Best-effort label for who delegated: the client's declared name/version when the request carries it, else the HTTP User-Agent. */
+function clientLabel(envelope: unknown): string | null {
+  const info = (envelope as Record<string, unknown> | undefined)?.[CLIENT_INFO_META_KEY] as {name?: unknown; version?: unknown} | undefined;
+  const declared = typeof info?.name === 'string' ? `${info.name}${typeof info.version === 'string' ? ` ${info.version}` : ''}` : requestContext.getStore()?.userAgent;
+  // eslint-disable-next-line no-control-regex
+  const clean = declared?.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 100);
+  return clean || null;
+}
 
 export function createServer(manager: TaskManager, environment: Record<string, unknown>): McpServer {
   const server = new McpServer({name: 'antigravity-mcp-bridge', version: '0.1.0'});
@@ -18,7 +28,7 @@ export function createServer(manager: TaskManager, environment: Record<string, u
   server.registerTool('antigravity_delegate', {
     description: 'Start one supervised agy print task. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
     inputSchema: delegateSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
-  }, async input => guard(() => manager.delegate(input)));
+  }, async (input, ctx) => guard(() => manager.delegate(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_task_status', {
     description: 'Get task/process state, timing, error, denied_actions and byte counts without logs (cheap to poll). Accepted tasks survive client disconnect; finished-task history is kept on disk across restarts until retention expiry.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}

@@ -7,6 +7,7 @@ import { authorized, validateToken } from './security/http-auth.js';
 import { registerSecret } from './security/redact.js';
 import type { TaskManager } from './tasks/manager.js';
 import { SessionStore } from './ui/session.js';
+import { requestContext } from './request-context.js';
 import { handleUi } from './ui/routes.js';
 
 export const DEFAULT_PORT = 3000;
@@ -51,7 +52,7 @@ export async function startHttpBridge(options: {
       reply(200, {status: 'ok', transport: 'streamable-http', mcp_endpoint: `${baseUrl}/mcp`, ...options.manager.overview()}); return;
     }
     if (req.url !== '/mcp') { reply(404, {error: 'Use /mcp for MCP or GET /health for health checks'}); return; }
-    void mcp(req, res).catch(() => {
+    void requestContext.run({userAgent: req.headers['user-agent']}, () => mcp(req, res)).catch(() => {
       if (!res.headersSent) reply(500, {error: 'MCP request failed'});
       else res.destroy();
     });
