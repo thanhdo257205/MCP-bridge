@@ -33,7 +33,7 @@ export async function createRuntime() {
       'CLI SUCCESS/exit 0 does not establish acceptance; tool permissions may have been denied.',
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
       'Existing Antigravity permissions, hooks, MCP and credential access remain governed by its configuration.',
-      'No permission bypass flags. Dangerous actions require separate interactive approval.',
+      'Permission flags are off unless the bridge owner raises the Antigravity permission level in the web UI (agy_permissions shows the current level; a client cannot change it). At the default level, actions that need approval are denied (see denied_actions).',
       'Windows uses taskkill on the live owned child tree; abrupt server termination may orphan processes.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'
     ]

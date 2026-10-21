@@ -220,7 +220,7 @@ Tham khảo [tài liệu MCP chính thức của Claude Code](https://code.claud
 {"permissions":{"allow":["write_file(C:/absolute/path/to/approved-project/)"]}}
 ```
 
-Merge rule cần thiết vào settings, không thay toàn bộ cấu hình; không dùng wildcard global hay bypass permissions. Test commands phải được cho phép riêng; Codex có thể tự chạy test. Deploy/xóa dữ liệu/thay đổi hệ thống yêu cầu xác nhận tương tác riêng và không thuộc task thông thường. Chi tiết hạn chế CLI ở [docs/VERIFICATION.md](docs/VERIFICATION.md).
+Merge rule cần thiết vào settings, không thay toàn bộ cấu hình; không dùng wildcard global. Muốn Antigravity tự làm mà không bị từ chối từng thao tác, chủ máy có thể nâng mức quyền trong giao diện web (Cài đặt → Quyền của Antigravity, xem mục 10); mặc định vẫn là không bypass. Test commands phải được cho phép riêng; Codex có thể tự chạy test. Deploy/xóa dữ liệu/thay đổi hệ thống yêu cầu xác nhận tương tác riêng và không thuộc task thông thường. Chi tiết hạn chế CLI ở [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 Luồng sử dụng trong Codex hoặc Claude Code:
 
@@ -375,6 +375,20 @@ Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển th�
 **Chọn model:** mục Cài đặt → Model liệt kê các model lấy từ `agy models` (chỉ chạy khi mở trang Cài đặt). Chọn một model thì bridge truyền `--model <id>` cho mọi task mới; chọn "Mặc định của Antigravity" thì không truyền cờ nào. Có hiệu lực ngay, không cần khởi động lại; task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận, và mỗi task ghi lại model đã dùng (hiện trong chi tiết task). Chỉ nhận id nằm trong danh sách của `agy models`; nếu không đọc được danh sách thì không cho đổi. Lựa chọn lưu ở `.bridge-state/model.json`. Codex/Claude không chọn được model theo từng task (không thêm tham số vào tool MCP nên không tốn thêm token).
 
 **Ghi chú phát hành:** mỗi lần workflow phát hành, nó tạo một GitHub Release cho tag `vX.Y.Z` với ghi chú tự sinh gồm các pull request đã merge kể từ tag trước (tên PR là nội dung ghi chú, nên hãy đặt tên PR nêu rõ thay đổi). Xem tại trang Releases của repo. Các tag cũ chưa có release cũng được tạo bù, theo thứ tự từ cũ đến mới.
+
+**Quyền của Antigravity:** mục Cài đặt → Quyền của Antigravity chọn Antigravity được tự làm đến đâu khi chạy task. Ở chế độ không tương tác, Antigravity tự từ chối việc cần phê duyệt (thấy ở `denied_actions`), nên task sửa file hay chạy lệnh có thể không làm được nếu cài đặt Antigravity chưa cấp quyền. Năm mức, từ thấp đến cao:
+
+| Mức | Cờ truyền cho `agy` | Ý nghĩa |
+|---|---|---|
+| Mặc định | (không có) | Quyền theo file cài đặt của Antigravity; an toàn nhất, là mặc định |
+| Chỉ lập kế hoạch | `--mode plan` | Chỉ lập kế hoạch |
+| Tự duyệt sửa file | `--mode accept-edits` | Sửa file được duyệt tự động |
+| Tự động | `--mode auto` | Chế độ tự động của Antigravity |
+| Toàn quyền | `--dangerously-skip-permissions` | Duyệt mọi yêu cầu, gồm chạy lệnh và truy cập ngoài thư mục dự án |
+
+Chỉ chủ máy đổi được, qua giao diện web (cần phiên đăng nhập bằng token); Codex/Claude không có tool nào để đổi và file skill cấm xin token để làm việc đó. Mức `Tự động` và `Toàn quyền` yêu cầu xác nhận; khi đang bật, giao diện hiện dải cảnh báo, `antigravity_environment` báo `agy_permissions` để Codex/Claude biết và nói với bạn, và chi tiết mỗi task ghi mức quyền đã dùng. Có hiệu lực ngay, không cần khởi động lại. Hạ mức xuống thì áp dụng cả cho task đang xếp hàng; nâng lên thì không (task giữ mức lúc được nhận). Biến `BRIDGE_AGY_PERMISSIONS=default|plan|accept-edits|auto|full` đặt cố định và khóa giao diện (giá trị sai thì dùng `default`). Lựa chọn lưu ở `.bridge-state/permissions.json`.
+
+**Cảnh báo:** danh sách "Workspace được phép" chỉ kiểm tra đường dẫn của task, không phải sandbox; với `Tự động` hay `Toàn quyền`, Antigravity có thể tác động ra ngoài thư mục đó (xóa file, chạy lệnh, dùng thông tin đăng nhập đã lưu). Chỉ bật khi bạn tin tưởng tác vụ, dự án đã được git theo dõi hoặc sao lưu. Các cờ `--mode` chưa được kiểm chứng với `agy` thật qua chế độ `--print`.
 
 ## 11. Ghi chú thiết kế và việc chưa làm
 

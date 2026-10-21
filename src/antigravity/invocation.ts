@@ -1,6 +1,6 @@
 export type PromptTransport='stdin'|'argv';
-export function invocationFor(prompt:string,timeout:number,transport:PromptTransport,model:string|null=null) {
-  const common=['--print-timeout',`${timeout}s`,'--disable-slash-commands',...(model?['--model',model]:[])];
+export function invocationFor(prompt:string,timeout:number,transport:PromptTransport,model:string|null=null,extraArgs:string[]=[]) {
+  const common=['--print-timeout',`${timeout}s`,'--disable-slash-commands',...(model?['--model',model]:[]),...extraArgs];
   return transport==='argv'
     ? {args:['--print',prompt,'--output-format','json',...common],stdin:undefined}
     : {args:['--input-format','stream-json','--output-format','stream-json',...common],stdin:JSON.stringify({event:'user',message:{content:prompt}})+'\n'};

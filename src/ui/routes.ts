@@ -10,6 +10,7 @@ import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { validModelId, writeModel } from '../models.js';
+import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
 import { inside } from '../security/workspace.js';
 
 export interface UiContext {
@@ -63,6 +64,7 @@ async function overview(ctx: UiContext) {
     limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], session_workspaces: env.session_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
     model: await ctx.manager.currentModel(),
+    permission: permissionState(ctx.manager.stateDirectory),
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
@@ -127,6 +129,14 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       if (!delegationControllable()) { json(res, 409, {error: 'Delegation is locked by BRIDGE_DELEGATION in the server environment'}); return true; }
       await setDelegationSwitch(ctx.manager.stateDirectory, body.enabled);
       json(res, 200, {...delegationState(ctx.manager.stateDirectory), controllable: true}); return true;
+    }
+    if (pathname === '/ui/api/permission' && method === 'POST') {
+      const body = await readJson(req);
+      if (!isPermissionLevel(body.level)) { json(res, 400, {error: `level must be one of: ${PERMISSION_LEVELS.join(', ')}`}); return true; }
+      if (!permissionState(ctx.manager.stateDirectory).controllable) { json(res, 409, {error: 'The permission level is locked by BRIDGE_AGY_PERMISSIONS in the server environment'}); return true; }
+      if (needsAcknowledgement(body.level) && body.acknowledge_risk !== true) { json(res, 400, {error: 'This level lets Antigravity act without asking; send acknowledge_risk: true to confirm'}); return true; }
+      await writePermission(ctx.manager.stateDirectory, body.level);
+      json(res, 200, permissionState(ctx.manager.stateDirectory)); return true;
     }
     if (pathname === '/ui/api/models' && method === 'GET') {
       const current = await ctx.manager.currentModel();
