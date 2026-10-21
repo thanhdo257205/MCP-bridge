@@ -155,3 +155,38 @@ test('cli: start --workspace refuses a bad directory before the server starts', 
   assert.equal(await server.exited, 1);
   assert.match(server.log(), /--workspace needs a value/);
 });
+
+test('cli: setup prints configuration, validates input and writes nothing', async () => {
+  const dir = path.join(await home(), 'untouched');
+  const env = {BRIDGE_HOME: dir, HOME: dir, USERPROFILE: dir, XDG_CONFIG_HOME: dir};
+  const out = run(['setup', 'both', '--shell', 'bash', '--port', '3555'], env);
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /127\.0\.0\.1:3555\/mcp/);
+  assert.match(out.stdout, /codex mcp add/);
+  assert.match(out.stdout, /claude mcp add/);
+  assert.equal((await import('node:fs')).existsSync(dir), false, 'setup created nothing, not even the data directory');
+  assert.equal(run(['setup'], env).status, 1);
+  assert.equal(run(['setup', 'vim'], env).status, 1);
+  assert.match(run(['setup', 'codex', '--port', '0'], env).stderr, /fixed port/);
+  assert.match(run(['setup', 'codex', '--shell', 'fish'], env).stderr, /--shell must be/);
+});
+test('cli: --open hands the UI address to the system browser opener (Linux only: uses a stub xdg-open)', {skip: process.platform !== 'linux'}, async () => {
+  const dir = await home();
+  const bin = path.join(dir, 'bin'); await mkdir(bin);
+  const record = path.join(dir, 'opened.txt');
+  await writeFile(path.join(bin, 'xdg-open'), `#!/bin/sh\necho "$1" > "${record}"\n`, {mode: 0o755});
+  const data = path.join(dir, 'data'); await mkdir(data);
+  await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(dir, 'missing')}));
+  const env: NodeJS.ProcessEnv = {...process.env, PATH: `${bin}:${process.env.PATH}`, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: 'cli_test_token_123456789012345678901234567', PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  const child = spawn(process.execPath, [cli, 'start', '--open'], {env, stdio: ['ignore', 'pipe', 'pipe']});
+  let log = ''; child.stderr.on('data', chunk => log += chunk);
+  try {
+    const until = Date.now() + 10000;
+    while (!/Opening the web UI/.test(log) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+    const base = /Web UI: (http:\/\/127\.0\.0\.1:\d+\/ui)/.exec(log)?.[1];
+    assert.ok(base, log);
+    const untilFile = Date.now() + 5000;
+    while (!(await readFile(record, 'utf8').catch(() => '')) && Date.now() < untilFile) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal((await readFile(record, 'utf8')).trim(), base);
+  } finally { child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); }
+});
