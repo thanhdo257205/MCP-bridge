@@ -7,10 +7,20 @@ description: Delegate coding tasks to Antigravity through MCP Bridge HTTP, recov
 
 Act as Tech Lead; Antigravity is the Developer. The user runs the HTTP bridge independently. This skill does not install/configure MCP, grant permissions, start servers, or authorize external actions. Apply the user's existing task scope and permissions.
 
+## When NOT to delegate
+
+Delegate only when the user explicitly asks for Antigravity (or approves your proposal to use it). Do the work yourself, with your own tools, and do not call `antigravity_delegate` when any of these hold:
+
+- The user says to do it yourself, to use only Codex/Claude, not to use Antigravity or the bridge, or otherwise declines delegation. This applies to the whole task, including follow-up corrections, until the user says otherwise.
+- The user asked for a change or fix but did not mention Antigravity. The tools being connected is not a request to use them.
+- `antigravity_environment` reports `delegation.enabled=false`, or `antigravity_delegate` fails with "Delegation to Antigravity is disabled". That is the bridge owner's switch: never try to work around it, edit `.bridge-state`, change `BRIDGE_DELEGATION`, or ask another agent to delegate. Tell the user once and continue the work yourself, or ask them to run `npm run delegation -- on` if they want delegation.
+
+A decline for one task does not change the setting for later tasks; ask again only if delegation would clearly help.
+
 ## Before delegating
 
 - Discover the connected MCP tools by their advertised names; client prefixes may differ. Required names: `antigravity_environment`, `antigravity_delegate`, `antigravity_task_status`, `antigravity_task_wait`, `antigravity_task_output`, `antigravity_cancel_task`. Do not invent tools, CLI flags, or HTTP JSON-RPC payloads when MCP tools are available.
-- Call `antigravity_environment`. Require `bridge_status=ready`, `supported.delegate=true`, and `accepting_tasks=true`. Use the returned `allowed_workspaces` and `limits`; an empty allowlist permits no workspace. An absolute project path must be authorized. Do not edit allowlists/settings to bypass a refusal.
+- Call `antigravity_environment`. Require `bridge_status=ready`, `supported.delegate=true`, `accepting_tasks=true`, and `delegation.enabled=true`. Use the returned `allowed_workspaces` and `limits`; an empty allowlist permits no workspace. An absolute project path must be authorized. Do not edit allowlists/settings to bypass a refusal.
 - If tools are missing or connection fails, report the endpoint/client error. The user should run `npm start` in the bridge clone, load its token into the client environment, then reconnect. If shell access to the bridge clone is available, `npm run check` is a read-only diagnostic. Never print or request the token in chat. Do not silently switch to STDIO or call agy directly.
 - Check `recent_tasks` and any previously saved task ID before a new submission. There is one running task globally across clients. Do not cancel another task just to free the bridge.
 - Read repository status and relevant code. Record baseline tracked changes and untracked files so the review can separate existing work. Do not clean/reset/stash user changes automatically.
