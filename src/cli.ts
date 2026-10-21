@@ -5,7 +5,8 @@ import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { paths } from './paths.js';
-import { addWorkspace, listWorkspaces, removeWorkspace } from './workspace-config.js';
+import { addSessionWorkspaces } from './config.js';
+import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
   checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
 } from './update.js';
@@ -19,6 +20,7 @@ Usage: ${BIN} [command] [options]
 
   start (default)         Run the HTTP server (default http://127.0.0.1:3000, web UI at /ui)
       --port <0-65535>      Port to listen on (same as the PORT variable)
+      --workspace <dir>     Also allow <dir> (for example .) for this run only; repeatable, not saved
       --no-update-check     Do not ask the npm registry whether a newer version exists
   check                   Call antigravity_environment on the running server
   workspaces list|add <dir>|remove <dir>
@@ -69,11 +71,18 @@ async function offerUpdate(info: UpdateInfo) {
 }
 
 async function start(args: string[]) {
+  const directories: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port' && args[i + 1] !== undefined) process.env.PORT = args[++i];
+    else if (args[i] === '--workspace' && args[i + 1] !== undefined) directories.push(path.resolve(args[++i]));
     else if (args[i] === '--no-update-check') process.env.BRIDGE_NO_UPDATE_CHECK = '1';
+    else if (args[i] === '--port' || args[i] === '--workspace') throw new Error(`${args[i]} needs a value (see ${BIN} help)`);
     else throw new Error(`Unknown option for start: ${args[i]} (see ${BIN} help)`);
   }
+  // Validated before anything starts, so a typo never leaves a server running with the wrong access.
+  const allowed = await Promise.all(directories.map(directory => resolveWorkspaceDirectory(directory, paths.packageRoot)));
+  addSessionWorkspaces(allowed);
+  for (const directory of allowed) console.error(`[${BIN}] Workspace allowed for this run only (not saved): ${directory}`);
   if (updateCheckEnabled(paths.mode)) {
     const info = await checkForUpdate({stateDirectory: paths.stateDirectory, pkg});
     if (info) await offerUpdate(info);
