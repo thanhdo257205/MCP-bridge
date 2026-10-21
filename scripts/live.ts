@@ -13,7 +13,7 @@ const workspace = path.join(results,`live-${Date.now()}`);
 await mkdir(workspace,{recursive:true});
 await writeFile(path.join(workspace,'sentinel.txt'),'UNCHANGED');
 const configPath = path.join(workspace,'..',`config-${Date.now()}.json`);
-await writeFile(configPath,JSON.stringify({allowed_workspaces:[workspace],executable:'C:/Users/dotha/AppData/Local/agy/bin/agy.exe'}));
+await writeFile(configPath,JSON.stringify({allowed_workspaces:[workspace],executable:'agy'}));
 let client = new Client({name:'bridge-live-verifier',version:'0.1.0'});
 const token = randomBytes(32).toString('base64url');
 // IPC is test-harness control only: exercise the same SIGINT shutdown handler on Windows.

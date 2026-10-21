@@ -1,6 +1,6 @@
 {
   "allowed_workspaces": ["C:/absolute/path/to/approved-project"],
-  "executable": "C:/Users/dotha/AppData/Local/agy/bin/agy.exe",
+  "executable": "agy",
   "max_timeout_seconds": 900,
   "default_timeout_seconds": 300,
   "max_output_bytes": 262144,

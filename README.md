@@ -6,16 +6,22 @@ Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTT
 
 ## 1. Cài đặt và khởi động
 
-Yêu cầu Node.js ≥20, npm và Antigravity CLI **1.4.3**. Bản CLI khác bị từ chối đến khi được khảo sát lại. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency.
+Yêu cầu Git, Node.js ≥20, npm và Antigravity CLI **1.4.3** đã đăng nhập, có lệnh `agy` trong PATH. Bản CLI khác bị từ chối đến khi được khảo sát lại. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency. Các lệnh bên dưới dùng PowerShell trên Windows.
 
-Trong PowerShell:
+Mở PowerShell tại thư mục bạn muốn lưu source, rồi clone và chạy:
 
 ```powershell
-Set-Location 'C:\Users\dotha\Documents\Fsoft-Working\MCP-bridge'
+git clone https://github.com/thanhdo257205/MCP-bridge.git
+Set-Location .\MCP-bridge
+agy --version
 npm install
 npm run build
 npm start
 ```
+
+Nếu đã clone, mở terminal tại thư mục gốc của bản clone (nơi có `package.json`) và bỏ qua hai lệnh clone/chuyển thư mục. Các đường dẫn tương đối trong hướng dẫn được tính từ thư mục này; bạn có thể lưu repo ở bất kỳ vị trí nào.
+
+Mặc định bridge tìm `agy` trong PATH, không phụ thuộc tên tài khoản Windows hay thư mục cài đặt của tác giả. Nếu không tìm thấy, kiểm tra `Get-Command agy`; thêm thư mục cài CLI vào PATH rồi mở terminal mới, hoặc đặt `executable` trong `config/workspaces.json` thành đường dẫn tuyệt đối tới `agy.exe` trên máy của bạn.
 
 `npm ci` có thể thay `npm install` để cài đúng lockfile. Chế độ phát triển:
 
@@ -50,10 +56,9 @@ Mọi request tới `/mcp` và `/health` phải có `Authorization: Bearer <toke
 
 Nếu chưa đặt `BRIDGE_HTTP_TOKEN`, lần khởi động đầu tự tạo token ngẫu nhiên 256 bit tại `.bridge-state/http-token`, rồi tái sử dụng qua các lần chạy. Server chỉ in **đường dẫn nguồn token**, không in giá trị. Thư mục này được gitignore. Token file dùng mode 0600 trên POSIX; trên Windows phải bảo vệ bằng ACL thư mục tài khoản của bạn, vì mode POSIX không thay thế Windows ACL. Bất cứ ai đọc được token đều có quyền dùng các tool, xem và hủy task của server.
 
-Trong **terminal thứ hai**, đọc token vào môi trường mà không in nó:
+Mở **terminal thứ hai tại thư mục gốc của cùng bản clone** (nơi có `package.json`), rồi đọc token vào môi trường mà không in nó:
 
 ```powershell
-Set-Location 'C:\Users\dotha\Documents\Fsoft-Working\MCP-bridge'
 $env:BRIDGE_HTTP_TOKEN = (Get-Content -Raw '.bridge-state/http-token').Trim()
 $headers = @{ Authorization = "Bearer $env:BRIDGE_HTTP_TOKEN" }
 Invoke-RestMethod 'http://127.0.0.1:3000/health' -Headers $headers
@@ -85,7 +90,7 @@ tool_timeout_sec = 60
 enabled = true
 ```
 
-File đích của máy này là `C:\Users\dotha\.codex-account-b\config.toml` do `CODEX_HOME`. Trên máy khác mặc định là `~/.codex/config.toml`. Nếu đã có mục antigravity kiểu command/args, thay mục đó bằng HTTP sau khi được duyệt, không tạo mục trùng. Không còn command/args nên Codex không spawn bridge.
+File cấu hình Codex mặc định là `~/.codex/config.toml` (trên Windows: `$env:USERPROFILE\.codex\config.toml`). Nếu bạn đã đặt biến môi trường `CODEX_HOME`, dùng file `config.toml` trong thư mục đó. Nếu đã có mục antigravity kiểu command/args, thay mục đó bằng HTTP sau khi được duyệt, không tạo mục trùng. Không còn command/args nên Codex không spawn bridge.
 
 Sau khi được duyệt có thể dùng CLI thay cho merge TOML (CLI dùng timeout mặc định, thêm timeout bằng TOML nếu cần):
 
@@ -135,7 +140,7 @@ Trong Claude Code dùng `/mcp` để xem trạng thái, reconnect hoặc disable
 
 Gỡ sau khi duyệt: `claude mcp remove antigravity --scope local`. Đổi cổng: cập nhật URL trong cùng entry, hoặc remove rồi add lại URL mới với cùng header env, sau đó reconnect. Không cần dừng server vì client ngắt kết nối.
 
-Tham khảo [tài liệu MCP chính thức của Claude Code](https://code.claude.com/docs/en/mcp). Đã đối chiếu CLI cài tại máy: Claude Code 2.1.296; Codex CLI 0.163.0. Chưa thay cấu hình hoặc xác nhận hai ứng dụng thật đã tải tool; kiểm thử protocol dùng SDK client được ghi riêng bên dưới.
+Tham khảo [tài liệu MCP chính thức của Claude Code](https://code.claude.com/docs/en/mcp). Các phiên bản CLI và kết quả đã kiểm chứng được ghi trong [báo cáo khảo sát](docs/VERIFICATION.md). Sau khi cấu hình trên máy của bạn, hãy gọi tool thật từ từng client để kiểm tra kết nối; kiểm thử protocol bằng SDK không thay thế bước này.
 
 ## 5. Cho phép workspace và giao task
 
