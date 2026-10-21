@@ -50,7 +50,7 @@ async function overview(ctx: UiContext) {
   const state = delegationState(ctx.manager.stateDirectory);
   return {
     server: {
-      version: '0.1.0', started_at: new Date(ctx.startedAt).toISOString(), uptime_seconds: Math.round((Date.now() - ctx.startedAt) / 1000),
+      version: readPackageInfo().version, started_at: new Date(ctx.startedAt).toISOString(), uptime_seconds: Math.round((Date.now() - ctx.startedAt) / 1000),
       mcp_endpoint: ctx.mcpUrl(), accepting_tasks: ctx.manager.overview().accepting_tasks
     },
     cli: {

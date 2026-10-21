@@ -4,6 +4,7 @@ import * as z from 'zod/v4';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
+import {readPackageInfo} from '../update.js';
 
 /** Best-effort label for who delegated: the client's declared name/version when the request carries it, else the HTTP User-Agent. */
 function clientLabel(envelope: unknown): string | null {
@@ -15,7 +16,7 @@ function clientLabel(envelope: unknown): string | null {
 }
 
 export function createServer(manager: TaskManager, environment: Record<string, unknown>): McpServer {
-  const server = new McpServer({name: 'antigravity-mcp-bridge', version: '0.1.0'});
+  const server = new McpServer({name: 'antigravity-mcp-bridge', version: readPackageInfo().version});
   const response = <T extends object>(value: T) => ({content: [{type: 'text' as const, text: JSON.stringify(value)}], structuredContent: value as Record<string, unknown>});
   const guard = async <T extends object>(action: () => Promise<T> | T) => {
     try { return response(await action()); }

@@ -146,7 +146,7 @@ export class TaskManager {
       task.started_at = new Date().toISOString();
       await this.persist(task);
       checkStarting();
-      const invocation=invocationFor(promptFor({...input,workspace}),timeout,this.config.prompt_transport);
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport);
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
@@ -294,7 +294,7 @@ export class TaskManager {
     const prompt = request ? promptFor({
       task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
       ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
-    }) : null;
+    },request.client) : null;
     return {task, request, prompt};
   }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
