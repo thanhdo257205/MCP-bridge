@@ -203,3 +203,7 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
   .login-card { padding: 24px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.select { max-width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font: inherit; color: inherit; }
+.select:focus { border-color: var(--accent); }
+.select:disabled { opacity: .55; cursor: not-allowed; }

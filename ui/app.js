@@ -135,6 +135,15 @@ async function setDelegation(enabled) {
   try { await api('delegation', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật giao việc cho Antigravity' : 'Đã tắt giao việc cho Antigravity'); await refresh(); }
   catch (error) { notify(error.message); }
 }
+async function loadModels() {
+  state.modelsLoading = true;
+  try { state.models = await api('models'); } catch (error) { state.models = {models: [], current: null, error: error.message}; }
+  state.modelsLoading = false; patch();
+}
+async function setModel(model) {
+  try { await api('model', {method: 'POST', body: {model}}); notify(model ? 'Đã đổi model cho các task mới' : 'Đã về model mặc định của Antigravity'); state.models = null; await refresh(); }
+  catch (error) { notify(error.message); await refresh(); }
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -248,7 +257,7 @@ function detailView() {
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
-      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
+      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
       ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
   const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
@@ -301,6 +310,20 @@ function patchLogs() {
 }
 
 function row(label, value) { return h('div', {}, h('dt', {text: label}), h('dd', {text: String(value)})); }
+function modelCard(o) {
+  const loaded = state.models;
+  const known = (loaded?.models || []).some(m => m.id === o.model);
+  const select = h('select', {class: 'select', 'aria-label': 'Model cho task mới', disabled: !loaded || Boolean(loaded.error), onchange: event => setModel(event.target.value || null)},
+    h('option', {value: '', text: 'Mặc định của Antigravity'}),
+    ...(loaded?.models || []).map(m => h('option', {value: m.id, text: `${m.label} (${m.id})`})),
+    o.model && !known ? h('option', {value: o.model, text: `${o.model} (không còn trong danh sách)`}) : null);
+  select.value = o.model || '';
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Model'}),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: o.model || 'Mặc định của Antigravity'}),
+      h('span', {class: 'muted', text: o.model ? 'Bridge truyền --model này cho mọi task mới.' : 'Bridge không truyền --model; Antigravity tự dùng model đã cấu hình.'})), select),
+    loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
+    h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
+}
 function settingsView(o) {
   const delegation = o.delegation;
   return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Trạng thái và giới hạn của bridge. Phần lớn chỉ đọc; chỉnh bằng file cấu hình rồi khởi động lại.'}))),
@@ -311,6 +334,7 @@ function settingsView(o) {
           switchControl(delegation.enabled, delegation.controllable, 'Cho phép giao việc cho Antigravity')),
         delegation.controllable ? h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy hoặc đang chờ không bị dừng, nhưng task đang chờ sẽ bị hủy khi đến lượt. Có hiệu lực ngay, không cần khởi động lại.'})
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
+      modelCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
         h('dl', {class: 'rows'}, row('Giao thức', 'MCP Streamable HTTP'), row('Xác thực', 'Bearer token dùng chung'), row('Phiên bản bridge', o.server.version),
@@ -388,7 +412,8 @@ function patch() {
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
   } else {
-    setRegion('settings', JSON.stringify([o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    if (!state.models && !state.modelsLoading) loadModels();
+    setRegion('settings', JSON.stringify([state.models, o.model, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }
