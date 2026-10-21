@@ -12,20 +12,40 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
+const packageInfo = new Map<string, PackageInfo>();
+/** The manifest never changes while the process runs, and this is called per MCP request and per UI poll, so read it once. */
 export function readPackageInfo(root = paths.packageRoot): PackageInfo {
+  const cached = packageInfo.get(root);
+  if (cached) return cached;
   const parsed = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as Partial<PackageInfo>;
-  return {name: String(parsed.name), version: String(parsed.version)};
+  const info = {name: String(parsed.name), version: String(parsed.version)};
+  packageInfo.set(root, info);
+  return info;
 }
 
 /** Numeric semver compare; a prerelease sorts before the same release. Returns <0, 0 or >0. */
 export function compareVersions(a: string, b: string): number {
-  const split = (value: string) => { const [core, pre] = value.split('-', 2); return {nums: core.split('.').map(Number), pre}; };
+  const split = (value: string) => {
+    const withoutBuild=value.split('+')[0],dash=withoutBuild.indexOf('-');
+    const core=dash<0?withoutBuild:withoutBuild.slice(0,dash);
+    return {nums:core.split('.').map(BigInt),pre:dash<0?undefined:withoutBuild.slice(dash+1)};
+  };
   const x = split(a); const y = split(b);
-  for (let i = 0; i < 3; i++) if (x.nums[i] !== y.nums[i]) return x.nums[i] - y.nums[i];
+  for (let i = 0; i < 3; i++) if (x.nums[i] !== y.nums[i]) return x.nums[i]<y.nums[i]?-1:1;
   if (x.pre === y.pre) return 0;
   if (x.pre === undefined) return 1;
   if (y.pre === undefined) return -1;
-  return x.pre < y.pre ? -1 : 1;
+  const left=x.pre.split('.'),right=y.pre.split('.');
+  for(let i=0;i<Math.max(left.length,right.length);i++){
+    if(left[i]===undefined)return -1;
+    if(right[i]===undefined)return 1;
+    if(left[i]===right[i])continue;
+    const aNumeric=/^\d+$/.test(left[i]),bNumeric=/^\d+$/.test(right[i]);
+    if(aNumeric&&bNumeric){const aValue=BigInt(left[i]),bValue=BigInt(right[i]);if(aValue===bValue)continue;return aValue<bValue?-1:1;}
+    if(aNumeric!==bNumeric)return aNumeric?-1:1;
+    return left[i]<right[i]?-1:1;
+  }
+  return 0;
 }
 
 /** Off in CI and whenever the owner opts out (the opt-out always wins). Otherwise on for an npm install and off for a git checkout (use git pull); BRIDGE_UPDATE_CHECK=force turns it on for a checkout, for tests and development. */

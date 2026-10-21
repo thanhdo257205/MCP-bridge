@@ -36,14 +36,14 @@ async function main() {
   }
   let stopping = false;
   const shutdown = async () => {
-    if (stopping) return;
+    if (stopping) { console.error('[bridge] cleanup in progress, please wait'); return; }
     stopping = true;
     console.error('[bridge] Shutting down; no new tasks accepted');
     try { await bridge.close(); console.error('[bridge] Stopped'); }
     catch { console.error('[bridge] Cleanup failed; inspect owned processes and execution lock'); process.exitCode = 1; }
   };
-  process.once('SIGINT', () => void shutdown());
-  process.once('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
   bridge.server.on('error', () => { console.error('[bridge] Fatal HTTP listener error'); process.exitCode = 1; void shutdown(); });
 }
 main().catch(error => {

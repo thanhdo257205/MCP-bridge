@@ -8,7 +8,9 @@ import { delegateSchema, promptFor, type DelegateInput } from '../security/input
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
-import { startProcess, terminateOwned } from '../antigravity/process.js';
+import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
+import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
+import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
@@ -33,12 +35,7 @@ interface Entry {
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
-  launch?: (args: string[], cwd: string) => ChildProcess;
-}
-
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+  launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
 }
 
 export class TaskManager {
@@ -106,7 +103,7 @@ export class TaskManager {
 
     if (!this.runtime.supported) {
       task.ended_at = new Date().toISOString();
-      task.error = 'Only locally verified agy 1.4.3 print/json execution is enabled';
+      task.error = 'Requires agy 1.4.x and all required print/output/timeout flags';
       return this.get(task.task_id);
     }
     if (queued) return this.get(task.task_id);
@@ -129,11 +126,29 @@ export class TaskManager {
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
       if (this.closing) throw new Error('Bridge is shutting down');
+      if (task.queued_at) {
+        try { await validateWorkspace(workspace, this.config.allowed_workspaces); }
+        catch (error) { throw new Error(`Queued workspace validation failed before execution: ${error instanceof Error ? error.message : 'invalid workspace'}`); }
+      }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       try { await mkdir(lock); ownsLock = true; }
-      catch { throw new Error(await this.describeLock(lock)); }
-      const args = ['--print', promptFor({...input, workspace}), '--output-format', 'json', '--print-timeout', `${timeout}s`, '--disable-slash-commands'];
-      const child = this.runtime.launch ? this.runtime.launch(args, workspace) : startProcess(this.runtime.executable, args, workspace);
+      catch {
+        const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
+        if(!recovery.reclaimed)throw new Error(await this.describeLock(lock));
+        await mkdir(lock);ownsLock=true;
+      }
+      const checkStarting = () => {
+        if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
+      };
+      checkStarting();
+      // Persist the transition before spawning: after a crash we must not claim queued work never ran.
+      task.status = 'running';
+      task.started_at = new Date().toISOString();
+      await this.persist(task);
+      checkStarting();
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport);
+      const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
+      const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
       entry.pending = undefined;
       task.status = 'running';
@@ -141,7 +156,19 @@ export class TaskManager {
       task.pid = child.pid ?? null;
       task.process_running = Boolean(child.pid);
       const started = Date.now();
-      const buffers = {stdout: Buffer.alloc(0), stderr: Buffer.alloc(0)};
+      const buffers = {stdout: [] as Buffer[], stderr: [] as Buffer[]};
+      const lengths={stdout:0,stderr:0};
+      const dirty={stdout:false,stderr:false};
+      const refreshed={stdout:0,stderr:0};
+      const flushOutput=(force=false)=>{
+        const now=Date.now();
+        for(const stream of ['stdout','stderr'] as const){
+          if(dirty[stream]&&(force||now-refreshed[stream]>=1000)){
+            task[stream]=redact(Buffer.concat(buffers[stream],lengths[stream]).toString('utf8'));
+            dirty[stream]=false;refreshed[stream]=now;
+          }
+        }
+      };
       let finalized = false;
       const requestStop = (reason: Status) => {
         if (!entry.stop) entry.stop = reason;
@@ -149,18 +176,22 @@ export class TaskManager {
       };
       const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
         task[`${stream}_bytes`] += chunk.length;
-        const available = this.config.max_output_bytes - buffers[stream].length;
-        if (available > 0) buffers[stream] = Buffer.concat([buffers[stream], chunk.subarray(0, available)]);
+        const available = this.config.max_output_bytes - lengths[stream];
+        if (available > 0) {
+          const retained=Buffer.from(chunk.subarray(0,available));
+          buffers[stream].push(retained);lengths[stream]+=retained.length;dirty[stream]=true;
+        }
         if (chunk.length > available) {
           task[`${stream}_truncated`] = true;
           task.error = 'Output limit exceeded; incomplete output cannot establish success';
           requestStop('failed');
         }
-        task[stream] = redact(buffers[stream].toString('utf8'));
+        flushOutput();
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
-      const timer = setTimeout(() => requestStop('timeout'), timeout * 1000);
+      const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
+      const outputTimer=setInterval(()=>flushOutput(),1000);
       child.once('error', () => { task.error = 'Could not start Antigravity process'; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
       void writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, child_pid: child.pid ?? null, task_id: task.task_id, started_at: task.started_at})).catch(() => {});
@@ -168,28 +199,38 @@ export class TaskManager {
         if (finalized) return;
         finalized = true;
         clearTimeout(timer);
+        clearInterval(outputTimer);
+        flushOutput(true);
+        const rawStdout=Buffer.concat(buffers.stdout,lengths.stdout).toString('utf8');
+        const rawStderr=Buffer.concat(buffers.stderr,lengths.stderr).toString('utf8');
+        // A POSIX child can exit while its group is still being given its graceful shutdown window.
+        if (entry.stop) await terminateOwned(child).catch(() => { task.error = 'Owned process group cleanup failed'; });
         task.exit_code = code; task.signal = signal; task.process_running = false;
         task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
         task.status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
-            const result = JSON.parse(buffers.stdout.toString('utf8'));
+            const result = finalEnvelope(rawStdout,this.config.prompt_transport);
             task.cli_status = typeof result.status === 'string' ? result.status : null;
             task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
             if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
               const value = item as Record<string, unknown> | null;
               return {action: redact(String(value?.action ?? 'unknown')).slice(0,200), display_name: redact(String(value?.display_name ?? '')).slice(0,200)};
             });
-            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(buffers.stderr.toString('utf8'))) {
+            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(rawStderr)) {
               task.status = 'timeout'; task.error = 'CLI reported a print timeout (possibly with exit code 0)';
-            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(buffers.stderr.toString('utf8'))) {
+            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(rawStderr)) {
               task.error = 'Required tool permissions were denied; approve a scoped rule interactively before retrying';
             } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
               task.status = 'completed';
             } else {
               task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
             }
-          } catch { task.error ??= 'CLI output is not a valid final JSON envelope'; }
+          } catch {
+            task.error ??= this.config.prompt_transport === 'stdin'
+              ? 'CLI output is not a valid stream-json final result. If this happens with a real agy, set "prompt_transport": "argv" in the bridge config (the previously verified mode) and restart'
+              : 'CLI output is not a valid final JSON envelope';
+          }
         }
         if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
         if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
@@ -221,7 +262,7 @@ export class TaskManager {
       try { await this.launch(entry); }
       catch (error) {
         this.busy = false;
-        await this.endWithoutRunning(entry, 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
+        await this.endWithoutRunning(entry, this.closing || entry.stop === 'canceled' ? 'canceled' : 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
       }
     }
   }
@@ -257,7 +298,7 @@ export class TaskManager {
     const prompt = request ? promptFor({
       task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
       ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
-    }) : null;
+    },request.client) : null;
     return {task, request, prompt};
   }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
@@ -278,7 +319,8 @@ export class TaskManager {
   async cancel(id: string): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
-    if (entry.task.status === 'queued') {
+    if (entry.task.status === 'queued' || (entry.pending && !entry.child)) {
+      entry.stop = 'canceled';
       this.queue = this.queue.filter(queuedId => queuedId !== id);
       await this.endWithoutRunning(entry, 'canceled', 'Canceled before it started; no files were touched');
       return this.get(id);

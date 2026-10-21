@@ -17,7 +17,7 @@ const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs', impor
 async function setup(scenario = 'ok', overrides: Partial<Config> = {}) {
   const root = await mkdtemp(path.join(tmpdir(),'agy-bridge-test-'));
   const workspace = path.join(root,'work'); await mkdir(workspace);
-  const config: Config = {allowed_workspaces:[workspace], executable:process.execPath,max_timeout_seconds:5,default_timeout_seconds:3,max_output_bytes:1024,max_retained_tasks:3,max_queued_tasks:0,...overrides};
+  const config: Config = {allowed_workspaces:[workspace], executable:process.execPath,max_timeout_seconds:5,default_timeout_seconds:3,max_output_bytes:1024,max_retained_tasks:3,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv',...overrides};
   const manager = new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
   const input = {task:'Implement safe task',workspace,acceptance_criteria:['Verified']};
   return {root,workspace,config,manager,input};

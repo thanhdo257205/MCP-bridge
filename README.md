@@ -7,7 +7,7 @@ Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTT
 ## Cài từ npm (người dùng)
 
 ```bash
-npm install -g agy-mcp-bridge        # cần Node.js >= 20 và Antigravity CLI `agy` 1.4.3 đã đăng nhập
+npm install -g agy-mcp-bridge        # cần Node.js >= 20 và Antigravity CLI `agy` 1.4.x đã đăng nhập
 agy-mcp-bridge workspaces add /duong/dan/toi/project   # cấp quyền cho một thư mục (khởi động lại server sau khi đổi)
 agy-mcp-bridge                       # mở server http://127.0.0.1:3000 ; giao diện web ở /ui
 ```
@@ -32,7 +32,7 @@ Mỗi lần đăng phải tăng version, nếu không người dùng không nh�
 
 ## Quickstart
 
-Requires Git, Node.js ≥20 and a logged-in Antigravity CLI `agy` 1.4.3 on PATH. Works on Windows, Linux and macOS; the longer sections below use PowerShell, the equivalents are:
+Requires Git, Node.js ≥20 and a logged-in Antigravity CLI `agy` 1.4.x on PATH (real agent execution was verified on 1.4.3). The longer sections below use PowerShell; the POSIX equivalents are:
 
 ```bash
 git clone https://github.com/thanhdo257205/MCP-bridge.git && cd MCP-bridge
@@ -46,7 +46,7 @@ Then allow a workspace in `config/workspaces.json` (created empty on first run, 
 
 ## 1. Cài đặt và khởi động
 
-Yêu cầu Git, Node.js ≥20, npm và Antigravity CLI **1.4.3** đã đăng nhập, có lệnh `agy` trong PATH. Bản CLI khác bị từ chối đến khi được khảo sát lại. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency. Các lệnh bên dưới dùng PowerShell trên Windows.
+Yêu cầu Git, Node.js ≥20, npm và Antigravity CLI **1.4.x** đã đăng nhập, có lệnh `agy` trong PATH và đủ cờ bắt buộc trong help. Patch khác 1.4.3 vẫn chạy nhưng có cảnh báo trong log và environment vì chưa được xác minh thực thi agent thật; major/minor khác bị từ chối. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency. Các lệnh bên dưới dùng PowerShell trên Windows. Xem [thay đổi hardening và giới hạn kiểm chứng](docs/HARDENING.md).
 
 Mở PowerShell tại thư mục bạn muốn lưu source, rồi clone và chạy:
 
@@ -102,7 +102,7 @@ Muốn hệ điều hành chọn một cổng đang trống, đặt `PORT='0'`. 
 
 Mọi request tới `/mcp` và `/health` phải có `Authorization: Bearer <token>`. Đây là token dùng chung cho một người dùng cục bộ, không phải OAuth. Không cần `codex mcp login` hay `claude mcp login` cho bridge này.
 
-Nếu chưa đặt `BRIDGE_HTTP_TOKEN`, lần khởi động đầu tự tạo token ngẫu nhiên 256 bit tại `.bridge-state/http-token`, rồi tái sử dụng qua các lần chạy. Server chỉ in **đường dẫn nguồn token**, không in giá trị. Thư mục này được gitignore. Token file dùng mode 0600 trên POSIX; trên Windows phải bảo vệ bằng ACL thư mục tài khoản của bạn, vì mode POSIX không thay thế Windows ACL. Bất cứ ai đọc được token đều có quyền dùng các tool, xem và hủy task của server.
+Nếu chưa đặt `BRIDGE_HTTP_TOKEN`, lần khởi động đầu tự tạo token ngẫu nhiên 256 bit tại `.bridge-state/http-token`, rồi tái sử dụng qua các lần chạy. Server chỉ in **đường dẫn nguồn token**, không in giá trị. Thư mục này được gitignore. Token file mới dùng mode 0600 trên POSIX; Windows dùng `whoami /user` và `icacls` không qua shell để bỏ kế thừa ACL và cấp đọc/ghi cho SID tài khoản hiện tại. Nếu ACL lỗi, server cảnh báo và vẫn chạy: chủ máy cần bảo vệ file thủ công. File có sẵn không bị tự đổi ACL. Bất cứ ai đọc được token đều có quyền dùng các tool, xem và hủy task của server.
 
 Mở **terminal thứ hai tại thư mục gốc của cùng bản clone** (nơi có `package.json`), rồi đọc token vào môi trường mà không in nó:
 
@@ -123,7 +123,7 @@ npm run check
 Invoke-RestMethod 'http://127.0.0.1:3001/health' -Headers $headers
 ```
 
-`BRIDGE_MCP_URL` dành cho script check; URL của Codex và Claude Code phải cập nhật riêng. Nếu chủ động cấp token bằng env trước `npm start`, dùng token đó ở các client; token env phải dài 32–256 ký tự thuộc A–Z, a–z, 0–9, `_`, `-`. Env ưu tiên hơn file. Không commit token hoặc dán vào prompt. Bridge không chuyển biến `BRIDGE_HTTP_TOKEN` cho child `agy` và lọc giá trị token khỏi output trả về.
+`BRIDGE_MCP_URL` dành cho script check; URL của Codex và Claude Code phải cập nhật riêng. Nếu chủ động cấp token bằng env trước `npm start`, dùng token đó ở các client; token env phải dài 32–256 ký tự thuộc A–Z, a–z, 0–9, `_`, `-`. Env ưu tiên hơn file. Không commit token hoặc dán vào prompt. Child `agy` chỉ nhận allowlist môi trường; secret, gồm `BRIDGE_HTTP_TOKEN`, bị chặn mặc định. Chỉ dùng `extra_env_passthrough` cho biến thực sự cần và không liệt kê bearer token của bridge. Xem danh sách và ví dụ trong [HARDENING.md](docs/HARDENING.md).
 
 ## 3. Kết nối Codex
 
@@ -151,7 +151,7 @@ codex mcp list
 codex
 ```
 
-Khởi chạy Codex từ terminal đã nạp token. Với IDE/app đang mở, phải nạp env vào môi trường của app và khởi động lại app; đặt env ở terminal khác không cập nhật tiến trình đã chạy. Trong phiên mới, yêu cầu gọi `antigravity_environment`; phiên bản CLI phải là 1.4.3. `codex mcp list/get` xác nhận cấu hình, không thay thế một tool call thật.
+Khởi chạy Codex từ terminal đã nạp token. Với IDE/app đang mở, phải nạp env vào môi trường của app và khởi động lại app; đặt env ở terminal khác không cập nhật tiến trình đã chạy. Trong phiên mới, yêu cầu gọi `antigravity_environment`; kiểm tra phiên bản thuộc 1.4.x, đủ cờ và các cảnh báo patch. `codex mcp list/get` xác nhận cấu hình, không thay thế một tool call thật.
 
 Ngắt kết nối: thoát phiên Codex; server và task vẫn chạy. Muốn bỏ cấu hình, sau khi duyệt chạy `codex mcp remove antigravity`, rồi mở phiên mới. Hoặc đặt `enabled=false` trong block và mở lại phiên. Server chỉ dừng khi bạn Ctrl+C tại terminal server.
 
@@ -253,15 +253,15 @@ Nhấn **Ctrl+C một lần** tại terminal server:
 3. Đóng MCP handler, cho kết nối đang có tối đa 3 giây để drain sau khi cleanup; sau đó đóng cưỡng bức socket còn lại.
 4. In `[bridge] Stopped` khi thành công. Không rollback file đã sửa. Xem diff trước lần chạy tiếp theo.
 
-Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Khi gặp lỗi lock, thông báo cho biết PID server chủ lock còn chạy hay không; nếu PID đã chết, lock có thể cũ — xác nhận không còn tiến trình `agy` rồi tự xóa thư mục lock được nêu trong thông báo. Bridge không tự xóa lock hoặc kill process Antigravity khác. Force kill server/đóng terminal/OS crash không bảo đảm cleanup: chưa có Windows Job Object. Sau crash, kiểm tra process và `.bridge-state/owner.json` trước khi xử lý lock; PID cũ có thể đã tái sử dụng. Khi khởi động, server in cảnh báo (và giao diện web hiện banner) nếu còn lock của bridge khác: nêu PID server cũ, và nếu `owner.json` ghi PID `agy` mà PID đó vẫn đang chạy thì báo là có thể tiến trình mồ côi vẫn đang sửa workspace. Bridge chỉ cảnh báo, không bao giờ tự kill hay tự xóa lock; bảo đảm dọn dẹp thật khi crash trên Windows vẫn cần Job Object hoặc môi trường cách ly (Node không tạo được Job Object nếu không có module native).
+Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Khi khởi động hoặc lấy lock, bridge chỉ tự thu hồi nếu đọc được owner hợp lệ, cả `server_pid` lẫn `child_pid` đều đã chết và record khớp lock. Lệnh `agy-mcp-bridge unlock` dùng cùng kiểm tra; PID còn sống, thiếu thông tin hoặc quyền sở hữu không rõ thì giữ lock và in lý do. Bridge không kill process Antigravity khác. PID có thể được tái sử dụng nên trường hợp không rõ cần kiểm tra thủ công. Force kill/OS crash vẫn không bảo đảm cleanup: chưa có Windows Job Object. POSIX gửi SIGTERM cho nhóm process, chờ tối đa 8 giây rồi SIGKILL; Windows giữ taskkill cây PID. Ctrl+C tiếp trong lúc cleanup chỉ báo `cleanup in progress, please wait`.
 
-Giới hạn mặc định: task 300s, tối đa 900s; output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON tối đa 24000 ký tự cho command line Windows; HTTP body tối đa 128 KiB. Status không cung cấp phần trăm tiến độ; JSON cuối thường chỉ tới khi agy kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
+Giới hạn mặc định: CLI task 300s, tối đa 900s; watchdog của bridge cộng thêm 10s để CLI tự báo timeout trước. Output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON vẫn tối đa 24000 ký tự; HTTP body tối đa 128 KiB. Prompt mặc định đi qua argv với print/json (`prompt_transport: "argv"`, đường đã chạy thật với `agy` 1.4.3). Đặt `prompt_transport: "stdin"` để gửi qua stdin stream-json, không lộ prompt trong danh sách tiến trình; chế độ này chưa được chạy thử với `agy` thật, và stream gồm cả init/progress nên có thể chạm output cap sớm hơn. Snapshot log được cập nhật tối đa mỗi giây và flush khi kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
 
 ## 7. Bảo mật và vận hành
 
 Chỉ listen `127.0.0.1`, không có tùy chọn bind LAN trong bản này. Host phải đúng địa chỉ/cổng thực tế; Origin khác bị từ chối; không bật CORS cho website ngoài. Mọi endpoint yêu cầu bearer token, so sánh constant time khi cùng độ dài. Không log HTTP headers/body hoặc token. Không mở HTTP không xác thực.
 
-Allowlist kiểm tra realpath, boundary, traversal và symlink/junction trong cây (trần 200000 entries). **Đây không phải OS sandbox**: không ngăn tiến trình khác thay link sau preflight, không kiểm soát đầy đủ hành động agent từ settings/hooks/MCP hiện có. Token file và credentials ngoài workspace vẫn cần quyền OS phù hợp. Lọc output nhận diện secret đã biết và mẫu phổ biến, không nhận ra mọi bí mật. Không đưa secret vào task.
+Allowlist kiểm tra realpath, boundary, traversal; link/junction trong thành phần đường dẫn đầu vào vẫn bị từ chối. Trong cây, link phải resolve được vào cùng workspace; không theo alias/cycle. Quét bỏ qua nội dung thư mục `node_modules` và `.git`; trần 200000 chỉ tính các entry còn lại. Task từ queue được kiểm tra lại trước launch. **Đây không phải OS sandbox**: đặc biệt nội dung hai thư mục được bỏ qua không được kiểm tra, và tiến trình khác vẫn có thể đổi link sau preflight. Quyền agent/hooks/MCP và file ngoài workspace vẫn cần kiểm soát OS/CLI phù hợp. Lọc output không nhận ra mọi bí mật; không đưa secret vào task.
 
 Để truy cập từ máy khác, cần thiết kế riêng TLS, xác thực/authorization và cách ly workspace. Bản này không triển khai remote/LAN; không đổi bind sang 0.0.0.0 hoặc mở firewall để né lỗi cổng.
 
@@ -352,7 +352,7 @@ Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển th�
 
 ## 11. Ghi chú thiết kế và việc chưa làm
 
-- **Tiến độ thật của task:** `agy` có `--output-format stream-json` (init, step_update, result) nhưng tên trường chính xác chưa được xác minh với bản 1.4.3 và bridge vẫn chạy bằng `json` đã kiểm chứng. Chạy `npm run probe:stream` trên máy có `agy` (một lần gọi AI rất nhỏ, ghi `test-results/stream-probe.ndjson`) để lấy định dạng thật; sau đó mới làm hiển thị từng bước.
+- **Tiến độ thật của task:** stdin stream-json hiện đã được xác minh ở đường kiểm tra lỗi không gọi AI, và parser lấy terminal `result` theo tài liệu chính thức. Luồng thành công đang được test bằng mock; chưa thực thi AI thật trong đợt hardening. UI hiện hiển thị log snapshot, chưa diễn giải từng `step_update` thành phần trăm tiến độ.
 - **`outputSchema` cho tool MCP:** đã thử và bỏ. Schema đầy đủ làm danh sách tool tăng từ khoảng 3,9 KB lên 12,1 KB; nếu client đưa vào ngữ cảnh của agent thì tốn thêm token ở mỗi lượt, trái với mục tiêu giữ chi phí thấp.
 - **Đánh giá hành vi của skill:** xem [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md): bộ tình huống và tiêu chí chấm để chạy thủ công với Codex/Claude Code; chưa được chạy tự động.
 - **Dọn tiến trình khi crash trên Windows:** xem mục 6; mới có cảnh báo, chưa có bảo đảm.
