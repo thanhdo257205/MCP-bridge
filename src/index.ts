@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { paths } from './paths.js';
+import { openBrowser } from './open.js';
 import { checkForUpdate, knownUpdate, readPackageInfo, setKnownUpdate, updateCheckEnabled } from './update.js';
 import { createRuntime } from './runtime.js';
 import { configuredPort, startHttpBridge } from './http.js';
@@ -16,6 +17,10 @@ async function main() {
   console.error(`[bridge] Token source: ${source} (value never logged)`);
   console.error(`[bridge] Web UI: ${bridge.baseUrl}/ui  (open in a browser on this machine; sign in with the token from the source above)`);
   console.error('[bridge] Client disconnected: tasks continue. Ctrl+C: cancel owned tasks and stop server.');
+  if (process.env.BRIDGE_OPEN_BROWSER === '1') {
+    const url = `${bridge.baseUrl}/ui`;
+    void openBrowser(url).then(opened => console.error(opened ? '[bridge] Opening the web UI in your default browser' : `[bridge] Could not open a browser automatically; open ${url} yourself`));
+  }
   if (updateCheckEnabled(paths.mode)) {
     // Never blocks startup and never changes anything: it only lets the log and the web UI say that a newer version exists.
     const pkg = readPackageInfo();

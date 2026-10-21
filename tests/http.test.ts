@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer as createNetServer } from 'node:net';
 import { request } from 'node:http';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -21,8 +21,9 @@ async function setup(scenario='hang', port=0) {
   const root=await mkdtemp(path.join(tmpdir(),'agy-http-'));const workspace=path.join(root,'work');await mkdir(workspace);
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock'},token,port});
-  return {root,workspace,manager,bridge};
+  const environment:Record<string,unknown>={cli_version:'mock',allowed_workspaces:[workspace]};
+  const bridge=await startHttpBridge({manager,environment,token,port});
+  return {root,workspace,manager,bridge,environment};
 }
 async function connect(url:string, credential=token, mode:'auto'|'legacy'='auto') {
   const client=new Client({name:'http-test',version:'1'}, {versionNegotiation:{mode}});
@@ -206,4 +207,28 @@ test('client identity: modern clients are named by clientInfo, legacy ones fall 
       } finally {await client.close();}
     }
   } finally {await bridge.close();}
+});
+
+const hasGit = spawnSync('git', ['--version']).status === 0;
+const gitIn = (cwd:string,...args:string[]) => execFileSync('git',['-c','user.name=t','-c','user.email=t@example.com','-c','commit.gpgsign=false',...args],{cwd,stdio:'ignore'});
+test('web UI: workspace changes endpoint is session-protected, read-only, and honors the allowlist', {skip: hasGit ? false : 'git is not installed'}, async()=>{
+  const {bridge,workspace,manager,environment}=await setup('delayed');const client=await connect(bridge.mcpUrl);
+  try {
+    const session=await signIn(bridge);
+    const id=String((await call(client,'antigravity_delegate',{task:'change things',workspace,acceptance_criteria:['x']})).task_id);await manager.wait(id);
+    assert.equal((await ui(bridge,`tasks/${id}/changes`)).status,401);
+    assert.equal((await ui(bridge,`tasks/00000000-0000-4000-8000-000000000000/changes`,{},session)).status,404);
+    const plain=await (await ui(bridge,`tasks/${id}/changes`,{},session)).json() as Record<string,any>;
+    assert.equal(plain.available,false);assert.match(plain.reason,/Not a usable git repository/);
+    gitIn(workspace,'init','-q');await writeFile(path.join(workspace,'a.txt'),'one\n');gitIn(workspace,'add','.');gitIn(workspace,'commit','-qm','init');
+    await writeFile(path.join(workspace,'a.txt'),'one\ntwo\n');await writeFile(path.join(workspace,'fresh.txt'),'new');
+    const report=await (await ui(bridge,`tasks/${id}/changes`,{},session)).json() as Record<string,any>;
+    assert.equal(report.available,true,report.reason);
+    assert.deepEqual(report.changes,[{path:'a.txt',status:'modified',added:1,deleted:0}]);
+    assert.deepEqual(report.untracked,[{path:'fresh.txt',bytes:3}]);
+    assert.equal(await readFile(path.join(workspace,'a.txt'),'utf8'),'one\ntwo\n','the endpoint changed nothing');
+    environment.allowed_workspaces=[];
+    const denied=await (await ui(bridge,`tasks/${id}/changes`,{},session)).json() as Record<string,any>;
+    assert.equal(denied.available,false);assert.match(denied.reason,/no longer in the allowlist/);
+  } finally {await client.close();await bridge.close();}
 });

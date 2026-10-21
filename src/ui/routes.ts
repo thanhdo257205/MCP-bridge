@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { delegationControllable, delegationState, setDelegationSwitch } from '../delegation.js';
 import { tokensEqual } from '../security/http-auth.js';
@@ -8,6 +8,8 @@ import type { TaskManager } from '../tasks/manager.js';
 import { SessionStore } from './session.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
+import { workspaceChanges } from '../changes.js';
+import { inside } from '../security/workspace.js';
 
 export interface UiContext {
   manager: TaskManager; environment: Record<string, unknown>; token: string;
@@ -66,6 +68,21 @@ async function overview(ctx: UiContext) {
   };
 }
 
+let changesInFlight: Promise<unknown> | null = null;
+/** Changes in a task's workspace, only while that directory is still allowed, and one scan at a time so repeated clicks cannot pile up git processes. */
+async function changesFor(ctx: UiContext, id: string) {
+  const {workspace} = ctx.manager.get(id);
+  const allowed = await Promise.all(((ctx.environment.allowed_workspaces as string[] | undefined) ?? []).map(root => realpath(root).catch(() => root)));
+  const canonical = await realpath(workspace).catch(() => null);
+  if (!canonical || !allowed.some(root => inside(root, canonical))) {
+    return {available: false, reason: 'This workspace is no longer in the allowlist, so its files are not read.', head: null, changes: [], untracked: [], truncated: false};
+  }
+  if (changesInFlight) return {available: false, reason: 'Another scan is still running; try again in a moment.', head: null, changes: [], untracked: [], truncated: false};
+  const scan = workspaceChanges(canonical);
+  changesInFlight = scan;
+  try { return await scan; } finally { changesInFlight = null; }
+}
+
 /** Handles /ui and /ui/api/*. Returns false for any other path. Host/Origin checks happen before this is called. */
 export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: UiContext): Promise<boolean> {
   const pathname = (req.url ?? '').split('?')[0];
@@ -98,6 +115,8 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
+    const changes = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/changes$`));
+    if (changes && method === 'GET') { json(res, 200, await changesFor(ctx, changes[1])); return true; }
     const cancel = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/cancel$`));
     if (cancel && method === 'POST') { await ctx.manager.cancel(cancel[1]); json(res, 200, ctx.manager.detail(cancel[1])); return true; }
     if (pathname === '/ui/api/delegation' && method === 'POST') {
