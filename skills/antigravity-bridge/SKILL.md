@@ -17,6 +17,22 @@ Delegate only when the user explicitly asks for Antigravity (or approves your pr
 
 A decline for one task does not change the setting for later tasks; ask again only if delegation would clearly help.
 
+## Auto-split mode (only when the user opts in)
+
+This changes the rule above only after the user clearly says that you may decide, task by task, what goes to Antigravity (for example "tự phân loại việc", "give the easy tasks to Antigravity and do the hard ones yourself"). Without that, delegate only on an explicit request. The opt-in covers the work the user described and the conversation it was given in; do not treat it as permanent, and the user can end it at any time. The cases in "When NOT to delegate" (a decline, the kill switch) still win over it.
+
+In this mode, delegate a part of the work only when **all** of these hold (defaults; if the user states their own limits, use theirs):
+
+- one goal, touching at most 3 files plus their tests;
+- concrete acceptance criteria that you can check from the diff or by running tests;
+- no dependence on context outside the repository or on long multi-step reasoning;
+- not security, authentication or secrets, data migrations or deletion, deployment, dependency, build or CI configuration, or public API/contract changes;
+- `agy_permissions` allows what the task needs (at `default`, expect writes and commands to be denied; then do it yourself or tell the user).
+
+Do the work yourself when any of these holds: design or architecture decisions, many interdependent files, debugging with an unknown cause, ambiguous requirements, or anything in the exclusions above. When unsure, treat the work as hard and do it yourself.
+
+For mixed work, do the hard part yourself and delegate only the separable easy parts, one task at a time. Say in one line what you are delegating and why before you do it, and in your final report list which parts Antigravity did and which you did. Review every delegated diff as usual. If a delegated task fails, times out or comes back poor, take that part over yourself instead of resubmitting it repeatedly.
+
 ## Before delegating
 
 - Discover the connected MCP tools by their advertised names; client prefixes may differ. Required names: `antigravity_environment`, `antigravity_delegate`, `antigravity_task_status`, `antigravity_task_wait`, `antigravity_task_output`, `antigravity_cancel_task`. Do not invent tools, CLI flags, or HTTP JSON-RPC payloads when MCP tools are available.
