@@ -300,3 +300,16 @@ cho Antigravity trong workspace đã cấp quyền, rồi review diff và chạy
 Skill có thể được client tự chọn khi yêu cầu phù hợp. Cài skill không tự kết nối HTTP server hoặc đăng ký MCP tools; cần hoàn thành phần cấu hình client và workspace trước. Skill không thể bảo đảm không có lỗi CLI/model/mạng, không mở thêm quyền và không thay thế kiểm tra diff/test. Kết nối bị mất không phải lý do tự giao lại task; skill yêu cầu tìm task cũ trước để tránh chạy trùng.
 
 Vị trí và cách gọi đã đối chiếu [Codex skills](https://developers.openai.com/codex/skills/) và [Claude Code skills](https://code.claude.com/docs/en/skills). Validator kiểm tra cấu trúc skill; test installer dùng thư mục tạm, không gọi AI hay cài vào skill cá nhân. Chưa đánh giá chất lượng quyết định của agent bằng behavioral eval chỉ từ các test này.
+
+## 10. Giao diện web
+
+Khi `npm start` đang chạy, mở `http://127.0.0.1:3000/ui` (đúng cổng đã in ở terminal) trên cùng máy. Giao diện chỉ chạy trong server của bridge, **không đi qua Codex/Claude nên không tốn thêm token của chúng**, và không thêm tool MCP nào.
+
+Đăng nhập bằng bridge token, dán vào ô nhập (`Get-Content .bridge-state/http-token` hoặc `cat .bridge-state/http-token`). Server đổi token lấy một mã phiên ngẫu nhiên, hết hạn sau 8 giờ hoặc khi restart, gửi qua header chứ không dùng cookie; token không bao giờ được hiển thị lại. Sai quá 10 lần trong một phút thì bị khóa tạm.
+
+| Màn hình | Nội dung |
+|---|---|
+| Task | Tổng quan (trạng thái bridge, phiên bản `agy`, công tắc giao việc, số task đang chạy); danh sách task; với mỗi task là cuộc trao đổi **Tech Lead → Antigravity** (yêu cầu, tiêu chí nghiệm thu, ngữ cảnh) và **Antigravity → Tech Lead** (phản hồi cuối, thao tác bị từ chối quyền, lỗi), log stdout/stderr, prompt đầy đủ gửi tới `agy`. Tự cập nhật; nút Hủy task cho task đang chạy |
+| Cài đặt | Công tắc giao việc cho Antigravity (cùng cơ chế với `npm run delegation`, bị khóa nếu đặt `BRIDGE_DELEGATION`), endpoint MCP, thông tin CLI, workspace được phép, giới hạn, lưu ý. Workspace và giới hạn chỉ đọc: sửa trong `config/workspaces.json` rồi khởi động lại |
+
+Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển thị dạng văn bản thuần, trang dùng CSP không cho script/style nội tuyến hay tải từ nơi khác, nên output của model không thể thực thi. Yêu cầu của Tech Lead được lưu cùng bản ghi task trong `.bridge-state/tasks` (đã qua lọc secret nhận diện được) để xem lại sau khi restart; đừng đưa secret vào task. Giao diện chỉ đọc, ngoại trừ hai thao tác cần phiên đăng nhập: hủy task và bật/tắt giao việc. Mã nguồn giao diện nằm ở `ui/` (HTML/CSS/JS thuần, không cần build), phần máy chủ ở `src/ui/`.
