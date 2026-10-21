@@ -11,6 +11,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { startHttpBridge, configuredPort, DEFAULT_PORT } from '../src/http.js';
 import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
+import { isAlive } from './helpers.js';
 import { loadHttpToken } from '../src/security/http-auth.js';
 
 const token = 'test_token_123456789012345678901234567890';
@@ -53,7 +54,7 @@ test('bearer required, Host/Origin guarded, body bounded and both protocol eras 
     assert.equal(badHost,403);
     assert.equal((await fetch(bridge.mcpUrl,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:' '.repeat(140000)})).status,413);
     const health=await fetch(bridge.healthUrl,{headers:{Authorization:`Bearer ${token}`}});assert.equal(health.status,200);
-    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,token,mode);try{assert.equal((await client.listTools()).tools.length,5);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');}finally{await client.close();}}
+    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,token,mode);try{assert.equal((await client.listTools()).tools.length,6);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');}finally{await client.close();}}
   } finally {await bridge.close();}
 });
 test('client disconnect preserves running task; reconnect can query and cancel it',async()=>{
@@ -82,7 +83,7 @@ test('server shutdown stops acceptance, cleans child tree, closes listener and g
   try {
     const until=Date.now()+3000;while(!manager.get(id).stderr && Date.now()<until) await new Promise(r=>setTimeout(r,20));
     const descendant=Number(manager.get(id).stderr);assert.ok(descendant>0);
-    await bridge.close();assert.equal(manager.get(id).status,'canceled');assert.equal(manager.get(id).process_running,false);assert.throws(()=>process.kill(descendant,0));
+    await bridge.close();assert.equal(manager.get(id).status,'canceled');assert.equal(manager.get(id).process_running,false);assert.equal(isAlive(descendant),false);
     await assert.rejects(manager.delegate({task:'no',workspace,acceptance_criteria:['no']}),/shutting down/);
     await assert.rejects(fetch(bridge.healthUrl,{signal:AbortSignal.timeout(2000)}));
     await assert.rejects(connect(bridge.mcpUrl));
@@ -117,4 +118,14 @@ test('occupied default port fails explicitly without trying another port',async(
     assert.equal(await new Promise<number|null>(resolve=>child.once('close',resolve)),1);
     assert.match(log,/Port is already in use/);assert.ok(!log.includes('MCP endpoint:'));
   } finally {if(occupied.listening)await new Promise<void>(resolve=>occupied.close(()=>resolve()));}
+});
+test('status omits logs, wait tool returns running within its bound, output carries the response',async()=>{
+  const {bridge,workspace}=await setup('delayed');const client=await connect(bridge.mcpUrl);
+  try {
+    const id=String((await call(client,'antigravity_delegate',{task:'mock delayed response',workspace,acceptance_criteria:['mock']})).task_id);
+    const status=await call(client,'antigravity_task_status',{task_id:id});assert.ok(!('final_response' in status));assert.ok(!('stdout' in status));
+    const result=await client.callTool({name:'antigravity_task_wait',arguments:{task_id:id,wait_seconds:26}});assert.equal(result.isError,true);
+    const waited=await call(client,'antigravity_task_wait',{task_id:id,wait_seconds:5});assert.equal(waited.status,'completed');
+    assert.equal((await call(client,'antigravity_task_output',{task_id:id})).final_response,'delayed response');
+  } finally {await client.close();await bridge.close();}
 });

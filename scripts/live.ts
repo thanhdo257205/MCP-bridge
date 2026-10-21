@@ -54,9 +54,9 @@ try {
   while(status.status==='running' && Date.now()<deadline) {
     await new Promise(resolve=>setTimeout(resolve,500));status=await call('antigravity_task_status',{task_id:activeTask});
   }
-  report.task=await call('antigravity_task_output',{task_id:activeTask});
+  const output=await call('antigravity_task_output',{task_id:activeTask});report.task=output;
   assert.equal(status.status,'completed');
-  assert.equal(String(status.final_response).trim(),'BRIDGE_SMOKE_OK');
+  assert.equal(String(output.final_response).trim(),'BRIDGE_SMOKE_OK');
   assert.equal(await readFile(path.join(workspace,'sentinel.txt'),'utf8'),'UNCHANGED');
   assert.deepEqual(await readdir(workspace),['sentinel.txt']);
   report.response_verified=true;

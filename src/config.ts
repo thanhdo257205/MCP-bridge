@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import * as z from 'zod/v4';
 
@@ -10,10 +10,14 @@ const schema = z.object({
   max_output_bytes: z.number().int().min(1024).max(1048576).default(262144),
   max_retained_tasks: z.number().int().min(1).max(200).default(50)
 }).strict();
+const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50};
 export type Config = z.infer<typeof schema>;
 export const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 export async function loadConfig(): Promise<Config> {
-  const filename = process.env.ANTIGRAVITY_BRIDGE_CONFIG ?? fileURLToPath(new URL('../../config/workspaces.json', import.meta.url));
+  const explicit = process.env.ANTIGRAVITY_BRIDGE_CONFIG;
+  const filename = explicit ?? fileURLToPath(new URL('../../config/workspaces.json', import.meta.url));
+  // config/workspaces.json is local and untracked; create it with an empty allowlist on first run (flag 'wx': never overwrite).
+  if (!explicit) await writeFile(filename, JSON.stringify({allowed_workspaces: [], ...DEFAULT_LIMITS, executable: 'agy'}, null, 2) + '\n', {flag: 'wx'}).catch(() => {});
   const config = schema.parse(JSON.parse(await readFile(filename, 'utf8')));
   if (config.default_timeout_seconds > config.max_timeout_seconds) throw new Error('Default timeout exceeds maximum');
   return config;

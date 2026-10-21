@@ -9,18 +9,20 @@ export async function createRuntime() {
   try { cli = await inspectCli(await findExecutable(config.executable), projectRoot); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
   const manager = new TaskManager(config, {...cli, stateDirectory: path.join(projectRoot, '.bridge-state')});
+  const restored = await manager.restore();
+  if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const environment = {
     cli_version: cli.version, executable: cli.executable,
     bridge_status: cli.supported ? 'ready' : 'unsupported',
     execution_method: cli.supported ? 'supervised-print-json' : null,
     transport: 'streamable-http',
-    supported: {delegate: cli.supported, status: true, output: true, cancel_owned_process: true, detached_resume: false},
+    supported: {delegate: cli.supported, status: true, wait: true, output: true, cancel_owned_process: true, detached_resume: false},
     allowed_workspaces: config.allowed_workspaces,
     authentication: 'Cached CLI authentication required; only a live task verifies it.',
     limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: 1},
     limitations: [
       'Only locally verified agy 1.4.3 is enabled.',
-      'Client disconnect does not cancel accepted tasks. Shared task history is in server memory; restart loses it.',
+      'Client disconnect does not cancel accepted tasks. Finished-task records persist in .bridge-state/tasks; a task running during a restart is marked failed and its process is not recovered.',
       'CLI SUCCESS/exit 0 does not establish acceptance; tool permissions may have been denied.',
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
       'Existing Antigravity permissions, hooks, MCP and credential access remain governed by its configuration.',
