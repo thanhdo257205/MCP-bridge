@@ -9,6 +9,7 @@ import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned } from '../antigravity/process.js';
+import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
@@ -34,11 +35,6 @@ interface Entry {
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string) => ChildProcess;
-}
-
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 export class TaskManager {
@@ -135,7 +131,11 @@ export class TaskManager {
       }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       try { await mkdir(lock); ownsLock = true; }
-      catch { throw new Error(await this.describeLock(lock)); }
+      catch {
+        const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
+        if(!recovery.reclaimed)throw new Error(await this.describeLock(lock));
+        await mkdir(lock);ownsLock=true;
+      }
       const checkStarting = () => {
         if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
       };

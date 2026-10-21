@@ -6,6 +6,7 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { paths } from './paths.js';
 import { addSessionWorkspaces } from './config.js';
+import {recoverExecutionLock} from './tasks/execution-lock.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
   checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
@@ -31,6 +32,7 @@ Usage: ${BIN} [command] [options]
                           Install the antigravity-bridge skill for the chosen client
   config [--json]         Show where config, state and the token file live (never prints the token)
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
+  unlock                 Reclaim a lock only when both recorded server and child PIDs are dead
   probe-stream            Capture the real agy stream-json event shape (one tiny AI call)
   version, help
 
@@ -143,6 +145,12 @@ async function main(argv: string[]) {
     }
     case 'workspaces': return workspaces(rest);
     case 'update': return updateCommand(rest);
+    case 'unlock': {
+      if(rest.length)throw new Error(`Usage: ${BIN} unlock`);
+      const result=await recoverExecutionLock(paths.stateDirectory);
+      console.log(result.reason);if(!result.reclaimed&&!result.absent)process.exitCode=1;
+      return;
+    }
     default: throw new Error(`Unknown command: ${command}\n\n${HELP}`);
   }
 }

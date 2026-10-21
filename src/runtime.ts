@@ -3,6 +3,7 @@ import { loadConfig, sessionOnlyWorkspaces } from './config.js';
 import { paths } from './paths.js';
 import { findExecutable, inspectCli } from './antigravity/process.js';
 import { TaskManager } from './tasks/manager.js';
+import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
@@ -10,6 +11,7 @@ export async function createRuntime() {
   try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot); }
   catch { console.error('[bridge] CLI unavailable or inspection failed'); }
   const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});
+  await recoverExecutionLock(paths.stateDirectory);
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const lockWarning = await manager.lockDiagnostic();
