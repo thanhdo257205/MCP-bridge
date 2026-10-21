@@ -226,7 +226,7 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 
 1. Đọc code và Git status trước task; chia task nhỏ, rõ file được sửa và tiêu chí nghiệm thu.
 2. Gọi `antigravity_delegate` với arguments mẫu ở dưới.
-3. Lưu `task_id`; gọi `antigravity_task_wait` (tối đa 25 giây mỗi lần, trả sớm khi task xong) hoặc `antigravity_task_status`, rồi lấy `antigravity_task_output`.
+3. Lưu `task_id`; gọi `antigravity_task_wait` (mỗi lần chờ tối đa `max_wait_seconds`, mặc định 55 giây, trả sớm khi task xong) hoặc `antigravity_task_status`, rồi lấy `antigravity_task_output`.
 4. Nếu client bị đóng, bật lại client, gọi environment để xem `recent_tasks`, rồi query task ID cũ. Không giao trùng task khi chưa kiểm tra trạng thái.
 5. Tech Lead review diff thực tế, gồm file untracked, chạy test và đánh giá từng tiêu chí. Nếu chưa đạt, giao task sửa tiếp.
 
@@ -244,7 +244,7 @@ Luồng sử dụng trong Codex hoặc Claude Code:
 | `antigravity_environment` | CLI/version/allowlist/giới hạn và recent_tasks để tìm lại task ID |
 | `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?; trả `running` (hoặc `queued` nếu bridge đang bận và hàng đợi còn chỗ) cùng task_id |
 | `antigravity_task_status` | Trạng thái/process/thời gian/lỗi/denied_actions/số byte theo task_id, không kèm log (rẻ để poll) |
-| `antigravity_task_wait` | Chờ tối đa `wait_seconds` (1–25, mặc định 20) tới khi task kết thúc, trả cùng nội dung như status; còn chạy thì gọi lại |
+| `antigravity_task_wait` | Chờ tối đa `wait_seconds` (1 đến `max_wait_seconds`, mặc định là mức tối đa, 55 giây) tới khi task kết thúc, trả cùng nội dung như status; còn chạy thì gọi lại |
 | `antigravity_task_output` | Phản hồi cuối, stdout/stderr, lỗi, denied_actions, truncation theo task_id |
 | `antigravity_cancel_task` | Hủy cây tiến trình thuộc task; không rollback thay đổi file |
 
@@ -375,6 +375,10 @@ Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển th�
 **Chọn model:** mục Cài đặt → Model liệt kê các model lấy từ `agy models` (chỉ chạy khi mở trang Cài đặt). Chọn một model thì bridge truyền `--model <id>` cho mọi task mới; chọn "Mặc định của Antigravity" thì không truyền cờ nào. Có hiệu lực ngay, không cần khởi động lại; task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận, và mỗi task ghi lại model đã dùng (hiện trong chi tiết task). Chỉ nhận id nằm trong danh sách của `agy models`; nếu không đọc được danh sách thì không cho đổi. Lựa chọn lưu ở `.bridge-state/model.json`. Codex/Claude không chọn được model theo từng task (không thêm tham số vào tool MCP nên không tốn thêm token).
 
 **Ghi chú phát hành:** mỗi lần workflow phát hành, nó tạo một GitHub Release cho tag `vX.Y.Z` với ghi chú tự sinh gồm các pull request đã merge kể từ tag trước (tên PR là nội dung ghi chú, nên hãy đặt tên PR nêu rõ thay đổi). Xem tại trang Releases của repo. Các tag cũ chưa có release cũng được tạo bù, theo thứ tự từ cũ đến mới.
+
+**Mức suy luận (effort):** mục Cài đặt → Mức suy luận chọn `--effort` truyền cho Antigravity: thấp (nhanh nhất), vừa, cao, rất cao, tối đa, hoặc mặc định (không truyền cờ). Mức thấp giúp task nhanh hơn nhưng suy luận ít hơn. Có hiệu lực ngay cho task mới, mỗi task ghi lại mức đã dùng, lưu ở `.bridge-state/effort.json`. Chưa kiểm chứng với `agy` thật ở chế độ `--print`. Kết hợp chọn model nhỏ hơn (ví dụ `gemini-3.8-flash-low`) để tăng tốc.
+
+**Giảm số lần Codex/Claude phải hỏi lại (tiết kiệm token):** mỗi lần gọi `antigravity_task_wait` tốn token, nên nên chờ lâu trong một lần gọi thay vì nhiều lần ngắn. Server không thể tự "đánh thức" Codex/Claude khi có kết quả: thông báo MCP từ server không khiến mô hình chạy, mô hình chỉ hành động khi được nhắn hoặc khi nó gọi tool. Vì vậy bridge cho chờ dài: mặc định một lần chờ tối đa 55 giây (nhỏ hơn thời hạn tool 60 giây mặc định của Codex). Muốn chờ lâu hơn nữa, nâng đồng thời hai giá trị: `max_wait_seconds` trong file cấu hình của bridge (5 đến 3600) và thời hạn tool của client (Codex: `tool_timeout_sec` trong `config.toml`; Claude Code: biến môi trường `MCP_TOOL_TIMEOUT` tính bằng mili giây, theo tài liệu của Claude Code, chưa kiểm chứng ở đây). Ví dụ `max_wait_seconds: 540` cùng `tool_timeout_sec = 600` thì một lần gọi chờ tới 9 phút. Nếu thời hạn tool của client ngắn hơn `max_wait_seconds`, lần chờ dài sẽ bị client cắt và báo lỗi timeout. File skill dặn Codex/Claude gọi `wait` không kèm `wait_seconds` và không báo tiến độ giữa các lần chờ.
 
 **Quyền của Antigravity:** mục Cài đặt → Quyền của Antigravity chọn Antigravity được tự làm đến đâu khi chạy task. Ở chế độ không tương tác, Antigravity tự từ chối việc cần phê duyệt (thấy ở `denied_actions`), nên task sửa file hay chạy lệnh có thể không làm được nếu cài đặt Antigravity chưa cấp quyền. Năm mức, từ thấp đến cao:
 

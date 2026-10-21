@@ -28,6 +28,15 @@ test('parseModels reads `agy models` output, ignores noise and rejects unsafe id
   assert.deepEqual(parseModels(''),[]);
   for(const bad of ['','-x','a b','a;b','a'.repeat(101),'../x'])assert.equal(validModelId(bad),false,bad);
 });
+// What `agy models` printed when the bridge read it through a pipe (agy 1.4.4, Windows): a progress line first, then id<TAB>name.
+const PIPED = 'Fetching available models...\r\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\r\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\r\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\r\ngpt-oss-120b-medium\tGPT-OSS 120B (Medium)\r\n';
+test('parseModels reads the tab-separated output agy prints when piped, and ignores the progress line and color codes',()=>{
+  const models=parseModels(PIPED);
+  assert.deepEqual(models.map(m=>m.id),['gemini-3.8-flash-high','claude-sonnet-4-6','claude-opus-4-6-thinking','gpt-oss-120b-medium']);
+  assert.equal(models[1].label,'Claude Sonnet 4.6 (Thinking)');
+  assert.deepEqual(parseModels('\u001b[32mok-model\u001b[0m\tFine\n').map(m=>m.id),['ok-model']);
+  assert.deepEqual(parseModels('Fetching available models...\n'),[]);
+});
 test('invocation adds --model only when one is chosen',()=>{
   assert.ok(!invocationFor('p',30,'argv').args.includes('--model'));
   assert.ok(!invocationFor('p',30,'argv',null).args.includes('--model'));

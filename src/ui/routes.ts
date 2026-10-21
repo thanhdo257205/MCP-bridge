@@ -10,6 +10,7 @@ import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { validModelId, writeModel } from '../models.js';
+import { EFFORT_LEVELS, isEffortLevel, readEffort, writeEffort } from '../effort.js';
 import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
 import { inside } from '../security/workspace.js';
 
@@ -65,6 +66,7 @@ async function overview(ctx: UiContext) {
     delegation: {...state, controllable: delegationControllable()},
     model: await ctx.manager.currentModel(),
     permission: permissionState(ctx.manager.stateDirectory),
+    effort: readEffort(ctx.manager.stateDirectory),
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
@@ -129,6 +131,12 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       if (!delegationControllable()) { json(res, 409, {error: 'Delegation is locked by BRIDGE_DELEGATION in the server environment'}); return true; }
       await setDelegationSwitch(ctx.manager.stateDirectory, body.enabled);
       json(res, 200, {...delegationState(ctx.manager.stateDirectory), controllable: true}); return true;
+    }
+    if (pathname === '/ui/api/effort' && method === 'POST') {
+      const body = await readJson(req);
+      if (!isEffortLevel(body.effort)) { json(res, 400, {error: `effort must be one of: ${EFFORT_LEVELS.join(', ')}`}); return true; }
+      await writeEffort(ctx.manager.stateDirectory, body.effort);
+      json(res, 200, {effort: body.effort}); return true;
     }
     if (pathname === '/ui/api/permission' && method === 'POST') {
       const body = await readJson(req);

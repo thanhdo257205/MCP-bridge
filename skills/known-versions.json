@@ -32,6 +32,10 @@
     {
       "sha256": "65c0a72bb016ee8d891bfea17ea5d972dc79dc7c12c57edb17c1e6e8bbd37078",
       "note": "Antigravity permission level is the owner's setting (agy_permissions)"
+    },
+    {
+      "sha256": "066f499ccd7341c7f77c2a409b3632e4cefe16e45ed2c77e75c8154028e951f9",
+      "note": "long waits (limits.max_wait_seconds), fewer polling calls"
     }
   ]
 }

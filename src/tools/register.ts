@@ -1,7 +1,7 @@
 import { CLIENT_INFO_META_KEY, McpServer } from '@modelcontextprotocol/server';
 import { requestContext } from '../request-context.js';
 import * as z from 'zod/v4';
-import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
+import { delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
 import {readPackageInfo} from '../update.js';
@@ -35,10 +35,10 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id}) => guard(() => manager.summary(task_id)));
   server.registerTool('antigravity_task_wait', {
-    description: `Wait up to wait_seconds (1-${MAX_WAIT_SECONDS}, default ${DEFAULT_WAIT_SECONDS}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
+    description: `Wait up to wait_seconds (1-${manager.maxWaitSeconds}, default ${manager.maxWaitSeconds}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
     inputSchema: waitSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id, wait_seconds}) => guard(async () => {
-    await manager.waitFor(task_id, wait_seconds ?? DEFAULT_WAIT_SECONDS);
+    await manager.waitFor(task_id, Math.min(wait_seconds ?? manager.maxWaitSeconds, manager.maxWaitSeconds));
     return manager.summary(task_id);
   }));
   server.registerTool('antigravity_task_output', {

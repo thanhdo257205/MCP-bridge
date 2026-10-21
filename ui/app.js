@@ -175,6 +175,18 @@ async function setPermission(level) {
   try { await api('permission', {method: 'POST', body: {level, acknowledge_risk: risky}}); notify('Đã đổi quyền cho các task mới'); await refresh(); }
   catch (error) { notify(error.message); await refresh(); }
 }
+const EFFORT_LEVELS = [
+  {id: 'default', title: 'Mặc định của Antigravity', text: 'Không truyền --effort; Antigravity dùng mức đã cấu hình.'},
+  {id: 'low', title: 'Thấp (nhanh nhất)', text: 'Suy luận ít nhất, phản hồi nhanh. Hợp việc nhỏ, rõ ràng.'},
+  {id: 'medium', title: 'Vừa', text: 'Cân bằng giữa tốc độ và độ kỹ.'},
+  {id: 'high', title: 'Cao', text: 'Suy luận kỹ hơn, chậm hơn.'},
+  {id: 'xhigh', title: 'Rất cao', text: 'Rất kỹ, khá chậm.'},
+  {id: 'max', title: 'Tối đa (chậm nhất)', text: 'Suy luận sâu nhất, chậm nhất.'}
+];
+async function setEffort(effort) {
+  try { await api('effort', {method: 'POST', body: {effort}}); notify('Đã đổi mức suy luận cho các task mới'); await refresh(); }
+  catch (error) { notify(error.message); await refresh(); }
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -293,7 +305,7 @@ function detailView() {
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
-      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
+      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
       ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
   const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
@@ -360,6 +372,15 @@ function modelCard(o) {
     loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
     h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
 }
+function effortCard(o) {
+  const current = EFFORT_LEVELS.find(level => level.id === (o.effort || 'default')) || EFFORT_LEVELS[0];
+  const select = h('select', {class: 'select', 'aria-label': 'Mức suy luận cho task mới', onchange: event => setEffort(event.target.value)},
+    EFFORT_LEVELS.map(level => h('option', {value: level.id, text: level.title})));
+  select.value = current.id;
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Mức suy luận (effort)'}),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: current.title}), h('span', {class: 'muted', text: current.text})), select),
+    h('p', {text: 'Truyền --effort cho Antigravity. Mức thấp giúp task nhanh hơn nhưng suy luận ít hơn. Áp dụng cho task mới, không cần khởi động lại; mỗi task ghi lại mức đã dùng. Chưa kiểm chứng với agy thật ở chế độ --print.'}));
+}
 function permissionCard(o) {
   const p = o.permission || {level: 'default', controllable: true};
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Quyền của Antigravity'}),
@@ -382,6 +403,7 @@ function settingsView(o) {
         delegation.controllable ? h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy hoặc đang chờ không bị dừng, nhưng task đang chờ sẽ bị hủy khi đến lượt. Có hiệu lực ngay, không cần khởi động lại.'})
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
       modelCard(o),
+      effortCard(o),
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
@@ -462,7 +484,7 @@ function patch() {
     if (!rebuilt) patchLogs();
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
-    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }
