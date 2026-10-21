@@ -11,6 +11,7 @@ import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
 import {packageRoot} from '../paths.js';
+import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
@@ -29,7 +30,9 @@ const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
 export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null;
   /** Model chosen in the web UI when the task was accepted (null: Antigravity's own default). Absent in older records. */
-  model?: string | null; }
+  model?: string | null;
+  /** Antigravity permission level this task ran (or will run) with; absent in older records. */
+  permission?: PermissionLevel; }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
   /** Resolves `done`; set for every task that goes through the CLI. */
@@ -99,7 +102,8 @@ export class TaskManager {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
         client: meta.client ? redact(meta.client).slice(0, 100) : null,
-        model: await readModel(this.runtime.stateDirectory)
+        model: await readModel(this.runtime.stateDirectory),
+        permission: permissionState(this.runtime.stateDirectory).level
       }
     };
     this.entries.set(task.task_id, entry);
@@ -155,7 +159,10 @@ export class TaskManager {
       task.started_at = new Date().toISOString();
       await this.persist(task);
       checkStarting();
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null);
+      // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
+      const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
+      if(entry.request)entry.request.permission=permission;
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null,permissionFlags(permission));
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
@@ -430,7 +437,7 @@ export class TaskManager {
     return this.describeLock(lock);
   }
   overview() {
-    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

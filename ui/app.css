@@ -210,3 +210,9 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .progress { display: grid; gap: 6px; margin: 4px 0 12px; }
 .bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; border: 1px solid var(--border); }
 .bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .9s linear; }
+.perm-list { display: grid; gap: 8px; margin: 12px 0; }
+.perm-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.perm-row.on { border-color: var(--accent); background: var(--surface-2); }
+.perm-row.danger.on { border-color: var(--bad); }
+.perm-row input { margin-top: 4px; }
+.perm-row > span { display: grid; gap: 2px; }

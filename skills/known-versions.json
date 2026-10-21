@@ -28,6 +28,10 @@
     {
       "sha256": "451fe5791b1753f1550275a709c561442e62d1e8b86d3fe8c4525998d8d85659",
       "note": "model choice is the owner's setting; no step progress in the tools"
+    },
+    {
+      "sha256": "65c0a72bb016ee8d891bfea17ea5d972dc79dc7c12c57edb17c1e6e8bbd37078",
+      "note": "Antigravity permission level is the owner's setting (agy_permissions)"
     }
   ]
 }
