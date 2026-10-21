@@ -1,0 +1,28 @@
+{
+  "name": "codex-antigravity-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "dev": "npm run build && node dist/src/index.js",
+    "start:stdio": "node dist/src/stdio.js",
+    "check": "node dist/scripts/check.js",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test:live": "npm run build && node dist/scripts/live.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0"
+  }
+}

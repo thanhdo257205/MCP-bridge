@@ -1,0 +1,226 @@
+# MCP Bridge HTTP: Codex / Claude Code → Antigravity
+
+Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTTP**. Codex và Claude Code kết nối tới cùng endpoint; không khởi chạy process bridge riêng. Không cần mở Antigravity IDE; bridge gọi executable `agy` đã đăng nhập.
+
+`npm start` hiện chạy HTTP. STDIO cũ chỉ còn là chế độ tùy chọn `npm run start:stdio`, không dùng trong các cấu hình client bên dưới. Source bridge ở thư mục phát triển riêng `MCP-bridge`, ngoài repository ứng dụng được giao sửa.
+
+## 1. Cài đặt và khởi động
+
+Yêu cầu Node.js ≥20, npm và Antigravity CLI **1.4.3**. Bản CLI khác bị từ chối đến khi được khảo sát lại. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency.
+
+Trong PowerShell:
+
+```powershell
+Set-Location 'C:\Users\dotha\Documents\Fsoft-Working\MCP-bridge'
+npm install
+npm run build
+npm start
+```
+
+`npm ci` có thể thay `npm install` để cài đúng lockfile. Chế độ phát triển:
+
+```powershell
+npm run dev
+```
+
+`dev` build rồi chạy HTTP với cùng cơ chế bảo mật; hiện không có hot reload. Sau khi sửa source, Ctrl+C rồi chạy `npm run dev` lại. Không tự restart để tránh gián đoạn task đang sửa code.
+
+Server giữ terminal hoạt động tới khi **Ctrl+C**, SIGTERM hoặc lỗi nghiêm trọng. Việc đóng Codex, Claude Code hoặc stdin của bridge không dừng HTTP server. Đóng cưỡng bức cửa sổ terminal không tương đương shutdown an toàn.
+
+Mặc định bind duy nhất `127.0.0.1:3000`. Khi cổng còn trống, terminal in:
+
+```text
+[bridge] HTTP server: http://127.0.0.1:3000
+[bridge] MCP endpoint: http://127.0.0.1:3000/mcp
+[bridge] Health check: http://127.0.0.1:3000/health (bearer authentication required)
+```
+
+Cổng bị chiếm: server báo lỗi, thoát mã 1, không tự đổi cổng hoặc địa chỉ bind. Chọn cổng khác:
+
+```powershell
+$env:PORT = '3001'
+npm start
+```
+
+Muốn hệ điều hành chọn một cổng đang trống, đặt `PORT='0'`. Đây là lựa chọn minh bạch do người dùng chỉ định: đọc URL thực tế được in ở terminal rồi cập nhật tất cả client. `PORT` nhận số nguyên 0–65535, không nhận giá trị rỗng. Xóa override để về mặc định: `Remove-Item Env:PORT`.
+
+## 2. Token xác thực và health check
+
+Mọi request tới `/mcp` và `/health` phải có `Authorization: Bearer <token>`. Đây là token dùng chung cho một người dùng cục bộ, không phải OAuth. Không cần `codex mcp login` hay `claude mcp login` cho bridge này.
+
+Nếu chưa đặt `BRIDGE_HTTP_TOKEN`, lần khởi động đầu tự tạo token ngẫu nhiên 256 bit tại `.bridge-state/http-token`, rồi tái sử dụng qua các lần chạy. Server chỉ in **đường dẫn nguồn token**, không in giá trị. Thư mục này được gitignore. Token file dùng mode 0600 trên POSIX; trên Windows phải bảo vệ bằng ACL thư mục tài khoản của bạn, vì mode POSIX không thay thế Windows ACL. Bất cứ ai đọc được token đều có quyền dùng các tool, xem và hủy task của server.
+
+Trong **terminal thứ hai**, đọc token vào môi trường mà không in nó:
+
+```powershell
+Set-Location 'C:\Users\dotha\Documents\Fsoft-Working\MCP-bridge'
+$env:BRIDGE_HTTP_TOKEN = (Get-Content -Raw '.bridge-state/http-token').Trim()
+$headers = @{ Authorization = "Bearer $env:BRIDGE_HTTP_TOKEN" }
+Invoke-RestMethod 'http://127.0.0.1:3000/health' -Headers $headers
+npm run check
+```
+
+`npm run check` không khởi động server hay gọi AI; nó kết nối HTTP và gọi `antigravity_environment`. Nếu không có token trong env, script đọc file token mặc định. Khi server tắt, token sai hoặc URL sai, script thoát mã 1 và hướng dẫn chạy `npm start`, kiểm tra PORT/URL/token, rồi kết nối lại.
+
+Với cổng khác, ví dụ 3001:
+
+```powershell
+$env:BRIDGE_MCP_URL = 'http://127.0.0.1:3001/mcp'
+npm run check
+Invoke-RestMethod 'http://127.0.0.1:3001/health' -Headers $headers
+```
+
+`BRIDGE_MCP_URL` dành cho script check; URL của Codex và Claude Code phải cập nhật riêng. Nếu chủ động cấp token bằng env trước `npm start`, dùng token đó ở các client; token env phải dài 32–256 ký tự thuộc A–Z, a–z, 0–9, `_`, `-`. Env ưu tiên hơn file. Không commit token hoặc dán vào prompt. Bridge không chuyển biến `BRIDGE_HTTP_TOKEN` cho child `agy` và lọc giá trị token khỏi output trả về.
+
+## 3. Kết nối Codex
+
+**Các đoạn dưới là thay đổi đề xuất, chưa áp dụng.** Trình bày để chủ máy duyệt trước khi chạy lệnh ghi cấu hình. Mẫu: [config/codex-mcp.windows.toml](config/codex-mcp.windows.toml).
+
+```toml
+[mcp_servers.antigravity]
+url = 'http://127.0.0.1:3000/mcp'
+bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+enabled = true
+```
+
+File đích của máy này là `C:\Users\dotha\.codex-account-b\config.toml` do `CODEX_HOME`. Trên máy khác mặc định là `~/.codex/config.toml`. Nếu đã có mục antigravity kiểu command/args, thay mục đó bằng HTTP sau khi được duyệt, không tạo mục trùng. Không còn command/args nên Codex không spawn bridge.
+
+Sau khi được duyệt có thể dùng CLI thay cho merge TOML (CLI dùng timeout mặc định, thêm timeout bằng TOML nếu cần):
+
+```powershell
+codex mcp add antigravity --url 'http://127.0.0.1:3000/mcp' --bearer-token-env-var BRIDGE_HTTP_TOKEN
+codex mcp get antigravity
+codex mcp list
+codex
+```
+
+Khởi chạy Codex từ terminal đã nạp token. Với IDE/app đang mở, phải nạp env vào môi trường của app và khởi động lại app; đặt env ở terminal khác không cập nhật tiến trình đã chạy. Trong phiên mới, yêu cầu gọi `antigravity_environment`; phiên bản CLI phải là 1.4.3. `codex mcp list/get` xác nhận cấu hình, không thay thế một tool call thật.
+
+Ngắt kết nối: thoát phiên Codex; server và task vẫn chạy. Muốn bỏ cấu hình, sau khi duyệt chạy `codex mcp remove antigravity`, rồi mở phiên mới. Hoặc đặt `enabled=false` trong block và mở lại phiên. Server chỉ dừng khi bạn Ctrl+C tại terminal server.
+
+Khi đổi cổng, sửa `url`, giữ `bearer_token_env_var`, rồi mở phiên mới. Khi server tắt, Codex báo lỗi kết nối/MCP startup. Không có tiến trình HTTP nào có thể tự trả hướng dẫn khi nó đã tắt; chạy `npm run check` để có chẩn đoán và hướng dẫn cụ thể, sau đó `npm start` ở terminal server và mở lại phiên Codex.
+
+Tham khảo [tài liệu MCP chính thức của Codex](https://developers.openai.com/codex/mcp/).
+
+## 4. Kết nối Claude Code
+
+Mẫu cấu hình đề xuất ở [config/claude-mcp.http.json](config/claude-mcp.http.json), chưa ghi vào cấu hình hiện có:
+
+```json
+{
+  "mcpServers": {
+    "antigravity": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {"Authorization": "Bearer ${BRIDGE_HTTP_TOKEN}"}
+    }
+  }
+}
+```
+
+Sau khi duyệt, từ terminal đã nạp token và thư mục project của bạn:
+
+```powershell
+claude mcp add --transport http --scope local antigravity 'http://127.0.0.1:3000/mcp' --header 'Authorization: Bearer ${BRIDGE_HTTP_TOKEN}'
+claude mcp get antigravity
+claude mcp list
+claude
+```
+
+Dấu nháy đơn PowerShell giữ nguyên `${BRIDGE_HTTP_TOKEN}` trong cấu hình; Claude Code đọc env khi khởi động. Không thay bằng token literal trong lệnh, để tránh lưu token vào history/config. `--scope local` chỉ cấu hình cho project và người dùng hiện tại. Mẫu JSON wrapper dành cho `.mcp.json`; không tự tạo file đó trong repository ứng dụng.
+
+Trong Claude Code dùng `/mcp` để xem trạng thái, reconnect hoặc disable server, và gọi `antigravity_environment` để kiểm tra tool. Nếu server tắt, `/mcp` hiển thị lỗi kết nối; chạy `npm run check`, bật server bằng `npm start`, rồi reconnect qua `/mcp` hoặc mở lại phiên. Thoát Claude Code/disable kết nối không hủy task.
+
+Gỡ sau khi duyệt: `claude mcp remove antigravity --scope local`. Đổi cổng: cập nhật URL trong cùng entry, hoặc remove rồi add lại URL mới với cùng header env, sau đó reconnect. Không cần dừng server vì client ngắt kết nối.
+
+Tham khảo [tài liệu MCP chính thức của Claude Code](https://code.claude.com/docs/en/mcp). Đã đối chiếu CLI cài tại máy: Claude Code 2.1.296; Codex CLI 0.163.0. Chưa thay cấu hình hoặc xác nhận hai ứng dụng thật đã tải tool; kiểm thử protocol dùng SDK client được ghi riêng bên dưới.
+
+## 5. Cho phép workspace và giao task
+
+`config/workspaces.json` mặc định `allowed_workspaces: []`. Chỉ thêm đường dẫn tuyệt đối đã được cấp quyền; [mẫu](config/workspaces.example.json). Có thể chọn file JSON khác qua env `ANTIGRAVITY_BRIDGE_CONFIG`; restart server để áp dụng. Đừng giao workspace chứa chính source bridge đang chạy.
+
+Đăng ký client thành công chưa cấp quyền sửa file cho Antigravity. Lần thử thật trước đây bị `write_file` từ chối. Cần phê duyệt rule tối thiểu trong settings Antigravity hoặc cấp quyền qua phiên tương tác, rồi kiểm thử lại. Ví dụ **chưa áp dụng**:
+
+```json
+{"permissions":{"allow":["write_file(C:/absolute/path/to/approved-project/)"]}}
+```
+
+Merge rule cần thiết vào settings, không thay toàn bộ cấu hình; không dùng wildcard global hay bypass permissions. Test commands phải được cho phép riêng; Codex có thể tự chạy test. Deploy/xóa dữ liệu/thay đổi hệ thống yêu cầu xác nhận tương tác riêng và không thuộc task thông thường. Chi tiết hạn chế CLI ở [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+Luồng sử dụng trong Codex hoặc Claude Code:
+
+1. Đọc code và Git status trước task; chia task nhỏ, rõ file được sửa và tiêu chí nghiệm thu.
+2. Gọi `antigravity_delegate` với arguments mẫu ở dưới.
+3. Lưu `task_id`; poll `antigravity_task_status` và lấy `antigravity_task_output`.
+4. Nếu client bị đóng, bật lại client, gọi environment để xem `recent_tasks`, rồi query task ID cũ. Không giao trùng task khi chưa kiểm tra trạng thái.
+5. Tech Lead review diff thực tế, gồm file untracked, chạy test và đánh giá từng tiêu chí. Nếu chưa đạt, giao task sửa tiếp.
+
+```json
+{
+  "task": "Sửa hàm parseCount trong src/count.ts để từ chối số âm. Chỉ sửa hàm này và test liên quan. Không chạy lệnh; Tech Lead tự test. Báo cáo file đã sửa và vấn đề còn lại.",
+  "workspace": "C:/absolute/path/to/approved-project",
+  "acceptance_criteria": ["Số âm trả lỗi validation hiện hành", "0 và số nguyên dương giữ hành vi cũ"],
+  "timeout_seconds": 300
+}
+```
+
+| Tool | Công dụng |
+|---|---|
+| `antigravity_environment` | CLI/version/allowlist/giới hạn và recent_tasks để tìm lại task ID |
+| `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?; trả running/task_id |
+| `antigravity_task_status` | Trạng thái/process/thời gian/log giới hạn theo task_id |
+| `antigravity_task_output` | Phản hồi cuối/log/lỗi/denied_actions/truncation theo task_id |
+| `antigravity_cancel_task` | Hủy cây tiến trình thuộc task; không rollback thay đổi file |
+
+`completed` chỉ là CLI chạy xong và có envelope hợp lệ. Luôn `review_required=true`, `acceptance_verified=false`. SUCCESS/exit 0 vẫn có thể bị bridge đánh dấu failed do permission denial hoặc timeout. Prompt mẫu review/sửa tiếp: [docs/PROMPTS.md](docs/PROMPTS.md).
+
+## 6. Vòng đời, giới hạn và dừng an toàn
+
+TaskManager thuộc HTTP server, không thuộc phiên MCP. Server sử dụng handler stateless cho kết nối MCP; mọi request truy cập cùng TaskManager. Disconnect, DELETE session, request cancellation hoặc client thoát không tự hủy task đã tiếp nhận. Nếu mất response giao task, tra `recent_tasks` trước khi thử lại. Một người dùng có cùng token được xem/hủy task từ cả hai client.
+
+Lưu task trong RAM, mặc định giữ 50 task (tối đa cấu hình 200); task cũ hoàn tất bị loại bỏ. Restart/crash mất lịch sử; chưa hỗ trợ durable task recovery. Task vẫn timeout nếu không có client theo dõi. Chỉ một task chạy toàn cục, khóa giữa các process dùng cùng bản cài tại `.bridge-state/execution.lock`; không điều phối editor/agent ngoài hoặc bản cài bridge khác.
+
+Nhấn **Ctrl+C một lần** tại terminal server:
+
+1. Ngừng lắng nghe kết nối và không nhận task mới.
+2. Hủy ngay các task đang chạy, dọn cây process do server khởi tạo; không đợi task tự hoàn thành.
+3. Đóng MCP handler, cho kết nối đang có tối đa 3 giây để drain sau khi cleanup; sau đó đóng cưỡng bức socket còn lại.
+4. In `[bridge] Stopped` khi thành công. Không rollback file đã sửa. Xem diff trước lần chạy tiếp theo.
+
+Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Không tự xóa lock hoặc kill process Antigravity khác. Force kill server/đóng terminal/OS crash không bảo đảm cleanup: chưa có Windows Job Object. Sau crash, kiểm tra process và `.bridge-state/owner.json` trước khi xử lý lock; PID cũ có thể đã tái sử dụng.
+
+Giới hạn mặc định: task 300s, tối đa 900s; output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON tối đa 24000 ký tự cho command line Windows; HTTP body tối đa 128 KiB. Status không cung cấp phần trăm tiến độ; JSON cuối thường chỉ tới khi agy kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
+
+## 7. Bảo mật và vận hành
+
+Chỉ listen `127.0.0.1`, không có tùy chọn bind LAN trong bản này. Host phải đúng địa chỉ/cổng thực tế; Origin khác bị từ chối; không bật CORS cho website ngoài. Mọi endpoint yêu cầu bearer token, so sánh constant time khi cùng độ dài. Không log HTTP headers/body hoặc token. Không mở HTTP không xác thực.
+
+Allowlist kiểm tra realpath, boundary, traversal và symlink/junction trong cây (trần 200000 entries). **Đây không phải OS sandbox**: không ngăn tiến trình khác thay link sau preflight, không kiểm soát đầy đủ hành động agent từ settings/hooks/MCP hiện có. Token file và credentials ngoài workspace vẫn cần quyền OS phù hợp. Lọc output nhận diện secret đã biết và mẫu phổ biến, không nhận ra mọi bí mật. Không đưa secret vào task.
+
+Để truy cập từ máy khác, cần thiết kế riêng TLS, xác thực/authorization và cách ly workspace. Bản này không triển khai remote/LAN; không đổi bind sang 0.0.0.0 hoặc mở firewall để né lỗi cổng.
+
+Các lỗi thường gặp:
+
+- `Port is already in use`: chọn PORT khác, cập nhật URL cả hai client.
+- 401: token thiếu/sai; nạp lại env rồi khởi động lại client. Không thử OAuth login với bridge này.
+- 403: sai Host/Origin; dùng đúng URL 127.0.0.1 được in ra, không đi qua proxy/alias.
+- Connection refused/fetch failed: server tắt hoặc sai cổng; chạy check, bật lại server và reconnect.
+- CLI unsupported: kiểm tra agy path/version/help; environment vẫn có thể hoạt động dù không giao được task.
+- `denied_actions`: Antigravity chưa cho phép thao tác; xin quyền tối thiểu, không bỏ permission check.
+- Workspace bị từ chối: kiểm tra allowlist, link/junction hoặc số entry vượt trần.
+- Timeout/canceled/output limit: có thể có diff dở dang; review trước khi giao task tiếp theo.
+
+## 8. Kiểm thử và cấu trúc source
+
+```powershell
+npm test
+npm run test:live
+```
+
+`npm test`: unit/integration dùng executable giả, không gọi AI. Bao gồm lifecycle/security cũ và HTTP startup/port conflict/PORT tùy chọn/auth/Host/Origin/body limit/kết nối hai protocol era/client reconnect/task completion/cancel/server shutdown.
+
+`test:live`: **gọi AI thật**, dùng cached login/quota. Test harness khởi động HTTP server riêng với PORT=0 và scratch workspace, dùng official SDK HTTP client, ngắt/kết nối lại khi task chạy, xác minh `BRIDGE_SMOKE_OK` và sentinel không đổi, hủy task thật, rồi kiểm tra shutdown có task đang chạy. Trên Windows, harness phát event SIGINT vào đúng handler của entry point qua IPC riêng của harness; kiểm tra Ctrl+C terminal được ghi riêng trong báo cáo. Đây không phải yêu cầu client production tự khởi động server. Kết quả ở `test-results/live-report.json`; phần sửa file thật vẫn bị chặn đến khi cấp quyền.
+
+`src/index.ts`: HTTP entry; `src/http.ts`: listener/auth/routing/shutdown; `src/runtime.ts`: CLI và TaskManager dùng chung; `src/tools`: tool; `src/antigravity`: child process; `src/security`: validation/workspace/token/redaction; `src/tasks`: lifecycle/lock/output; `scripts/check.ts`: kiểm tra server đang chạy; `scripts/live.ts`: AI smoke test. Không thay cấu hình Codex/Claude Code/Antigravity trong test.
