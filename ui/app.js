@@ -1,7 +1,7 @@
 'use strict';
 // All dynamic text is inserted with textContent. Model output is untrusted and must never reach innerHTML.
 const STORE = 'antigravity-bridge-ui-session';
-const STATUS = {running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', timeout: 'Quá hạn', canceled: 'Đã hủy', unsupported: 'Không hỗ trợ'};
+const STATUS = {queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', timeout: 'Quá hạn', canceled: 'Đã hủy', unsupported: 'Không hỗ trợ'};
 const NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
   tasks: 'M4 6h16M4 12h16M4 18h10',
@@ -9,12 +9,18 @@ const ICONS = {
   out: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'
 };
 
+const FILTERS = [['all', 'Tất cả'], ['active', 'Đang chạy / chờ'], ['completed', 'Hoàn tất'], ['problem', 'Lỗi'], ['canceled', 'Đã hủy']];
+const MATCH = {
+  all: () => true, active: t => t.status === 'running' || t.status === 'queued', completed: t => t.status === 'completed',
+  problem: t => t.status === 'failed' || t.status === 'timeout' || t.status === 'unsupported', canceled: t => t.status === 'canceled'
+};
 const state = {
   session: read(), overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
-  open: new Set(), connected: true, loginError: '', busy: false, toast: ''
+  open: new Set(), connected: true, loginError: '', busy: false, toast: '', q: '', filter: 'all'
 };
 let timer = null;
-let lastSignature = '';
+let regions = null; // live containers of the mounted shell; patched in place so selection and scroll survive polling
+const signatures = {};
 
 function read() { try { return localStorage.getItem(STORE); } catch { return null; } }
 function write(value) { try { value ? localStorage.setItem(STORE, value) : localStorage.removeItem(STORE); } catch { /* storage unavailable */ } }
@@ -52,6 +58,13 @@ function duration(ms) {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}p ${s % 60}s`;
 }
+function agoEl(iso, className) { return h('span', {class: className, 'data-ago': iso, title: clock(iso), text: ago(iso)}); }
+function elapsedEl(iso, prefix = '') { return h('span', {'data-elapsed': iso, 'data-prefix': prefix, text: prefix + duration(Date.now() - Date.parse(iso))}); }
+function tick() {
+  for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(el.getAttribute('data-ago'));
+  for (const el of document.querySelectorAll('[data-elapsed]')) el.textContent = (el.getAttribute('data-prefix') || '') + duration(Date.now() - Date.parse(el.getAttribute('data-elapsed')));
+}
+setInterval(tick, 1000);
 function bytes(n) { return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`; }
 function clock(iso) { return iso ? new Date(iso).toLocaleString('vi-VN') : '—'; }
 function folder(path) { return path.split(/[\\/]/).filter(Boolean).pop() || path; }
@@ -68,9 +81,12 @@ async function api(path, options = {}) {
   return data;
 }
 function signedOut() { state.session = null; write(null); state.overview = null; state.detail = null; stop(); render(); }
+let toastTimer = null;
 function notify(message) {
-  state.toast = message; render();
-  setTimeout(() => { if (state.toast === message) { state.toast = ''; render(); } }, 2600);
+  document.querySelector('.toast')?.remove();
+  const el = h('div', {class: 'toast', role: 'status', text: message});
+  document.body.append(el);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
 async function login(token) {
@@ -78,39 +94,36 @@ async function login(token) {
   try {
     const {session} = await api('login', {method: 'POST', body: {token}});
     state.session = session; write(session); state.busy = false;
-    await refresh(); start();
+    await refresh(true); start();
   } catch (error) { state.busy = false; state.loginError = error.message; render(); }
 }
 
-async function refresh() {
+async function refresh(force) {
   try {
     state.overview = await api('overview'); state.connected = true;
     const tasks = state.overview.tasks;
     if (!state.selected || !tasks.some(task => task.task_id === state.selected)) state.selected = tasks[0]?.task_id ?? null;
-    if (state.selected) state.detail = await api(`tasks/${state.selected}`).catch(() => null); else state.detail = null;
+    state.detail = state.selected ? await api(`tasks/${state.selected}`).catch(() => null) : null;
   } catch (error) { if (state.session) state.connected = false; }
-  // Skip identical frames so text selection and scroll position survive polling.
-  const view = state.overview && {...state.overview, server: {...state.overview.server, uptime_seconds: 0}};
-  const signature = JSON.stringify([view, state.detail, state.connected]);
-  if (signature !== lastSignature) { lastSignature = signature; render(); }
+  if (force || !regions) render(); else patch();
 }
 function start() { stop(); schedule(); }
 function stop() { if (timer) clearTimeout(timer); timer = null; }
 function schedule() {
   if (!state.session) return;
-  const running = state.overview?.tasks.some(task => task.status === 'running');
-  timer = setTimeout(async () => { if (!document.hidden) await refresh(); schedule(); }, running ? 1500 : 4000);
+  const busy = state.overview?.tasks.some(task => task.status === 'running' || task.status === 'queued');
+  timer = setTimeout(async () => { if (!document.hidden) await refresh(); schedule(); }, busy ? 1500 : 4000);
 }
 
 async function select(id) {
-  state.selected = id; state.detail = null; render();
-  state.detail = await api(`tasks/${id}`).catch(() => null); render();
+  state.selected = id; state.detail = null; patch();
+  state.detail = await api(`tasks/${id}`).catch(() => null); patch();
   // One-column layout: bring the conversation into view after choosing from the list.
   if (window.matchMedia('(max-width: 1100px)').matches) document.querySelector('.detail')?.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 async function cancel(id) {
   if (!confirm('Hủy task này? Các thay đổi file dở dang sẽ được giữ lại, không tự hoàn tác.')) return;
-  try { state.detail = await api(`tasks/${id}/cancel`, {method: 'POST'}); notify('Đã hủy task'); await refresh(); } catch (error) { notify(error.message); }
+  try { await api(`tasks/${id}/cancel`, {method: 'POST'}); notify('Đã hủy task'); await refresh(); } catch (error) { notify(error.message); }
 }
 async function setDelegation(enabled) {
   try { await api('delegation', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật giao việc cho Antigravity' : 'Đã tắt giao việc cho Antigravity'); await refresh(); }
@@ -136,33 +149,42 @@ function loginView() {
 }
 
 function stat(label, value, sub) {
-  return h('div', {class: 'card stat'}, h('div', {class: 'label', text: label}), h('div', {class: 'value'}, value), sub ? h('div', {class: 'sub', text: sub}) : null);
+  return h('div', {class: 'card stat'}, h('div', {class: 'label', text: label}), h('div', {class: 'value'}, value), sub ? h('div', {class: 'sub'}, sub) : null);
 }
 function switchControl(enabled, controllable, label) {
   return h('button', {class: 'switch', role: 'switch', 'aria-checked': String(enabled), 'aria-label': label, disabled: !controllable, onclick: () => setDelegation(!enabled)});
 }
 
 function statsView(o) {
-  const running = o.tasks.filter(task => task.status === 'running').length;
+  const count = status => o.tasks.filter(task => task.status === status).length;
   const ready = o.cli.bridge_status === 'ready';
   const accepting = o.server.accepting_tasks;
-  return h('section', {class: 'stats', 'aria-label': 'Tổng quan'},
-    stat('Bridge', h('span', {class: `pill ${ready && accepting ? 'ok' : 'bad'}`, text: !accepting ? 'Đang tắt' : ready ? 'Sẵn sàng' : 'CLI chưa hỗ trợ'}), `Hoạt động ${duration(o.server.uptime_seconds * 1000)}`),
+  const queued = count('queued');
+  return [
+    stat('Bridge', h('span', {class: `pill ${ready && accepting ? 'ok' : 'bad'}`, text: !accepting ? 'Đang tắt' : ready ? 'Sẵn sàng' : 'CLI chưa hỗ trợ'}), h('span', {'data-elapsed': o.server.started_at, 'data-prefix': 'Hoạt động ', text: `Hoạt động ${duration(Date.now() - Date.parse(o.server.started_at))}`})),
     stat('Antigravity CLI', o.cli.version && o.cli.version !== 'unavailable' ? `agy ${o.cli.version}` : 'Không tìm thấy', o.cli.execution_method || 'Chưa thể giao task'),
     stat('Giao việc', [switchControl(o.delegation.enabled, o.delegation.controllable, 'Cho phép giao việc cho Antigravity'),
       h('span', {class: `pill ${o.delegation.enabled ? 'ok' : 'warn'}`, text: o.delegation.enabled ? 'Đang bật' : 'Đã tắt'})], o.delegation.reason || 'Codex / Claude được phép giao task'),
-    stat('Task', `${running} đang chạy`, `${o.tasks.length} task gần đây`));
+    stat('Task', `${count('running')} đang chạy`, `${queued ? `${queued} đang chờ · ` : ''}${o.tasks.length} task gần đây`)
+  ];
 }
 
-function taskList(o) {
-  if (!o.tasks.length) return h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có task nào'}), 'Khi Codex hoặc Claude giao việc cho Antigravity, task sẽ hiện ở đây.');
-  return h('div', {class: 'task-list', role: 'list'}, o.tasks.map(task => h('button', {
-    class: 'task-item', role: 'listitem', 'aria-current': String(task.task_id === state.selected), onclick: () => select(task.task_id)
-  }, h('div', {class: 'row'}, pill(task.status), h('span', {class: 'meta', title: clock(task.started_at), text: ago(task.started_at)})),
+function filteredTasks(o) {
+  const q = state.q.trim().toLowerCase();
+  return o.tasks.filter(task => MATCH[state.filter](task) && (!q || [task.title, task.workspace, task.task_id].some(v => (v || '').toLowerCase().includes(q))));
+}
+function taskItems(o) {
+  if (!o.tasks.length) return [h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có task nào'}), 'Khi Codex hoặc Claude giao việc cho Antigravity, task sẽ hiện ở đây.')];
+  const tasks = filteredTasks(o);
+  if (!tasks.length) return [h('div', {class: 'empty'}, h('strong', {text: 'Không có task phù hợp'}), 'Thử đổi bộ lọc hoặc từ khóa.')];
+  return tasks.map(task => h('button', {
+    class: 'task-item', role: 'listitem', 'data-task': task.task_id, 'aria-current': String(task.task_id === state.selected), onclick: () => select(task.task_id)
+  }, h('div', {class: 'row'}, pill(task.status), agoEl(task.queued_at || task.started_at, 'meta')),
     h('div', {class: 'title', text: task.title || '(không có nội dung yêu cầu)'}),
     h('div', {class: 'meta mono', text: `${folder(task.workspace)} · ${task.task_id.slice(0, 8)}`}),
-    h('div', {class: 'meta', text: task.status === 'running' ? 'Đang xử lý…' : `Mất ${duration(task.duration_ms)}`}))));
+    h('div', {class: 'meta'}, task.status === 'running' ? elapsedEl(task.started_at, 'Đang chạy ') : task.status === 'queued' ? 'Đang xếp hàng…' : `Mất ${duration(task.duration_ms)}`)));
 }
+function taskCount(o) { return `${filteredTasks(o).length}/${o.tasks.length} task`; }
 
 function details(key, title, ...body) {
   const el = h('details', {open: state.open.has(key)}, h('summary', {text: title}), h('div', {class: 'body'}, body));
@@ -170,30 +192,42 @@ function details(key, title, ...body) {
   return el;
 }
 
+function logTabs(task) {
+  return ['stdout', 'stderr'].map(tab => h('button', {
+    'aria-pressed': String(state.logTab === tab), onclick: () => { state.logTab = tab; signatures.detail = null; patch(); }, text: `${tab} (${bytes(task[`${tab}_bytes`])})`
+  }));
+}
+function logText(task) { return task[state.logTab] || '(trống)'; }
+
 function detailView() {
   const d = state.detail;
   if (!d) return h('div', {class: 'card empty'}, state.selected ? 'Đang tải…' : 'Chọn một task để xem nội dung trao đổi.');
   const {task, request, prompt} = d;
   const running = task.status === 'running';
+  const queued = task.status === 'queued';
   const head = h('div', {class: 'detail-head'},
     h('div', {}, h('h2', {}, 'Task ', h('span', {class: 'mono', text: task.task_id.slice(0, 8)}), pill(task.status)),
       h('div', {class: 'muted mono', text: task.workspace})),
-    running ? h('button', {class: 'btn danger small', onclick: () => cancel(task.task_id), text: 'Hủy task'}) : null);
+    running || queued ? h('button', {class: 'btn danger small', onclick: () => cancel(task.task_id), text: 'Hủy task'}) : null);
   const facts = h('dl', {class: 'kv'},
-    ...[['Bắt đầu', clock(task.started_at)], ['Kết thúc', clock(task.ended_at)], ['Thời gian', duration(task.duration_ms)],
+    ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
+      ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
       ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
-      ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {text: String(v)}))));
+      ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
+  const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
   const asked = h('div', {class: 'msg out'},
-    h('div', {class: 'msg-head'}, 'Tech Lead (Codex / Claude)', h('span', {class: 'arrow', text: '→'}), 'Antigravity'),
+    h('div', {class: 'msg-head'}, asker, h('span', {class: 'arrow', text: '→'}), 'Antigravity'),
     request ? [h('p', {class: 'text', text: request.task}),
       h('div', {}, h('div', {class: 'msg-head', text: 'Tiêu chí nghiệm thu'}), h('ul', {class: 'crit'}, request.acceptance_criteria.map(c => h('li', {text: c})))),
       request.context ? details('context', 'Ngữ cảnh kèm theo', h('p', {class: 'text', text: request.context})) : null]
       : h('p', {class: 'muted', text: 'Nội dung yêu cầu không còn (task được ghi trước khi giao diện lưu yêu cầu).'}));
 
   let answer;
-  if (running) {
-    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), `Antigravity đang xử lý… đã chạy ${duration(Date.now() - Date.parse(task.started_at))}`);
+  if (queued) {
+    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), 'Đang xếp hàng, chờ task trước kết thúc. Bridge chỉ chạy một task tại một thời điểm.');
+  } else if (running) {
+    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), elapsedEl(task.started_at, 'Antigravity đang xử lý… đã chạy '));
   } else {
     answer = [
       task.final_response ? h('p', {class: 'text', text: task.final_response}) : h('p', {class: 'muted', text: 'Antigravity không trả về phản hồi cuối.'}),
@@ -203,23 +237,30 @@ function detailView() {
       task.status === 'completed' ? h('div', {class: 'callout warn', text: 'CLI báo hoàn tất nhưng chưa được xác minh. Tech Lead cần xem diff thực tế và chạy test.'}) : null
     ];
   }
-  const replied = h('div', {class: 'msg in'}, h('div', {class: 'msg-head'}, 'Antigravity', h('span', {class: 'arrow', text: '→'}), 'Tech Lead (Codex / Claude)'), answer);
+  const replied = h('div', {class: 'msg in'}, h('div', {class: 'msg-head'}, 'Antigravity', h('span', {class: 'arrow', text: '→'}), asker), answer);
 
   const logs = h('div', {},
-    h('div', {class: 'tabs', role: 'group', 'aria-label': 'Loại log'}, ['stdout', 'stderr'].map(tab => h('button', {
-      'aria-pressed': String(state.logTab === tab), onclick: () => { state.logTab = tab; render(); }, text: `${tab} (${bytes(task[`${tab}_bytes`])})`
-    }))),
-    task[`${state.logTab}_truncated`] ? h('div', {class: 'callout warn', text: 'Log đã bị cắt vì vượt giới hạn.'}) : null,
-    h('pre', {class: 'log', text: task[state.logTab] || '(trống)'}));
+    h('div', {class: 'tabs', id: 'log-tabs', role: 'group', 'aria-label': 'Loại log'}, logTabs(task)),
+    h('div', {id: 'log-note'}, task[`${state.logTab}_truncated`] ? h('div', {class: 'callout warn', text: 'Log đã bị cắt vì vượt giới hạn.'}) : null),
+    h('pre', {class: 'log', id: 'log-pre', text: logText(task)}));
 
   return h('article', {class: 'card detail'}, head, facts, h('div', {class: 'convo'}, asked, replied),
     details('logs', 'Log của tiến trình agy', logs),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);
 }
 
-function tasksView(o) {
-  return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Task'}), h('p', {text: 'Nội dung trao đổi giữa Tech Lead và Antigravity.'}))),
-    statsView(o), h('div', {class: 'tasks'}, taskList(o), detailView())];
+/** Output changes while a task runs; update the log in place (unless the user is selecting text in it) instead of rebuilding the conversation. */
+function patchLogs() {
+  const task = state.detail?.task;
+  const pre = document.getElementById('log-pre');
+  if (!task || !pre) return;
+  const tabs = document.getElementById('log-tabs');
+  if (tabs) tabs.replaceChildren(...logTabs(task));
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && pre.contains(selection.anchorNode)) return;
+  const text = logText(task);
+  if (pre.textContent !== text) { const pinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8; pre.textContent = text; if (pinned) pre.scrollTop = pre.scrollHeight; }
+  document.getElementById('log-note')?.replaceChildren(...(task[`${state.logTab}_truncated`] ? [h('div', {class: 'callout warn', text: 'Log đã bị cắt vì vượt giới hạn.'})] : []));
 }
 
 function row(label, value) { return h('div', {}, h('dt', {text: label}), h('dd', {text: String(value)})); }
@@ -231,7 +272,7 @@ function settingsView(o) {
         h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: delegation.enabled ? 'Đang bật' : 'Đã tắt'}),
           h('span', {class: 'muted', text: delegation.enabled ? 'Codex / Claude có thể giao task mới.' : `Task mới bị từ chối. ${delegation.reason || ''}`})),
           switchControl(delegation.enabled, delegation.controllable, 'Cho phép giao việc cho Antigravity')),
-        delegation.controllable ? h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy không bị dừng. Có hiệu lực ngay, không cần khởi động lại.'})
+        delegation.controllable ? h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy hoặc đang chờ không bị dừng, nhưng task đang chờ sẽ bị hủy khi đến lượt. Có hiệu lực ngay, không cần khởi động lại.'})
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
@@ -247,35 +288,89 @@ function settingsView(o) {
           : h('div', {class: 'callout warn', text: 'Chưa có workspace nào. Thêm đường dẫn tuyệt đối vào config/workspaces.json rồi khởi động lại.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Giới hạn'}),
         h('dl', {class: 'rows'}, row('Timeout tối đa', `${o.limits.max_timeout_seconds ?? '—'}s`), row('Output mỗi luồng', bytes(o.limits.max_output_bytes_per_stream ?? 0)),
-          row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task song song', o.limits.concurrent_tasks ?? '—'))),
+          row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task chạy cùng lúc', o.limits.concurrent_tasks ?? '—'),
+          row('Hàng đợi tối đa', o.limits.max_queued_tasks ?? '—'))),
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Lưu ý khi dùng'}), h('ul', {class: 'list'}, o.limitations.map(item => h('li', {text: item})))),
       h('section', {class: 'card panel wide'}, h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Phiên đăng nhập'}), h('span', {class: 'muted', text: 'Hết hạn sau 8 giờ hoặc khi server khởi động lại.'})),
         h('button', {class: 'btn', onclick: async () => { await api('logout', {method: 'POST'}).catch(() => {}); signedOut(); }, text: 'Đăng xuất'}))))];
 }
 
-function shell() {
-  const o = state.overview;
+/* ---------- Shell: built once per view change, then patched region by region ---------- */
+function mount() {
   const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view === 'tasks' ? 'tasks' : 'settings'), label);
+  const live = h('div', {class: 'live', role: 'status'});
   const side = h('aside', {class: 'side'}, h('div', {class: 'brand'}, h('img', {src: '/ui/favicon.svg', alt: ''}), h('span', {text: 'Antigravity Bridge'})),
     h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('settings', 'Cài đặt')),
-    h('div', {class: 'side-foot'}, h('div', {class: 'live', role: 'status'}, h('span', {class: `dot${state.connected ? '' : ' off'}`}), h('span', {text: state.connected ? 'Đang cập nhật trực tiếp' : 'Mất kết nối tới bridge'}))));
-  const body = !o ? h('div', {class: 'card empty'}, state.connected ? 'Đang tải…' : 'Không kết nối được tới bridge. Kiểm tra server còn chạy.')
-    : state.view === 'tasks' ? tasksView(o) : settingsView(o);
-  return h('div', {class: 'shell'}, side, h('main', {class: 'main'}, !state.connected && o ? h('div', {class: 'banner', role: 'alert', text: 'Mất kết nối tới bridge. Dữ liệu bên dưới có thể đã cũ.'}) : null, body));
+    h('div', {class: 'side-foot'}, live));
+  const banner = h('div', {'aria-live': 'polite'});
+  const main = h('main', {class: 'main'}, banner);
+  regions = {live, banner, main, view: state.view};
+  if (state.view === 'tasks') {
+    regions.stats = h('section', {class: 'stats', 'aria-label': 'Tổng quan'});
+    regions.list = h('div', {class: 'task-list', role: 'list'});
+    regions.detail = h('div', {class: 'detail-slot'});
+    regions.count = h('span', {class: 'muted', 'aria-live': 'polite'});
+    const search = h('input', {type: 'search', class: 'search', placeholder: 'Tìm theo nội dung, thư mục, id…', 'aria-label': 'Tìm task', value: state.q,
+      oninput: event => { state.q = event.target.value; patch(); }});
+    const chips = h('div', {class: 'filters', role: 'group', 'aria-label': 'Lọc theo trạng thái'}, FILTERS.map(([key, label]) => h('button', {
+      class: 'chip-btn', 'data-filter': key, 'aria-pressed': String(state.filter === key), onclick: () => { state.filter = key; for (const b of chips.children) b.setAttribute('aria-pressed', String(b.dataset.filter === key)); patch(); }, text: label})));
+    main.append(h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Task'}), h('p', {text: 'Nội dung trao đổi giữa Tech Lead và Antigravity.'}))),
+      regions.stats, h('div', {class: 'tasks'}, h('div', {class: 'list-col'}, h('div', {class: 'list-tools'}, search, chips, regions.count), regions.list), regions.detail));
+  } else {
+    regions.settings = h('div', {});
+    main.append(regions.settings);
+  }
+  for (const key of Object.keys(signatures)) delete signatures[key];
+  return h('div', {class: 'shell'}, side, main);
+}
+
+function setRegion(name, key, build) {
+  const el = regions[name];
+  if (!el || signatures[name] === key) return;
+  signatures[name] = key;
+  const nodes = build();
+  el.replaceChildren(...(Array.isArray(nodes) ? nodes : [nodes]));
+}
+// Volatile fields (live durations, log text) are left out so they never force a rebuild; tickers and patchLogs() keep them fresh.
+const stable = task => task.status === 'running' || task.status === 'queued' ? {...task, duration_ms: 0} : task;
+function patch() {
+  const o = state.overview;
+  if (!regions || !o) return;
+  setRegion('live', String(state.connected), () => [h('span', {class: `dot${state.connected ? '' : ' off'}`}), h('span', {text: state.connected ? 'Đang cập nhật trực tiếp' : 'Mất kết nối tới bridge'})]);
+  setRegion('banner', JSON.stringify([state.connected, o.warnings]), () => [
+    !state.connected ? h('div', {class: 'banner', role: 'alert', text: 'Mất kết nối tới bridge. Dữ liệu bên dưới có thể đã cũ.'}) : null,
+    ...(o.warnings || []).map(text => h('div', {class: 'banner warn', role: 'alert', text}))].filter(Boolean));
+  if (regions.view === 'tasks') {
+    setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
+    setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));
+    regions.count.textContent = taskCount(o);
+    const d = state.detail;
+    const detailKey = JSON.stringify([state.selected, state.logTab, d && {...d, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const rebuilt = signatures.detail !== detailKey;
+    setRegion('detail', detailKey, () => detailView());
+    if (!rebuilt) patchLogs();
+  } else {
+    setRegion('settings', JSON.stringify([o.cli, o.delegation, o.limits, o.allowed_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+  }
+  tick();
 }
 
 function render() {
   const root = document.getElementById('root');
-  const scrolls = [...root.querySelectorAll('.task-list, pre.log')].map(el => el.scrollTop);
+  if (!state.session) {
+    const typed = root.querySelector('#token')?.value;
+    regions = null; root.replaceChildren(loginView());
+    const input = root.querySelector('#token');
+    if (typed) input.value = typed;
+    input.focus(); return;
+  }
   const page = window.scrollY;
-  const tokenValue = root.querySelector('#token')?.value;
-  root.replaceChildren(state.session ? shell() : loginView());
-  const token = root.querySelector('#token');
-  if (token) { if (tokenValue) token.value = tokenValue; token.focus(); }
-  [...root.querySelectorAll('.task-list, pre.log')].forEach((el, i) => { if (scrolls[i] != null) el.scrollTop = scrolls[i]; });
+  root.replaceChildren(mount());
+  if (!state.overview) {
+    regions.main.append(h('div', {class: 'card empty'}, state.connected ? 'Đang tải…' : 'Không kết nối được tới bridge. Kiểm tra server còn chạy.'));
+  } else patch();
   window.scrollTo(0, page);
-  if (state.toast) root.append(h('div', {class: 'toast', role: 'status', text: state.toast}));
 }
 
 render();
-if (state.session) refresh().then(start);
+if (state.session) refresh(true).then(start);

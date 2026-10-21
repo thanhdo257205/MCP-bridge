@@ -154,6 +154,7 @@ test('stale execution lock is diagnosed but never removed',async()=>{
   await writeFile(path.join(state,'owner.json'),JSON.stringify({server_pid:2147483646,started_at:'2020-01-01T00:00:00Z'}));
   await assert.rejects(manager.delegate(input),/may be stale.*remove the directory/);
   assert.ok((await readdir(state)).includes('execution.lock'));
+  assert.match(String(await manager.lockDiagnostic()),/may be stale/);
 });
 test('delegation kill switch: env, invalid value and switch file refuse new tasks but keep existing ones usable',async()=>{
   const {manager,input,root}=await setup('hang');
@@ -217,4 +218,21 @@ test('queue: a task queued during a crash is restored as failed and never starte
   const lost=reloaded.get(queued.task_id);assert.equal(lost.status,'failed');assert.match(String(lost.error),/never started/);
   assert.match(String(reloaded.get(running.task_id).error),/restarted while this task was running/);
   await manager.shutdown();
+});
+test('lock diagnostic names a still-running recorded agy pid but never touches it or the lock',async()=>{
+  const {manager,input,root}=await setup();
+  const state=path.join(root,'state');await mkdir(path.join(state,'execution.lock'),{recursive:true});
+  const survivor=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
+  try {
+    await writeFile(path.join(state,'owner.json'),JSON.stringify({server_pid:2147483646,child_pid:survivor.pid,task_id:'t-1',started_at:'2020-01-01T00:00:00Z'}));
+    const note=String(await manager.lockDiagnostic());
+    assert.match(note,new RegExp(`agy pid ${survivor.pid} is still running \\(task t-1\\)`));assert.match(note,/orphan|reused the pid/);
+    await assert.rejects(manager.delegate(input),/still running/);
+    assert.equal(isAlive(survivor.pid!),true);assert.ok((await readdir(state)).includes('execution.lock'));
+  } finally {survivor.kill();}
+});
+test('no lock means no diagnostic; the running bridge own lock is not a warning',async()=>{
+  const {manager,input}=await setup('hang');
+  assert.equal(await manager.lockDiagnostic(),null);
+  await manager.delegate(input);assert.equal(await manager.lockDiagnostic(),null);await manager.shutdown();
 });

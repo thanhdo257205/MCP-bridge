@@ -11,6 +11,8 @@ export async function createRuntime() {
   const manager = new TaskManager(config, {...cli, stateDirectory: path.join(projectRoot, '.bridge-state')});
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
+  const lockWarning = await manager.lockDiagnostic();
+  if (lockWarning) console.error(`[bridge] WARNING: ${lockWarning}`);
   const environment = {
     cli_version: cli.version, executable: cli.executable,
     bridge_status: cli.supported ? 'ready' : 'unsupported',

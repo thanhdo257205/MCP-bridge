@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -33,6 +34,11 @@ interface Entry {
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string) => ChildProcess;
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 export class TaskManager {
@@ -334,19 +340,27 @@ export class TaskManager {
     for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), done: Promise.resolve()});
     return keep.length;
   }
-  // Diagnose only; never remove a lock automatically.
+  // Diagnose only; never remove a lock automatically, never kill anything. PIDs can be reused, so wording stays cautious.
   private async describeLock(lock: string): Promise<string> {
     const base = 'Execution lock exists. Another bridge may be running; inspect before removing a stale lock';
-    try {
-      const owner = JSON.parse(await readFile(path.join(this.runtime.stateDirectory, 'owner.json'), 'utf8')) as {server_pid?: number; started_at?: string};
-      const pid = Number(owner.server_pid);
-      if (!Number.isInteger(pid) || pid <= 0) return base;
-      try { process.kill(pid, 0); return `${base} (owner server pid ${pid} is running)`; }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EPERM') return `${base} (owner server pid ${pid} is running)`;
-        return `${base}. The recorded owner server pid ${pid} (started ${owner.started_at ?? 'unknown'}) is not running, so the lock may be stale. Confirm no agy process is still running, then remove the directory ${lock} manually`;
-      }
-    } catch { return base; }
+    let owner: {server_pid?: number; child_pid?: number | null; task_id?: string; started_at?: string};
+    try { owner = JSON.parse(await readFile(path.join(this.runtime.stateDirectory, 'owner.json'), 'utf8')); } catch { return base; }
+    const serverPid = Number(owner.server_pid);
+    if (!Number.isInteger(serverPid) || serverPid <= 0) return base;
+    if (pidAlive(serverPid)) return `${base} (owner server pid ${serverPid} is running)`;
+    const childPid = Number(owner.child_pid);
+    const child = Number.isInteger(childPid) && childPid > 0
+      ? (pidAlive(childPid) ? ` A process with the recorded agy pid ${childPid} is still running (task ${owner.task_id ?? 'unknown'}); it may be an orphan of the crashed server (or an unrelated process that reused the pid) and may still be editing the workspace.`
+        : ` The recorded agy pid ${childPid} is no longer running.`)
+      : '';
+    return `${base}. The recorded owner server pid ${serverPid} (started ${owner.started_at ?? 'unknown'}) is not running, so the lock may be stale.${child} Confirm no agy process is still running, then remove the directory ${lock} manually`;
+  }
+  /** Null when there is nothing to report; otherwise why an execution lock left by another bridge needs the owner's attention. */
+  async lockDiagnostic(): Promise<string | null> {
+    const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
+    if (!existsSync(lock)) return null;
+    if (this.busy) return null;
+    return this.describeLock(lock);
   }
   overview() {
     return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({

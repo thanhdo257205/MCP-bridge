@@ -43,7 +43,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return value as Record<string, unknown>;
 }
 
-function overview(ctx: UiContext) {
+async function overview(ctx: UiContext) {
   const env = ctx.environment as Record<string, unknown>;
   const state = delegationState(ctx.manager.stateDirectory);
   return {
@@ -57,6 +57,8 @@ function overview(ctx: UiContext) {
     },
     limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
+    queue: ctx.manager.overview().queue,
+    warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     tasks: ctx.manager.list()
   };
 }
@@ -90,7 +92,7 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     }
     if (!ctx.sessions.valid(sessionId)) { json(res, 401, {error: 'Sign in with the bridge token'}); return true; }
     if (pathname === '/ui/api/logout' && method === 'POST') { ctx.sessions.destroy(sessionId); json(res, 200, {ok: true}); return true; }
-    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, overview(ctx)); return true; }
+    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
     const cancel = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/cancel$`));
