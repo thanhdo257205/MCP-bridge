@@ -24,5 +24,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const root = new URL('../../', import.meta.url);
   const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8')) as Manifest;
   const lock = JSON.parse(await readFile(new URL('package-lock.json', root), 'utf8')) as Lock;
-  console.log(`Release validated: agy-mcp-bridge@${validateRelease(process.env.GITHUB_REF, manifest, lock)}`);
+  console.log(`Release validated: agy-mcp-bridge@${validateRelease(process.argv[2] ?? process.env.GITHUB_REF, manifest, lock)}`);
 }

@@ -1,15 +1,11 @@
-name: Publish to npm
+name: CI and npm release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: read
-
-concurrency:
-  group: npm-release
-  cancel-in-progress: false
 
 jobs:
   test:
@@ -26,33 +22,40 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require a commit on main
-        shell: bash
-        run: git merge-base --is-ancestor HEAD origin/main
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
       - run: npm ci
-      - run: npm run build
-      - name: Validate release tag and manifests
-        run: node dist/scripts/release-check.js
       - run: npm test
+      - name: Smoke-test the packed CLI
+        shell: bash
+        run: |
+          npm pack --silent
+          PREFIX="$RUNNER_TEMP/global"
+          npm install -g --prefix "$PREFIX" ./agy-mcp-bridge-*.tgz
+          ROOT="$(npm root -g --prefix "$PREFIX")"
+          node "$ROOT/agy-mcp-bridge/dist/src/cli.js" --version
+          BRIDGE_HOME="$RUNNER_TEMP/bridge-home" node "$ROOT/agy-mcp-bridge/dist/src/cli.js" config
+          BRIDGE_HOME="$RUNNER_TEMP/bridge-home" node "$ROOT/agy-mcp-bridge/dist/src/cli.js" delegation status
 
   publish:
     needs: test
+    if: github.repository == 'thanhdo257205/MCP-bridge' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: npm-release
+      cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: false
-      - name: Require a commit on main
-        run: git merge-base --is-ancestor HEAD origin/main
+          # GITHUB_TOKEN pushes do not trigger another push workflow.
+          persist-credentials: true
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -60,8 +63,29 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run build
+      - name: Prepare latest tested commit (or resume its release)
+        id: prepare
+        run: node dist/scripts/auto-release.js prepare
+      - name: Increase patch version
+        if: steps.prepare.outputs.bump == 'true'
+        run: npm version patch --no-git-tag-version
+      - name: Commit version and atomically push main and tag
+        if: steps.prepare.outputs.ready == 'true'
+        id: release
+        run: node dist/scripts/auto-release.js finalize
       - name: Validate release tag and manifests
-        run: node dist/scripts/release-check.js
+        if: steps.prepare.outputs.ready == 'true'
+        env:
+          RELEASE_REF: ${{ steps.release.outputs.release_ref }}
+        run: node dist/scripts/release-check.js "$RELEASE_REF"
+      - name: Check whether this version was already published
+        if: steps.prepare.outputs.ready == 'true'
+        id: registry
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node dist/scripts/auto-release.js registry
       # prepublishOnly runs the full test suite again on the publishing runner.
       # Authentication uses OIDC; do not add NODE_AUTH_TOKEN or an npm secret.
-      - run: npm publish --access public
+      - name: Publish using npm Trusted Publishing
+        if: steps.registry.outputs.publish_needed == 'true'
+        run: npm publish --access public

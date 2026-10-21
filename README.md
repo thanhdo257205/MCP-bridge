@@ -20,7 +20,7 @@ Các lệnh khác: `agy-mcp-bridge check | setup codex|claude|both | delegation 
 
 **Cập nhật:** khi chạy bản cài từ npm, bridge hỏi npm registry bản mới nhất (tối đa một lần mỗi ngày, timeout 3 giây, lỗi mạng thì bỏ qua). Có bản mới và đang ở terminal tương tác thì hỏi `Update now with "npm install -g agy-mcp-bridge@X"? [y/N]`: chọn `y` mới chạy `npm install -g`, rồi thoát để bạn chạy lại bản mới; chọn `n` thì chạy tiếp và hỏi lại sau 24 giờ. Không bao giờ tự cập nhật âm thầm; ngoài terminal tương tác chỉ in thông báo; khi server đang chạy, giao diện web và log hiện thông báo kèm lệnh `agy-mcp-bridge update` (lệnh này, hoặc `update --check` để chỉ xem). Tắt hoàn toàn bằng `--no-update-check` hoặc `BRIDGE_NO_UPDATE_CHECK=1`; tự tắt khi `CI=true` và với bản clone từ git. Lần kiểm tra chỉ gửi một request GET tên gói tới registry (lộ địa chỉ IP như mọi lần `npm view`).
 
-**Phát hành tự động lên npm:** workflow [publish.yml](.github/workflows/publish.yml) chạy khi push tag `vX.Y.Z`. Workflow yêu cầu commit thuộc lịch sử `main`, tag khớp version trong `package.json` và `package-lock.json`, rồi chạy test trên Windows/Linux với Node 20/22 trước khi publish bằng Node 24. Test thất bại sẽ chặn publish. Chỉ hỗ trợ bản stable; tag prerelease bị từ chối để không thay nhãn `latest` bằng bản thử nghiệm. Push code lên `main` mà chưa tạo tag sẽ chỉ chạy CI.
+**Phát hành tự động lên npm:** mỗi lần push hoặc merge vào `main`, workflow [publish.yml](.github/workflows/publish.yml) chạy CI trên Windows/Linux với Node 20/22, gồm test và cài thử gói đã pack. Khi toàn bộ CI đạt, job release dùng Node 24 chạy `npm version patch --no-git-tag-version`, commit hai manifest, tạo tag `vX.Y.Z`, push commit/tag và chạy `npm publish`. Bạn không cần tự tăng version, tạo tag hay đăng nhập npm cho mỗi lần phát hành. Nếu CI lỗi thì không tăng version và không publish. PR chỉ chạy [CI](.github/workflows/ci.yml), chưa phát hành.
 
 Cấu hình một lần tại [Settings của gói npm](https://www.npmjs.com/package/agy-mcp-bridge/access), phần **Trusted Publisher**, chọn GitHub Actions:
 
@@ -30,21 +30,23 @@ Cấu hình một lần tại [Settings của gói npm](https://www.npmjs.com/pa
 - Environment name: để trống
 - Cho phép **npm publish** để phát hành trực tiếp.
 
-Workflow dùng OIDC với `id-token: write` riêng cho job publish, không cần npm token trong GitHub Secrets hay OTP mỗi lần chạy. npm tự tạo provenance cho bản phát hành. Xem [tài liệu Trusted Publishing](https://docs.npmjs.com/trusted-publishers/). Việc cấp quyền lần đầu có thể yêu cầu 2FA; không đưa token hoặc OTP vào repo.
+Workflow dùng OIDC với `id-token: write` riêng cho job publish, không cần npm token trong GitHub Secrets hay OTP mỗi lần chạy. Job này cần `contents: write` để ghi commit tăng version và tag bằng `GITHUB_TOKEN`; push do token này tạo không kích hoạt workflow push khác, nên không tạo vòng lặp phát hành. npm tự tạo provenance cho bản phát hành. Xem [tài liệu Trusted Publishing](https://docs.npmjs.com/trusted-publishers/). Việc cấp quyền lần đầu có thể yêu cầu 2FA; không đưa token hoặc OTP vào repo.
 
-Từ bản clone sạch trên nhánh `main`, sau khi code đã merge:
+Từ bản clone trên nhánh `main`, chỉ cần commit và push code như bình thường:
 
 ```bash
 git checkout main
 git pull --ff-only
 npm ci
-npm version patch              # hoặc minor/major: tăng version, cập nhật lockfile, tạo commit và tag
-git push origin main --follow-tags
+# Chỉnh sửa code, git add và git commit như bình thường
+git push origin main
 ```
 
-Theo dõi [Actions → Publish to npm](https://github.com/thanhdo257205/MCP-bridge/actions/workflows/publish.yml). Nếu `main` được bảo vệ, hãy tăng version bằng `npm version patch --no-git-tag-version` trong PR; sau khi merge, pull `main`, tạo tag `git tag -a vX.Y.Z -m "Release vX.Y.Z"` trên commit đó rồi `git push origin vX.Y.Z`.
+Theo dõi [Actions → CI and npm release](https://github.com/thanhdo257205/MCP-bridge/actions/workflows/publish.yml). Ví dụ `0.1.1` sẽ thành `0.1.2` sau một lần push có CI đạt. Sau phát hành, chạy `git pull --ff-only` để lấy commit version do bot tạo về máy trước khi sửa tiếp; nếu có commit local riêng thì rebase theo quy trình Git của bạn. Nếu `main` được bảo vệ và từ chối bot push, job sẽ lỗi trước khi publish; cần một chính sách cho phép bot ghi commit release, không tự động tắt bảo vệ nhánh.
 
-Mỗi lần phát hành phải dùng version mới; npm không cho ghi đè version đã đăng. Không chạy `npm publish` thủ công cùng lúc với workflow. Nếu test hoặc xác thực OIDC lỗi trước khi publish, sửa nguyên nhân rồi chạy lại job trên cùng tag; nếu bản đó đã xuất hiện trên registry, không publish lại. Kiểm tra kết quả bằng `npm view agy-mcp-bridge version`; registry có thể mất vài phút để xử lý. Gói sử dụng giấy phép MIT và chứa file `LICENSE`.
+Các job release được tuần tự hóa. Khi nhiều push liên tiếp, CI cũ không phát hành nếu `main` đã có code mới hơn; bản mới nhất chỉ phát hành sau khi CI của chính nó đạt. Push commit version và tag là một giao dịch atomic, không force-push: nếu ai đó push code trong lúc tăng version, giao dịch bị từ chối và không publish code chưa kiểm thử. Chỉ hai manifest được đổi version sau CI; mọi thay đổi code khác đều bị chặn.
+
+Nếu publish lỗi sau khi commit version/tag đã được push, dùng **Re-run failed jobs** của lượt workflow đó: job nhận diện commit release từ cùng SHA nguồn, giữ nguyên version và tag thay vì tăng lần nữa. Registry đã có version đó thì bỏ qua publish; lỗi mạng/registry khác không bị coi nhầm là chưa đăng. Nếu đã có push mới hơn, lượt cũ bị bỏ qua và CI mới phụ trách phát hành. Không chạy `npm publish` hoặc tự tạo tag release song song; trigger theo tag cũ đã được thay bằng trigger theo `main`. Kiểm tra kết quả bằng `npm view agy-mcp-bridge version`; registry có thể mất vài phút để xử lý. Gói sử dụng giấy phép MIT và chứa file `LICENSE`.
 
 ## Quickstart
 
