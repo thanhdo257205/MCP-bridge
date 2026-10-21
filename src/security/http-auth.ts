@@ -22,8 +22,8 @@ export function validateToken(value: string): string {
   if (!/^[A-Za-z0-9_-]{32,256}$/.test(value)) throw new Error('BRIDGE_HTTP_TOKEN must contain 32-256 URL-safe characters');
   return value;
 }
-export async function loadHttpToken(stateDirectory: string): Promise<{token: string; source: string}> {
-  if (process.env.BRIDGE_HTTP_TOKEN !== undefined) return {token: validateToken(process.env.BRIDGE_HTTP_TOKEN), source: 'BRIDGE_HTTP_TOKEN'};
+export async function loadHttpToken(stateDirectory: string): Promise<{token: string; source: string; created: boolean}> {
+  if (process.env.BRIDGE_HTTP_TOKEN !== undefined) return {token: validateToken(process.env.BRIDGE_HTTP_TOKEN), source: 'BRIDGE_HTTP_TOKEN', created: false};
   await mkdir(stateDirectory, {recursive: true});
   const filename = path.join(stateDirectory, 'http-token');
   let created=false;
@@ -32,7 +32,7 @@ export async function loadHttpToken(stateDirectory: string): Promise<{token: str
   if ((await lstat(filename)).isSymbolicLink()) throw new Error('HTTP token file must not be a symlink');
   const token=validateToken((await readFile(filename,'utf8')).trim());
   if(created)await hardenWindowsToken(filename);
-  return {token, source: filename};
+  return {token, source: filename, created};
 }
 export function tokensEqual(supplied: string, token: string): boolean {
   const a = Buffer.from(supplied);

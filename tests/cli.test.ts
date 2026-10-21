@@ -211,3 +211,7 @@ test('cli: a non-interactive start never offers or installs the skill', async ()
 test('cli: --no-skill-prompt is accepted and listed in help', () => {
   assert.match(run(['help']).stdout, /--no-skill-prompt/);
 });
+
+test('cli: --show-token is listed in help and accepted by start', () => {
+  assert.match(run(['help']).stdout, /--show-token/);
+});

@@ -5,10 +5,11 @@ import { checkForUpdate, knownUpdate, readPackageInfo, setKnownUpdate, updateChe
 import { createRuntime } from './runtime.js';
 import { configuredPort, startHttpBridge } from './http.js';
 import { loadHttpToken } from './security/http-auth.js';
+import { shouldShowToken, tokenNotice } from './login-notice.js';
 
 async function main() {
   const port = configuredPort();
-  const {token, source} = await loadHttpToken(paths.stateDirectory);
+  const {token, source, created} = await loadHttpToken(paths.stateDirectory);
   const {manager, environment} = await createRuntime();
   const bridge = await startHttpBridge({manager, environment, token, port});
   console.error(`[bridge] HTTP server: ${bridge.baseUrl}`);
@@ -16,6 +17,11 @@ async function main() {
   console.error(`[bridge] Health check: ${bridge.healthUrl} (bearer authentication required)`);
   console.error(`[bridge] Token source: ${source} (value never logged)`);
   console.error(`[bridge] Web UI: ${bridge.baseUrl}/ui  (open in a browser on this machine; sign in with the token from the source above)`);
+  const interactive = Boolean(process.stderr.isTTY);
+  if (shouldShowToken({created, requested: process.env.BRIDGE_SHOW_TOKEN === '1', fromFile: source !== 'BRIDGE_HTTP_TOKEN', interactive})) {
+    const color = interactive && process.stderr.hasColors?.() === true && !process.env.NO_COLOR;
+    for (const line of tokenNotice(token, {color, firstRun: created})) console.error(line);
+  } else if (process.env.BRIDGE_SHOW_TOKEN === '1') console.error('[bridge] --show-token ignored: it only prints in an interactive terminal, and not when the token comes from BRIDGE_HTTP_TOKEN');
   console.error('[bridge] Client disconnected: tasks continue. Ctrl+C: cancel owned tasks and stop server.');
   if (process.env.BRIDGE_OPEN_BROWSER === '1') {
     const url = `${bridge.baseUrl}/ui`;

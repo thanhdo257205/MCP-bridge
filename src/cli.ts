@@ -28,6 +28,8 @@ Usage: ${BIN} [command] [options]
       --workspace <dir>     Also allow <dir> (for example .) for this run only; repeatable, not saved
       --open                Open the web UI in your default browser once the server is up
       --no-update-check     Do not ask the npm registry whether a newer version exists
+      --show-token          Print the web UI login token in this terminal (interactive terminals only; it is also shown once
+                            automatically the first time the token is created)
       --no-skill-prompt     Do not offer to install the Codex / Claude Code skill on first run
   check                   Call antigravity_environment on the running server
   workspaces list|add <dir>|remove <dir>
@@ -88,6 +90,7 @@ async function start(args: string[]) {
     else if (args[i] === '--workspace' && args[i + 1] !== undefined) directories.push(path.resolve(args[++i]));
     else if (args[i] === '--no-update-check') process.env.BRIDGE_NO_UPDATE_CHECK = '1';
     else if (args[i] === '--no-skill-prompt') process.env.BRIDGE_NO_SKILL_PROMPT = '1';
+    else if (args[i] === '--show-token') process.env.BRIDGE_SHOW_TOKEN = '1';
     else if (args[i] === '--open') process.env.BRIDGE_OPEN_BROWSER = '1';
     else if (args[i] === '--port' || args[i] === '--workspace') throw new Error(`${args[i]} needs a value (see ${BIN} help)`);
     else throw new Error(`Unknown option for start: ${args[i]} (see ${BIN} help)`);

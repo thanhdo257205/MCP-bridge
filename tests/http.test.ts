@@ -93,7 +93,7 @@ test('server shutdown stops acceptance, cleans child tree, closes listener and g
 test('token persists, secrets are not in startup log, server stays alive with stdin closed, PORT conflict is explicit',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'agy-http-cli-'));
   const saved=process.env.BRIDGE_HTTP_TOKEN;delete process.env.BRIDGE_HTTP_TOKEN;
-  try {const one=await loadHttpToken(root);const two=await loadHttpToken(root);assert.equal(one.token,two.token);assert.equal(await readFile(path.join(root,'http-token'),'utf8'),one.token);}finally{if(saved!==undefined)process.env.BRIDGE_HTTP_TOKEN=saved;}
+  try {const one=await loadHttpToken(root);const two=await loadHttpToken(root);assert.equal(one.token,two.token);assert.equal(one.created,true);assert.equal(two.created,false);assert.equal(await readFile(path.join(root,'http-token'),'utf8'),one.token);}finally{if(saved!==undefined)process.env.BRIDGE_HTTP_TOKEN=saved;}
   const config=path.join(root,'config.json');await writeFile(config,JSON.stringify({allowed_workspaces:[],executable:path.join(root,'missing.exe')}));
   const child=spawn(process.execPath,['dist/src/index.js'],{cwd:project,windowsHide:true,env:{...process.env,PORT:'0',BRIDGE_HTTP_TOKEN:token,ANTIGRAVITY_BRIDGE_CONFIG:config},stdio:['ignore','pipe','pipe']});
   let log='';child.stderr.on('data',b=>log+=b);child.stdout.on('data',b=>log+=b);
