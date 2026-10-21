@@ -119,6 +119,13 @@ export async function isGlobalInstall(root = paths.packageRoot): Promise<boolean
 }
 export const installArgs = (name: string, version: string) => ['install', '-g', `${name}@${version}`];
 
+/** Shown after a failed global install. On Windows the usual cause is something still holding the install folder (EBUSY). */
+export function installFailureHint(name: string, platform: NodeJS.Platform = process.platform): string | null {
+  return platform === 'win32'
+    ? `If npm reported EBUSY, something still uses the install folder: stop every running ${name} (Ctrl+C) and close Codex / Claude Code sessions connected to it, then run "npm install -g ${name}@latest" in a new terminal. Restarting the computer also releases the folder.`
+    : null;
+}
+
 /** Runs `npm install -g <name>@<version>` in the foreground. Only called after the owner agreed or typed the update command. */
 export function runGlobalInstall(name: string, version: string): number {
   if (!VERSION.test(version)) throw new Error('Refusing to install an unexpected version string');

@@ -13,7 +13,7 @@ import { configuredPort } from './http.js';
 import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
-  checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
+  checkForUpdate, compareVersions, fetchLatest, installFailureHint, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
 } from './update.js';
 
 const BIN = 'agy-mcp-bridge';
@@ -81,6 +81,8 @@ async function offerUpdate(info: UpdateInfo) {
     process.exit(0);
   }
   console.error(`[update] Installation failed (see npm output above). Starting the current version ${info.current}.`);
+  const hint = installFailureHint(pkg.name);
+  if (hint) console.error(`[update] ${hint}`);
 }
 
 async function start(args: string[]) {
@@ -131,6 +133,7 @@ async function updateCommand(args: string[]) {
   }
   const status = runGlobalInstall(pkg.name, latest);
   if (status === 0) console.log(`Updated to ${latest}. Restart a running server (Ctrl+C, then ${BIN}) to use it.`);
+  else { const hint = installFailureHint(pkg.name); if (hint) console.error(hint); }
   process.exitCode = status;
 }
 
