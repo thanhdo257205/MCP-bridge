@@ -52,7 +52,7 @@ Call `antigravity_delegate` with only these fields:
 }
 ```
 
-Replace example paths and symbols with the user's actual authorized project. `context` and `timeout_seconds` are optional. Respect the server's timeout maximum (at most 900s). Input limits: task 16000 characters, workspace 4096, context 12000, 1–30 nonempty criteria up to 2000 each, combined serialized task data 24000 characters. No extra fields or NUL characters. Shorten oversized context rather than assuming it was accepted.
+Replace example paths and symbols with the user's actual authorized project. `context` and `timeout_seconds` are optional. Respect the server's timeout maximum (`limits.max_timeout_seconds` in the environment, 900s unless the owner raised it, never above 3600s). Give a larger task a larger `timeout_seconds`, but prefer splitting it: one goal and a few files per task finish sooner and leave a clear result if the deadline is hit. Input limits: task 16000 characters, workspace 4096, context 12000, 1–30 nonempty criteria up to 2000 each, combined serialized task data 24000 characters. No extra fields or NUL characters. Shorten oversized context rather than assuming it was accepted.
 
 `isError=true` is a tool error even if the client rendered text. Prefer `structuredContent`; otherwise parse the JSON text once. Do not treat the successful MCP transport as task completion. Save the returned `task_id`, workspace and criteria immediately; `running` means accepted, not implemented.
 
@@ -68,7 +68,7 @@ Client disconnect does not cancel an accepted task. Reconnect to the same runnin
 |---|---|
 | `completed` | Review actual diff and tests against the original criteria; CLI completion alone is insufficient. |
 | `failed` | Read error, exit_code, stderr, denied_actions and truncation; fix the specific cause before any retry. |
-| `timeout` / `canceled` | Check process_running and inspect partial file changes. Do not assume rollback or resend blindly. |
+| `timeout` / `canceled` | Check process_running and inspect partial file changes. Do not assume rollback or resend blindly. Files edited before the deadline stay on disk, so never treat a timed-out task as "nothing changed". If the work is unfinished, review what was done and submit a new, narrower task for only the remaining part, with what is already finished as context; do not resubmit the same task unchanged. |
 | `unsupported` | Report CLI capability/version diagnostics. Do not invent a fallback or change the version gate. |
 | `queued` | Accepted but not started: no process, no file changes yet. Keep waiting with `antigravity_task_wait` (the deadline starts when it begins running). It is refused/canceled if delegation is switched off before its turn. Cancel it through the cancel tool only if the user cancels. |
 | Still `running` | Continue within the deadline; cancel your own task through the cancel tool if the user cancels or it is demonstrably stuck. |

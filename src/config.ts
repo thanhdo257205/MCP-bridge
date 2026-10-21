@@ -6,8 +6,8 @@ import * as z from 'zod/v4';
 const schema = z.object({
   allowed_workspaces: z.array(z.string()),
   executable: z.string().min(1).default('agy'),
-  max_timeout_seconds: z.number().int().min(1).max(900).default(900),
-  default_timeout_seconds: z.number().int().min(1).max(900).default(300),
+  max_timeout_seconds: z.number().int().min(1).max(3600).default(900),
+  default_timeout_seconds: z.number().int().min(1).max(3600).default(300),
   max_output_bytes: z.number().int().min(1024).max(1048576).default(262144),
   max_retained_tasks: z.number().int().min(1).max(200).default(50),
   max_queued_tasks: z.number().int().min(0).max(20).default(3),
