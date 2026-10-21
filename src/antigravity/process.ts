@@ -28,8 +28,17 @@ export function startProcess(executable: string, args: string[], cwd: string): C
   return child;
 }
 
-// The child handle must still be live. Never select processes by executable name.
-export async function terminateOwned(child: ChildProcess): Promise<void> {
+const terminations = new WeakMap<ChildProcess, Promise<void>>();
+export const TERMINATION_GRACE_MS = 8000;
+// Never select processes by name. Concurrent timeout/cancel requests share one termination.
+export function terminateOwned(child: ChildProcess): Promise<void> {
+  const existing = terminations.get(child);
+  if (existing) return existing;
+  const result = terminate(child);
+  terminations.set(child, result);
+  return result;
+}
+async function terminate(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
     const systemRoot = process.env.SystemRoot ?? 'C:/Windows';
@@ -39,8 +48,15 @@ export async function terminateOwned(child: ChildProcess): Promise<void> {
       killer.once('close', code => code === 0 || child.exitCode !== null || child.signalCode !== null ? resolve() : reject(new Error('Owned process tree could not be terminated')));
     });
   } else {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    const signal = (value: NodeJS.Signals | 0) => {
+      try { process.kill(-child.pid!, value); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+    };
+    if (!signal('SIGTERM')) return;
+    const deadline = Date.now() + TERMINATION_GRACE_MS;
+    while (signal(0)) {
+      if (Date.now() >= deadline) { signal('SIGKILL'); return; }
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
 }

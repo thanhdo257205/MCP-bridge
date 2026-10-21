@@ -173,7 +173,7 @@ export class TaskManager {
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
-      const timer = setTimeout(() => requestStop('timeout'), timeout * 1000);
+      const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
       child.once('error', () => { task.error = 'Could not start Antigravity process'; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
       void writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, child_pid: child.pid ?? null, task_id: task.task_id, started_at: task.started_at})).catch(() => {});
@@ -181,6 +181,8 @@ export class TaskManager {
         if (finalized) return;
         finalized = true;
         clearTimeout(timer);
+        // A POSIX child can exit while its group is still being given its graceful shutdown window.
+        if (entry.stop) await terminateOwned(child).catch(() => { task.error = 'Owned process group cleanup failed'; });
         task.exit_code = code; task.signal = signal; task.process_running = false;
         task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
         task.status = entry.stop ?? 'failed';
