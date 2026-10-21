@@ -156,7 +156,19 @@ export class TaskManager {
       task.pid = child.pid ?? null;
       task.process_running = Boolean(child.pid);
       const started = Date.now();
-      const buffers = {stdout: Buffer.alloc(0), stderr: Buffer.alloc(0)};
+      const buffers = {stdout: [] as Buffer[], stderr: [] as Buffer[]};
+      const lengths={stdout:0,stderr:0};
+      const dirty={stdout:false,stderr:false};
+      const refreshed={stdout:0,stderr:0};
+      const flushOutput=(force=false)=>{
+        const now=Date.now();
+        for(const stream of ['stdout','stderr'] as const){
+          if(dirty[stream]&&(force||now-refreshed[stream]>=1000)){
+            task[stream]=redact(Buffer.concat(buffers[stream],lengths[stream]).toString('utf8'));
+            dirty[stream]=false;refreshed[stream]=now;
+          }
+        }
+      };
       let finalized = false;
       const requestStop = (reason: Status) => {
         if (!entry.stop) entry.stop = reason;
@@ -164,18 +176,22 @@ export class TaskManager {
       };
       const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
         task[`${stream}_bytes`] += chunk.length;
-        const available = this.config.max_output_bytes - buffers[stream].length;
-        if (available > 0) buffers[stream] = Buffer.concat([buffers[stream], chunk.subarray(0, available)]);
+        const available = this.config.max_output_bytes - lengths[stream];
+        if (available > 0) {
+          const retained=Buffer.from(chunk.subarray(0,available));
+          buffers[stream].push(retained);lengths[stream]+=retained.length;dirty[stream]=true;
+        }
         if (chunk.length > available) {
           task[`${stream}_truncated`] = true;
           task.error = 'Output limit exceeded; incomplete output cannot establish success';
           requestStop('failed');
         }
-        task[stream] = redact(buffers[stream].toString('utf8'));
+        flushOutput();
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
       const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
+      const outputTimer=setInterval(()=>flushOutput(),1000);
       child.once('error', () => { task.error = 'Could not start Antigravity process'; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
       void writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, child_pid: child.pid ?? null, task_id: task.task_id, started_at: task.started_at})).catch(() => {});
@@ -183,6 +199,10 @@ export class TaskManager {
         if (finalized) return;
         finalized = true;
         clearTimeout(timer);
+        clearInterval(outputTimer);
+        flushOutput(true);
+        const rawStdout=Buffer.concat(buffers.stdout,lengths.stdout).toString('utf8');
+        const rawStderr=Buffer.concat(buffers.stderr,lengths.stderr).toString('utf8');
         // A POSIX child can exit while its group is still being given its graceful shutdown window.
         if (entry.stop) await terminateOwned(child).catch(() => { task.error = 'Owned process group cleanup failed'; });
         task.exit_code = code; task.signal = signal; task.process_running = false;
@@ -190,16 +210,16 @@ export class TaskManager {
         task.status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
-            const result = finalEnvelope(buffers.stdout.toString('utf8'),this.config.prompt_transport);
+            const result = finalEnvelope(rawStdout,this.config.prompt_transport);
             task.cli_status = typeof result.status === 'string' ? result.status : null;
             task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
             if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
               const value = item as Record<string, unknown> | null;
               return {action: redact(String(value?.action ?? 'unknown')).slice(0,200), display_name: redact(String(value?.display_name ?? '')).slice(0,200)};
             });
-            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(buffers.stderr.toString('utf8'))) {
+            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(rawStderr)) {
               task.status = 'timeout'; task.error = 'CLI reported a print timeout (possibly with exit code 0)';
-            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(buffers.stderr.toString('utf8'))) {
+            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(rawStderr)) {
               task.error = 'Required tool permissions were denied; approve a scoped rule interactively before retrying';
             } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
               task.status = 'completed';
