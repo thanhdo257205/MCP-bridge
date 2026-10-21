@@ -4,13 +4,14 @@ import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '../config.js';
-import { delegateSchema, promptFor, type DelegateInput } from '../security/input.js';
+import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput } from '../security/input.js';
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
 import {helperDirectory} from '../paths.js';
+import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
@@ -32,7 +33,9 @@ export interface TaskRequest { task: string; acceptance_criteria: string[]; cont
   /** Model chosen in the web UI when the task was accepted (null: Antigravity's own default). Absent in older records. */
   model?: string | null;
   /** Antigravity permission level this task ran (or will run) with; absent in older records. */
-  permission?: PermissionLevel; }
+  permission?: PermissionLevel;
+  /** Reasoning effort the task was accepted with ('default': no --effort flag); absent in older records. */
+  effort?: EffortLevel; }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
   /** Resolves `done`; set for every task that goes through the CLI. */
@@ -103,7 +106,8 @@ export class TaskManager {
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
         client: meta.client ? redact(meta.client).slice(0, 100) : null,
         model: await readModel(this.runtime.stateDirectory),
-        permission: permissionState(this.runtime.stateDirectory).level
+        permission: permissionState(this.runtime.stateDirectory).level,
+        effort: readEffort(this.runtime.stateDirectory)
       }
     };
     this.entries.set(task.task_id, entry);
@@ -162,7 +166,7 @@ export class TaskManager {
       // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
       const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
       if(entry.request)entry.request.permission=permission;
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null,permissionFlags(permission));
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null,[...permissionFlags(permission),...effortFlags(entry.request?.effort??'default')]);
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
@@ -325,6 +329,8 @@ export class TaskManager {
     const lastOutputAt = this.entries.get(id)?.lastOutputAt;
     return {task, request, prompt, activity: {last_output_at: lastOutputAt ? new Date(lastOutputAt).toISOString() : null}};
   }
+  /** Longest single wait a client may ask for. */
+  get maxWaitSeconds(): number { return this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {
     const entry = this.entries.get(id);

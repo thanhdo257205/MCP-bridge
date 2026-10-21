@@ -12,7 +12,9 @@ const schema = z.object({
   max_retained_tasks: z.number().int().min(1).max(200).default(50),
   max_queued_tasks: z.number().int().min(0).max(20).default(3),
   extra_env_passthrough: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100).default([]),
-  prompt_transport:z.enum(['stdin','argv']).default('argv')
+  prompt_transport:z.enum(['stdin','argv']).default('argv'),
+  /** Longest single antigravity_task_wait call (default 55). Keep it below the MCP client's tool timeout. */
+  max_wait_seconds: z.number().int().min(5).max(3600).optional()
 }).strict();
 const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3, extra_env_passthrough: [], prompt_transport:'argv'};
 export type Config = z.infer<typeof schema>;

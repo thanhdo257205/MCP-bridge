@@ -125,7 +125,7 @@ test('status omits logs, wait tool returns running within its bound, output carr
   try {
     const id=String((await call(client,'antigravity_delegate',{task:'mock delayed response',workspace,acceptance_criteria:['mock']})).task_id);
     const status=await call(client,'antigravity_task_status',{task_id:id});assert.ok(!('final_response' in status));assert.ok(!('stdout' in status));
-    const result=await client.callTool({name:'antigravity_task_wait',arguments:{task_id:id,wait_seconds:26}});assert.equal(result.isError,true);
+    const result=await client.callTool({name:'antigravity_task_wait',arguments:{task_id:id,wait_seconds:3601}});assert.equal(result.isError,true,'above the hard cap is rejected');
     const waited=await call(client,'antigravity_task_wait',{task_id:id,wait_seconds:5});assert.equal(waited.status,'completed');
     assert.equal((await call(client,'antigravity_task_output',{task_id:id})).final_response,'delayed response');
   } finally {await client.close();await bridge.close();}
@@ -164,7 +164,7 @@ test('web UI: overview and task detail expose the request/response exchange but 
     await manager.wait(id);
     const detail=await (await ui(bridge,`tasks/${id}`,{},session)).json() as Record<string,any>;
     assert.equal(detail.task.final_response,'delayed response');
-    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20,client:'http-test 1',model:null,permission:'default'});
+    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20,client:'http-test 1',model:null,permission:'default',effort:'default'});
     assert.match(detail.prompt,/You are the Developer/);assert.match(detail.prompt,/Criterion two/);
     assert.ok(!JSON.stringify(detail).includes(token)&&!first.includes(token));
     assert.equal((await ui(bridge,'tasks/not-a-uuid',{},session)).status,404);
