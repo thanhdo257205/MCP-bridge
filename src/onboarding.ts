@@ -61,7 +61,7 @@ export async function offerSkillInstall(options: SkillOfferOptions): Promise<Ski
   if (!selected) return 'skipped';
 
   try {
-    for (const client of selected) for (const item of await (options.install ?? installSkill)({client, userHome: options.userHome})) log(`[skill] ${item.unchanged ? 'Already installed' : 'Installed'}: ${item.filename}`);
+    for (const client of selected) for (const item of await (options.install ?? installSkill)({client, userHome: options.userHome})) log(`[skill] ${item.unchanged ? 'Already installed' : item.updated ? 'Updated' : 'Installed'}: ${item.filename}`);
   } catch (error) {
     log(`[skill] Could not install: ${error instanceof Error ? error.message : 'unknown error'}. The server starts anyway; try again with: agy-mcp-bridge skill install --client both`);
     return 'failed';
@@ -69,4 +69,47 @@ export async function offerSkillInstall(options: SkillOfferOptions): Promise<Ski
   await remember(options.stateDirectory, {skill_offer: {answered_at: new Date((options.now ?? Date.now)()).toISOString(), choice: selected.join('+')}});
   log('[skill] Reopen the client if the skill does not appear. MCP connection and workspace permissions are configured separately (agy-mcp-bridge setup).');
   return 'installed';
+}
+
+export type SkillUpdateResult = 'skipped' | 'declined' | 'updated' | 'failed';
+
+/**
+ * Offers to replace an installed skill that is an older version this project shipped. A file that matches no shipped version is the
+ * owner's own edit and is neither offered nor touched. The answer, including "no", is remembered for the current packaged skill, so the
+ * question comes back only when a newer skill ships. Same rules as the install offer: interactive terminals only, never throws.
+ */
+export async function offerSkillUpdate(options: SkillOfferOptions): Promise<SkillUpdateResult> {
+  const log = options.log ?? ((message: string) => console.error(message));
+  if (!options.interactive || skillPromptDisabled(options.env)) return 'skipped';
+  let status;
+  try { status = await (options.status ?? skillStatus)({userHome: options.userHome}); } catch { return 'skipped'; }
+  const outdated = (['codex', 'claude'] as const).filter(client => status[client].state === 'outdated');
+  if (!outdated.length) return 'skipped';
+  const previous = (await readRecord(options.stateDirectory)).skill_update_offer as {hash?: unknown} | undefined;
+  if (previous?.hash === status.currentHash) return 'skipped';
+  const when = () => new Date((options.now ?? Date.now)()).toISOString();
+
+  log('[skill] A newer antigravity-bridge skill ships with this bridge. These installed copies are older packaged versions (not edited by you):');
+  for (const client of outdated) log(`[skill]   ${client}: ${status[client].file}`);
+  let yes = false;
+  for (let attempt = 0; attempt < 2 && !yes; attempt++) {
+    const answer = (await options.ask('Update them now? [y / N] ')).trim().toLowerCase();
+    if (answer === '' || answer === 'n' || answer === 'no') {
+      await remember(options.stateDirectory, {skill_update_offer: {hash: status.currentHash, answered_at: when(), choice: 'declined'}});
+      log('[skill] Not updated; this question returns only when a newer skill ships. Update any time with: agy-mcp-bridge skill install --client both --update');
+      return 'declined';
+    }
+    if (answer === 'y' || answer === 'yes') yes = true;
+    else if (attempt === 0) log('[skill] Please answer y or N.');
+  }
+  if (!yes) return 'skipped';
+  try {
+    for (const client of outdated) for (const item of await (options.install ?? installSkill)({client, userHome: options.userHome, update: true})) log(`[skill] ${item.unchanged ? 'Already up to date' : item.updated ? 'Updated' : 'Installed'}: ${item.filename}`);
+  } catch (error) {
+    log(`[skill] Could not update: ${error instanceof Error ? error.message : 'unknown error'}. The server starts anyway; try again with: agy-mcp-bridge skill install --client both --update`);
+    return 'failed';
+  }
+  await remember(options.stateDirectory, {skill_update_offer: {hash: status.currentHash, answered_at: when(), choice: 'updated'}});
+  log('[skill] Reopen the client so it reads the updated skill.');
+  return 'updated';
 }

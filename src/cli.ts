@@ -10,7 +10,7 @@ import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
 import { configuredPort } from './http.js';
-import { offerSkillInstall } from './onboarding.js';
+import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
   checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
@@ -34,8 +34,9 @@ Usage: ${BIN} [command] [options]
                           Manage the directories agents may edit (restart the server afterwards)
   delegation on|off|status
                           Switch delegation to Antigravity on or off immediately (no restart)
-  skill install --client codex|claude|both [--project <dir>]
-                          Install the antigravity-bridge skill for the chosen client (first run also offers it once)
+  skill install --client codex|claude|both [--project <dir>] [--update]
+                          Install the antigravity-bridge skill (first run also offers it once). --update replaces an older
+                          packaged copy; a file you edited yourself is never overwritten
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
                           Print the exact client configuration and token commands (changes nothing)
   config [--json]         Show where config, state and the token file live (never prints the token)
@@ -102,7 +103,11 @@ async function start(args: string[]) {
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if (interactive) {
     const rl = createInterface({input: process.stdin, output: process.stdout});
-    try { await offerSkillInstall({stateDirectory: paths.stateDirectory, interactive, ask: question => rl.question(question)}); }
+    try {
+      const offer = {stateDirectory: paths.stateDirectory, interactive, ask: (question: string) => rl.question(question)};
+      await offerSkillInstall(offer);
+      await offerSkillUpdate(offer);
+    }
     finally { rl.close(); }
   }
   await import('./index.js');
