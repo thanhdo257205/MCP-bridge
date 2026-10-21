@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export interface DelegationState { enabled: boolean; reason: string | null; }
@@ -15,4 +16,16 @@ export function delegationState(stateDirectory: string, env: NodeJS.ProcessEnv =
   if (value !== undefined && value !== '' && value !== 'on') return {enabled: false, reason: 'BRIDGE_DELEGATION has an invalid value (use on or off)'};
   if (existsSync(path.join(stateDirectory, SWITCH_FILE))) return {enabled: false, reason: 'delegation switched off with `npm run delegation -- off`'};
   return {enabled: true, reason: null};
+}
+
+/** The environment variable always wins: when it forces delegation off, the switch file cannot turn it back on. */
+export function delegationControllable(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.BRIDGE_DELEGATION?.trim().toLowerCase();
+  return value === undefined || value === '' || value === 'on';
+}
+export async function setDelegationSwitch(stateDirectory: string, enabled: boolean): Promise<void> {
+  const file = path.join(stateDirectory, SWITCH_FILE);
+  if (enabled) { await rm(file, {force: true}); return; }
+  await mkdir(stateDirectory, {recursive: true});
+  await writeFile(file, `${new Date().toISOString()}\n`);
 }

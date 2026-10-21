@@ -129,3 +129,68 @@ test('status omits logs, wait tool returns running within its bound, output carr
     assert.equal((await call(client,'antigravity_task_output',{task_id:id})).final_response,'delayed response');
   } finally {await client.close();await bridge.close();}
 });
+const ui = (bridge:{baseUrl:string},path:string,init:RequestInit={},session?:string)=>fetch(`${bridge.baseUrl}/ui/api/${path}`,{...init,headers:{...(init.body?{'Content-Type':'application/json'}:{}),...(session?{'X-Bridge-Session':session}:{}),...init.headers}});
+const signIn = async(bridge:{baseUrl:string})=>String(((await (await ui(bridge,'login',{method:'POST',body:JSON.stringify({token})})).json()) as {session:string}).session);
+test('web UI: static shell is locked down, API needs a session obtained with the bridge token',async()=>{
+  const {bridge}=await setup();
+  try {
+    const page=await fetch(`${bridge.baseUrl}/ui`);assert.equal(page.status,200);
+    const csp=page.headers.get('content-security-policy')??'';assert.match(csp,/script-src 'self'/);assert.doesNotMatch(csp,/unsafe-inline/);
+    assert.match(await page.text(),/Antigravity Bridge/);
+    for(const [asset,type] of [['app.js','javascript'],['app.css','css'],['favicon.svg','svg']]) {const r=await fetch(`${bridge.baseUrl}/ui/${asset}`);assert.equal(r.status,200);assert.match(r.headers.get('content-type')??'',new RegExp(type));await r.arrayBuffer();}
+    assert.equal((await fetch(`${bridge.baseUrl}/ui/missing`)).status,404);
+    assert.equal((await fetch(`${bridge.baseUrl}/`,{redirect:'manual'})).status,302);
+    assert.equal((await ui(bridge,'overview')).status,401);
+    assert.equal((await ui(bridge,'overview',{},'forged')).status,401);
+    assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token:'wrong'})})).status,401);
+    assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({})})).status,401);
+    // Cookies are never used, so a bearer token alone does not open the UI API and vice versa.
+    assert.equal((await fetch(`${bridge.baseUrl}/ui/api/overview`,{headers:{Authorization:`Bearer ${token}`}})).status,401);
+    assert.equal((await fetch(bridge.mcpUrl,{headers:{'X-Bridge-Session':await signIn(bridge)}})).status,401);
+    assert.equal((await fetch(`${bridge.baseUrl}/ui`,{headers:{Origin:'https://evil.example'}})).status,403);
+  } finally {await bridge.close();}
+});
+test('web UI: overview and task detail expose the request/response exchange but never the token',async()=>{
+  const {bridge,workspace,manager}=await setup('delayed');const client=await connect(bridge.mcpUrl);
+  try {
+    const session=await signIn(bridge);
+    const started=await call(client,'antigravity_delegate',{task:'Add <b>feature</b> X',workspace,acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20});
+    const id=String(started.task_id);
+    const first=await (await ui(bridge,'overview',{},session)).text();
+    const overview=JSON.parse(first);
+    assert.equal(overview.tasks[0].task_id,id);assert.equal(overview.tasks[0].status,'running');assert.equal(overview.tasks[0].title,'Add <b>feature</b> X');assert.ok(!('stdout' in overview.tasks[0]));
+    assert.equal(overview.delegation.enabled,true);assert.ok(Array.isArray(overview.allowed_workspaces));assert.equal(overview.server.mcp_endpoint,bridge.mcpUrl);
+    await manager.wait(id);
+    const detail=await (await ui(bridge,`tasks/${id}`,{},session)).json() as Record<string,any>;
+    assert.equal(detail.task.final_response,'delayed response');
+    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20});
+    assert.match(detail.prompt,/You are the Developer/);assert.match(detail.prompt,/Criterion two/);
+    assert.ok(!JSON.stringify(detail).includes(token)&&!first.includes(token));
+    assert.equal((await ui(bridge,'tasks/not-a-uuid',{},session)).status,404);
+    assert.equal((await ui(bridge,'tasks/00000000-0000-4000-8000-000000000000',{},session)).status,404);
+    // The MCP responses stay small: the request is not added to them.
+    assert.ok(!('request' in await call(client,'antigravity_task_output',{task_id:id})));
+    assert.equal((await ui(bridge,'logout',{method:'POST'},session)).status,200);
+    assert.equal((await ui(bridge,'overview',{},session)).status,401);
+  } finally {await client.close();await bridge.close();}
+});
+test('web UI: cancel and delegation switch work; env lock is respected; failed logins are throttled',async()=>{
+  const {bridge,workspace,manager}=await setup('hang');const client=await connect(bridge.mcpUrl);
+  const saved=process.env.BRIDGE_DELEGATION;delete process.env.BRIDGE_DELEGATION;
+  try {
+    const session=await signIn(bridge);
+    const id=String((await call(client,'antigravity_delegate',{task:'mock hang',workspace,acceptance_criteria:['mock']})).task_id);
+    const cancelled=await (await ui(bridge,`tasks/${id}/cancel`,{method:'POST'},session)).json() as Record<string,any>;assert.equal(cancelled.task.status,'canceled');
+    const off=await (await ui(bridge,'delegation',{method:'POST',body:JSON.stringify({enabled:false})},session)).json() as Record<string,any>;
+    assert.equal(off.enabled,false);
+    await assert.rejects(manager.delegate({task:'x',workspace,acceptance_criteria:['x']}),/disabled by the bridge owner/);
+    assert.equal((await ui(bridge,'delegation',{method:'POST',body:JSON.stringify({enabled:'yes'})},session)).status,400);
+    const on=await (await ui(bridge,'delegation',{method:'POST',body:JSON.stringify({enabled:true})},session)).json() as Record<string,any>;assert.equal(on.enabled,true);
+    process.env.BRIDGE_DELEGATION='off';
+    assert.equal((await ui(bridge,'delegation',{method:'POST',body:JSON.stringify({enabled:true})},session)).status,409);
+    delete process.env.BRIDGE_DELEGATION;
+    assert.equal((await ui(bridge,'overview',{},session).then(r=>r.json()) as Record<string,any>).delegation.controllable,true);
+    for(let i=0;i<10;i++) assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token:'bad'})})).status,401);
+    assert.equal((await ui(bridge,'login',{method:'POST',body:JSON.stringify({token})})).status,429);
+  } finally {if(saved===undefined)delete process.env.BRIDGE_DELEGATION;else process.env.BRIDGE_DELEGATION=saved;await client.close();await bridge.close();}
+});

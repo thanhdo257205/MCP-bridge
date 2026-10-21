@@ -21,7 +21,9 @@ export interface Task {
 }
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
-interface Entry { task: Task; child?: ChildProcess; done: Promise<void>; stop?: Status; }
+/** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
+export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; }
+interface Entry { task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status; }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string) => ChildProcess;
@@ -69,7 +71,10 @@ export class TaskManager {
         stdout_truncated: false, stderr_truncated: false,
         final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
       };
-      const entry: Entry = { task, done: Promise.resolve() };
+      const entry: Entry = { task, done: Promise.resolve(), request: {
+        task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
+        context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout
+      } };
       this.entries.set(task.task_id, entry);
       createdTaskId = task.task_id;
       if (this.runtime.supported) await this.persist(task);
@@ -166,6 +171,22 @@ export class TaskManager {
     const {stdout: _stdout, stderr: _stderr, final_response: _response, ...rest} = this.get(id);
     return rest;
   }
+  /** All retained tasks, newest first, without logs. */
+  list(): (TaskSummary & {title: string | null})[] {
+    return [...this.entries.entries()]
+      .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null}))
+      .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+  }
+  /** Full record for the web UI: the request, the exact prompt shape sent to the CLI (redacted), and the task with logs. */
+  detail(id: string) {
+    const task = this.get(id);
+    const request = this.entries.get(id)?.request ?? null;
+    const prompt = request ? promptFor({
+      task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
+      ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
+    }) : null;
+    return {task, request, prompt};
+  }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {
     const entry = this.entries.get(id);
@@ -202,6 +223,7 @@ export class TaskManager {
   }
   stopAccepting(): void { this.closing = true; }
 
+  get stateDirectory() { return this.runtime.stateDirectory; }
   private get tasksDirectory() { return path.join(this.runtime.stateDirectory, 'tasks'); }
   // Best effort: a failed write must never fail or hide a task.
   private async persist(task: Task) {
@@ -209,7 +231,7 @@ export class TaskManager {
     try {
       await mkdir(this.tasksDirectory, {recursive: true, mode: 0o700});
       const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify(task), {mode: 0o600});
+      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null}), {mode: 0o600});
       await rename(`${file}.tmp`, file);
     } catch { /* history is a convenience, not a correctness requirement */ }
   }
@@ -221,14 +243,21 @@ export class TaskManager {
     let names: string[];
     try { names = (await readdir(this.tasksDirectory)).filter(name => TASK_FILE.test(name)); } catch { return 0; }
     const loaded: Task[] = [];
+    const requests = new Map<string, TaskRequest>();
     for (const name of names) {
       try {
-        const task = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as Task;
+        const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null} & Task;
+        // Records written before requests were kept hold the bare task.
+        const task: Task = parsed.task ?? parsed;
+        const request = parsed.task ? parsed.request ?? undefined : undefined;
         if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
+        if (request) requests.set(task.task_id, request);
         if (task.status === 'running') {
           task.status = 'failed'; task.process_running = false; task.ended_at ??= new Date().toISOString();
           task.error = 'Bridge restarted while this task was running; its process was not recovered. Inspect the workspace for partial changes';
+          this.entries.set(task.task_id, {task, request, done: Promise.resolve()});
           await this.persist(task);
+          this.entries.delete(task.task_id);
         }
         loaded.push(task);
       } catch { /* skip unreadable or foreign files */ }
@@ -236,7 +265,7 @@ export class TaskManager {
     loaded.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
     const keep = loaded.slice(0, this.config.max_retained_tasks).reverse();
     for (const task of loaded.slice(this.config.max_retained_tasks)) await this.forget(task.task_id);
-    for (const task of keep) this.entries.set(task.task_id, {task, done: Promise.resolve()});
+    for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), done: Promise.resolve()});
     return keep.length;
   }
   // Diagnose only; never remove a lock automatically.

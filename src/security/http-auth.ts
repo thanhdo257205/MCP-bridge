@@ -15,9 +15,11 @@ export async function loadHttpToken(stateDirectory: string): Promise<{token: str
   if ((await lstat(filename)).isSymbolicLink()) throw new Error('HTTP token file must not be a symlink');
   return {token: validateToken((await readFile(filename, 'utf8')).trim()), source: filename};
 }
+export function tokensEqual(supplied: string, token: string): boolean {
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(token);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 export function authorized(header: string | undefined, token: string): boolean {
-  if (!header?.startsWith('Bearer ')) return false;
-  const supplied = Buffer.from(header.slice(7));
-  const expected = Buffer.from(token);
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  return Boolean(header?.startsWith('Bearer ')) && tokensEqual(header!.slice(7), token);
 }
