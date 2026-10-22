@@ -32,7 +32,7 @@ test('ramped waits: 1 minute, then 5, then the owner maximum, never above it',()
   assert.deepEqual([0,1,2].map(n=>rampedWaitSeconds(n,120)),[60,120,120]);
 });
 
-async function setup(options:{soft?:{enabled:boolean;limit_seconds:number}|null}={}){
+async function setup(options:{soft?:{enabled:boolean;limit_seconds:number}|null;window?:number}={}){
   const root=await mkdtemp(path.join(tmpdir(),'agy-soft-run-'));const workspace=path.join(root,'work');await mkdir(workspace);const state=path.join(root,'state');
   await mkdir(state,{recursive:true});
   // Written directly so a test can use a limit below what the web UI allows.
@@ -40,7 +40,7 @@ async function setup(options:{soft?:{enabled:boolean;limit_seconds:number}|null}
   const launched:string[][]=[];
   let scenario='active';let duration='2200';
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:4096,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
-    {executable:process.execPath,supported:true,stateDirectory:state,deadlineGraceMs:0,softCheckDelaysMs:[400,400,400],
+    {executable:process.execPath,supported:true,stateDirectory:state,deadlineGraceMs:0,softCheckDelaysMs:[options.window??400,options.window??400,options.window??400],
       launch:(args,cwd)=>{launched.push(args);const log=args[args.indexOf('--log-file')+1];return startProcess(process.execPath,[fixture,scenario,args.includes('--log-file')?log:'',duration],cwd);}});
   const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},token,port:0});
   return {manager,bridge,workspace,state,launched,use:(name:string,ms='2200')=>{scenario=name;duration=ms;}};
@@ -48,7 +48,8 @@ async function setup(options:{soft?:{enabled:boolean;limit_seconds:number}|null}
 const arg=(args:string[],flag:string)=>args[args.indexOf(flag)+1];
 
 test('soft deadline on: a task that keeps writing its log is extended past the deadline and completes',async()=>{
-  const {manager,bridge,workspace,launched}=await setup({soft:{enabled:true,limit_seconds:600}});
+  // A wide window: on a loaded Windows runner the log's modification time can lag the writes by more than the short window other tests use.
+  const {manager,bridge,workspace,launched}=await setup({soft:{enabled:true,limit_seconds:600},window:1500});
   try {
     const task=await manager.delegate({task:'slow but alive',workspace,acceptance_criteria:['x'],timeout_seconds:1});
     await manager.waitFor(task.task_id,15);
