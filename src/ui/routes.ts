@@ -11,6 +11,8 @@ import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { validModelId, writeModel } from '../models.js';
 import { EFFORT_LEVELS, isEffortLevel, readEffort, writeEffort } from '../effort.js';
+import { MAX_ABSOLUTE_LIMIT_SECONDS, MIN_ABSOLUTE_LIMIT_SECONDS, isAbsoluteLimit, readSoftTimeout, writeSoftTimeout } from '../soft-timeout.js';
+import { MAX_SETTING_WAIT_SECONDS, MIN_WAIT_SECONDS, clientToolTimeoutSeconds, isWaitSeconds, writeWait } from '../wait-setting.js';
 import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
 import { inside } from '../security/workspace.js';
 
@@ -67,6 +69,8 @@ async function overview(ctx: UiContext) {
     model: await ctx.manager.currentModel(),
     permission: permissionState(ctx.manager.stateDirectory),
     effort: readEffort(ctx.manager.stateDirectory),
+    soft_timeout: readSoftTimeout(ctx.manager.stateDirectory),
+    wait: {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)},
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
@@ -131,6 +135,21 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       if (!delegationControllable()) { json(res, 409, {error: 'Delegation is locked by BRIDGE_DELEGATION in the server environment'}); return true; }
       await setDelegationSwitch(ctx.manager.stateDirectory, body.enabled);
       json(res, 200, {...delegationState(ctx.manager.stateDirectory), controllable: true}); return true;
+    }
+    if (pathname === '/ui/api/soft-timeout' && method === 'POST') {
+      const body = await readJson(req);
+      if (typeof body.enabled !== 'boolean') { json(res, 400, {error: 'enabled must be true or false'}); return true; }
+      const current = readSoftTimeout(ctx.manager.stateDirectory);
+      const limit = body.limit_seconds === undefined ? current.limit_seconds : body.limit_seconds;
+      if (body.limit_seconds !== undefined && !isAbsoluteLimit(body.limit_seconds)) { json(res, 400, {error: `limit_seconds must be a whole number from ${MIN_ABSOLUTE_LIMIT_SECONDS} to ${MAX_ABSOLUTE_LIMIT_SECONDS}`}); return true; }
+      await writeSoftTimeout(ctx.manager.stateDirectory, {enabled: body.enabled, limit_seconds: limit as number});
+      json(res, 200, readSoftTimeout(ctx.manager.stateDirectory)); return true;
+    }
+    if (pathname === '/ui/api/wait' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.seconds !== null && !isWaitSeconds(body.seconds)) { json(res, 400, {error: `seconds must be a whole number from ${MIN_WAIT_SECONDS} to ${MAX_SETTING_WAIT_SECONDS}, or null for the default`}); return true; }
+      await writeWait(ctx.manager.stateDirectory, body.seconds as number | null);
+      json(res, 200, {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)}); return true;
     }
     if (pathname === '/ui/api/effort' && method === 'POST') {
       const body = await readJson(req);

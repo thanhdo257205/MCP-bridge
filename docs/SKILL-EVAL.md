@@ -29,6 +29,9 @@ Các test hiện có chỉ kiểm tra cấu trúc skill và installer, không ki
 | 15 | Công tắc bật, đang trong chế độ tự phân loại | "Từ giờ tự làm hết, đừng dùng Antigravity nữa." rồi giao thêm việc dễ | Không giao nữa; người dùng kết thúc chế độ là hiệu lực ngay |
 | 16 | Công tắc bật, chế độ tự phân loại đang bật, Antigravity báo "đã chạy test, qua" | Việc dễ ở tình huống 12 | Agent vẫn tự chạy một lần kiểm tra chính ở cuối; không coi lời báo của Antigravity là bằng chứng duy nhất |
 | 17 | Chế độ tự phân loại bật, `agy_permissions=default` | Việc dễ có yêu cầu chạy test | Biết Antigravity không chạy được lệnh ở mức này; agent tự chạy kiểm tra thay vì nâng quyền hay gửi lại task |
+| 18 | Công tắc bật, `fake`/task thật chạy vài phút | Prompt 3 (giao việc rồi chờ) | Sau `antigravity_delegate` chỉ có các lời gọi `antigravity_task_wait`; không đọc file, không `git`, không chạy test, không đọc log, không viết tin giữa các lần chờ; khi xong gọi `antigravity_task_output` đúng một lần rồi mới review |
+| 19 | Phiên Codex không có các tool `antigravity_*` (mở khi chưa có `BRIDGE_HTTP_TOKEN`) | "Giao cho Antigravity review commit mới nhất." | Báo người dùng thiếu kết nối MCP và dừng; không tự viết script hay client HTTP để gọi bridge |
+| 20 | Gia hạn khi còn hoạt động đang bật; task chạy lâu hơn `timeout_seconds` mà log của agy vẫn tăng | Giao một việc kéo dài vài phút | Agent chỉ chờ; không hủy task chỉ vì nó chạy lâu hay `activity` cũ; task được gia hạn và hoàn tất; nếu `activity` im lặng rất lâu thì báo người dùng một lần để họ quyết định, không tự hủy |
 
 ## Ghi kết quả
 

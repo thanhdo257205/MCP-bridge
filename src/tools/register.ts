@@ -15,6 +15,11 @@ function clientLabel(envelope: unknown): string | null {
   return clean || null;
 }
 
+/** Said at the moment the client decides what to do next: while the task runs, waiting is the whole job (any other call costs tokens and repeats Antigravity's work). */
+export const WAITING_NOTE = 'Task still running. Do nothing else: no file reads, git, tests, logs or review of this change yourself, and write no message. Call antigravity_task_wait again now.';
+const withNextStep = <T extends {status: string}>(summary: T, activity: string | null = null): T | (T & {next_step: string; activity?: string}) =>
+  summary.status === 'running' || summary.status === 'queued' ? {...summary, ...(activity ? {activity} : {}), next_step: WAITING_NOTE} : summary;
+
 export function createServer(manager: TaskManager, environment: Record<string, unknown>): McpServer {
   const server = new McpServer({name: 'antigravity-mcp-bridge', version: readPackageInfo().version});
   const response = <T extends object>(value: T) => ({content: [{type: 'text' as const, text: JSON.stringify(value)}], structuredContent: value as Record<string, unknown>});
@@ -33,13 +38,13 @@ export function createServer(manager: TaskManager, environment: Record<string, u
   server.registerTool('antigravity_task_status', {
     description: 'Get task/process state, timing, error, denied_actions and byte counts without logs (cheap to poll). Accepted tasks survive client disconnect; finished-task history is kept on disk across restarts until retention expiry.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
-  }, async ({task_id}) => guard(() => manager.summary(task_id)));
+  }, async ({task_id}) => guard(() => withNextStep(manager.summary(task_id), manager.activityNote(task_id))));
   server.registerTool('antigravity_task_wait', {
     description: `Wait up to wait_seconds (1-${manager.maxWaitSeconds}, default ${manager.maxWaitSeconds}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
     inputSchema: waitSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id, wait_seconds}) => guard(async () => {
-    await manager.waitFor(task_id, Math.min(wait_seconds ?? manager.maxWaitSeconds, manager.maxWaitSeconds));
-    return manager.summary(task_id);
+    await manager.waitFor(task_id, manager.nextWaitSeconds(task_id, wait_seconds));
+    return withNextStep(manager.summary(task_id), manager.activityNote(task_id));
   }));
   server.registerTool('antigravity_task_output', {
     description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. Does not wait for completion.',

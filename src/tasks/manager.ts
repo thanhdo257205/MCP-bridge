@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -11,6 +11,8 @@ import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
 import {helperDirectory} from '../paths.js';
+import {readWait} from '../wait-setting.js';
+import {CHECK_DELAYS_SECONDS,readSoftTimeout,rampedWaitSeconds} from '../soft-timeout.js';
 import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
@@ -44,10 +46,18 @@ interface Entry {
   lastOutputAt?: number;
   /** Validated input kept until the process starts (a queued task waits with it). */
   pending?: {input: DelegateInput; workspace: string; timeout: number};
+  /** Log file agy was asked to write (only when the soft deadline is on); its modification time is a liveness signal. */
+  logFile?: string;
+  /** Soft deadline state, shown in the web UI: how often the task was extended, when the next check is due, and the absolute limit. */
+  soft?: {extensions: number; nextCheckAt: number | null; hardLimitAt: number};
+  /** Waits a client asked for without choosing a length; they get longer each time (see rampedWaitSeconds). */
+  bareWaits?: number;
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
+  /** Test hooks: grace after the deadline before the first check (default 10s) and the delays between soft-deadline checks (default 1, 5, 10 minutes). */
+  deadlineGraceMs?: number; softCheckDelaysMs?: number[];
   /** Replaces running `agy models` (tests). */
   models?: () => Promise<ModelInfo[]>;
 }
@@ -166,7 +176,17 @@ export class TaskManager {
       // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
       const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
       if(entry.request)entry.request.permission=permission;
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport,entry.request?.model??null,[...permissionFlags(permission),...effortFlags(entry.request?.effort??'default')]);
+      // Soft deadline (owner setting, off by default): agy gets the absolute limit as its own print timeout and a log file whose growth shows it is alive.
+      const soft=readSoftTimeout(this.runtime.stateDirectory);
+      const absoluteLimit=Math.max(timeout,soft.limit_seconds);
+      let logFile:string|undefined;
+      if(soft.enabled){
+        const logDirectory=path.join(this.runtime.stateDirectory,'agy-logs');
+        await mkdir(logDirectory,{recursive:true});
+        logFile=path.join(logDirectory,`${task.task_id}.log`);
+      }
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),soft.enabled?absoluteLimit:timeout,this.config.prompt_transport,entry.request?.model??null,
+        [...permissionFlags(permission),...effortFlags(entry.request?.effort??'default'),...(logFile?['--log-file',logFile]:[])]);
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
       entry.child = child;
@@ -211,7 +231,30 @@ export class TaskManager {
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
-      const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
+      const graceMs=this.runtime.deadlineGraceMs??10000;
+      let timer: NodeJS.Timeout;
+      if (!soft.enabled) timer = setTimeout(() => requestStop('timeout'), timeout * 1000 + graceMs);
+      else {
+        entry.logFile = logFile;
+        const delays=(this.runtime.softCheckDelaysMs??CHECK_DELAYS_SECONDS.map(seconds=>seconds*1000));
+        const hardLimitAt=started+absoluteLimit*1000+graceMs;
+        entry.soft={extensions:0,nextCheckAt:null,hardLimitAt};
+        let step=0;
+        // At the deadline and then after 1, 5 and every 10 minutes: extend while there was activity in the window since the last check.
+        const check = () => {
+          const now=Date.now();
+          const window=delays[Math.min(step,delays.length-1)];
+          const idle=now-this.lastActivity(entry);
+          if (now>=hardLimitAt) { task.error=`Stopped at the absolute limit of ${absoluteLimit}s; the task was still running`; requestStop('timeout'); return; }
+          if (idle>window) { task.error=`No sign of activity for ${Math.round(Math.min(idle,now-started)/1000)}s after the ${timeout}s deadline; stopped`; requestStop('timeout'); return; }
+          step+=1; entry.soft!.extensions+=1;
+          const delay=Math.max(1,Math.min(delays[Math.min(step,delays.length-1)],hardLimitAt-now));
+          entry.soft!.nextCheckAt=now+delay;
+          timer=setTimeout(check,delay);
+        };
+        timer = setTimeout(check, timeout * 1000 + graceMs);
+        entry.soft.nextCheckAt=started+timeout*1000+graceMs;
+      }
       const outputTimer=setInterval(()=>flushOutput(),1000);
       child.once('error', () => { task.error = 'Could not start Antigravity process'; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
@@ -326,11 +369,47 @@ export class TaskManager {
       task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
       ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
     },request.client) : null;
-    const lastOutputAt = this.entries.get(id)?.lastOutputAt;
-    return {task, request, prompt, activity: {last_output_at: lastOutputAt ? new Date(lastOutputAt).toISOString() : null}};
+    const entry = this.entries.get(id);
+    return {task, request, prompt, activity: entry ? this.activityOf(entry) : null};
+  }
+  /** The latest sign of life: output on stdout/stderr or a write to agy's log file (the file's modification time). 0 when there has been none. */
+  private lastActivity(entry: Entry): number {
+    let log = 0;
+    if (entry.logFile) { try { log = statSync(entry.logFile).mtimeMs; } catch { /* not created yet */ } }
+    return Math.max(entry.lastOutputAt ?? 0, log);
+  }
+  /** What the web UI shows for a running task: the signs of life agy has given and the state of the soft deadline. */
+  private activityOf(entry: Entry) {
+    let logBytes: number | null = null; let logAt: number | null = null;
+    if (entry.logFile) { try { const stats = statSync(entry.logFile); logBytes = stats.size; logAt = stats.mtimeMs; } catch { /* not created yet */ } }
+    const last = this.lastActivity(entry);
+    const iso = (value: number | null | undefined) => value ? new Date(value).toISOString() : null;
+    return {
+      last_output_at: iso(entry.lastOutputAt), log_updated_at: iso(logAt), log_bytes: logBytes, last_activity_at: iso(last || null),
+      soft_deadline: entry.soft ? {extensions: entry.soft.extensions, next_check_at: iso(entry.soft.nextCheckAt), hard_limit_at: iso(entry.soft.hardLimitAt)} : null
+    };
+  }
+  /** One short line for the client about whether Antigravity is alive (only while the task runs): the MCP tools carry it so the client need not read logs. */
+  activityNote(id: string): string | null {
+    const entry = this.entries.get(id);
+    if (!entry || entry.task.status !== 'running') return null;
+    const last = this.lastActivity(entry);
+    const source = entry.logFile && last && last !== (entry.lastOutputAt ?? 0) ? 'log' : 'output';
+    const extended = entry.soft?.extensions ? `; deadline extended ${entry.soft.extensions}x while active` : '';
+    return (last ? `last ${source} activity ${Math.max(0, Math.round((Date.now() - last) / 1000))}s ago` : 'no output or log activity seen yet (normal in print mode: agy prints when it finishes)') + extended;
+  }
+  /** Length of the next wait for a client that did not choose one: it grows with each call for this task (1 min, 5 min, the owner's maximum). */
+  nextWaitSeconds(id: string, requested?: number): number {
+    const cap = this.maxWaitSeconds;
+    if (requested !== undefined) return Math.min(requested, cap);
+    const entry = this.entries.get(id);
+    if (!entry) return cap;
+    const count = entry.bareWaits ?? 0;
+    entry.bareWaits = count + 1;
+    return rampedWaitSeconds(count, cap);
   }
   /** Longest single wait a client may ask for. */
-  get maxWaitSeconds(): number { return this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
+  get maxWaitSeconds(): number { return readWait(this.runtime.stateDirectory) ?? this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {
     const entry = this.entries.get(id);
@@ -443,7 +522,7 @@ export class TaskManager {
     return this.describeLock(lock);
   }
   overview() {
-    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, max_wait_seconds: this.maxWaitSeconds, recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

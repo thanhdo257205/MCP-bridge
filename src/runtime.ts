@@ -25,7 +25,7 @@ export async function createRuntime() {
     supported: {delegate: cli.supported, status: true, wait: true, output: true, cancel_owned_process: true, detached_resume: false},
     allowed_workspaces: config.allowed_workspaces, session_workspaces: sessionOnlyWorkspaces(),
     authentication: 'Cached CLI authentication required; only a live task verifies it.',
-    limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: 1, max_queued_tasks: config.max_queued_tasks, max_wait_seconds: manager.maxWaitSeconds},
+    limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: 1, max_queued_tasks: config.max_queued_tasks},
     limitations: [
       'Only agy 1.4.x with all required flags is enabled; real agent execution was verified on 1.4.3.',
       ...cli.warnings,

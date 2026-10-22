@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
+import { readWait } from './wait-setting.js';
 import { configuredPort } from './http.js';
 import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
@@ -153,7 +154,7 @@ function setup(args: string[]) {
   if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
   const tokenFile = path.join(paths.stateDirectory, 'http-token');
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
-  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN}));
+  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined}));
 }
 
 async function workspaces(args: string[]) {

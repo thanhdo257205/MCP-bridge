@@ -154,7 +154,7 @@ Invoke-RestMethod 'http://127.0.0.1:3001/health' -Headers $headers
 url = 'http://127.0.0.1:3000/mcp'
 bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'
 startup_timeout_sec = 30
-tool_timeout_sec = 60
+tool_timeout_sec = 115
 enabled = true
 ```
 
@@ -391,7 +391,24 @@ Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển th�
 
 **Mức suy luận (effort):** mục Cài đặt → Mức suy luận chọn `--effort` truyền cho Antigravity: thấp (nhanh nhất), vừa, cao, rất cao, tối đa, hoặc mặc định (không truyền cờ). Mức thấp giúp task nhanh hơn nhưng suy luận ít hơn. Có hiệu lực ngay cho task mới, mỗi task ghi lại mức đã dùng, lưu ở `.bridge-state/effort.json`. Chưa kiểm chứng với `agy` thật ở chế độ `--print`. Kết hợp chọn model nhỏ hơn (ví dụ `gemini-3.8-flash-low`) để tăng tốc.
 
-**Giảm số lần Codex/Claude phải hỏi lại (tiết kiệm token):** mỗi lần gọi `antigravity_task_wait` tốn token, nên nên chờ lâu trong một lần gọi thay vì nhiều lần ngắn. Server không thể tự "đánh thức" Codex/Claude khi có kết quả: thông báo MCP từ server không khiến mô hình chạy, mô hình chỉ hành động khi được nhắn hoặc khi nó gọi tool. Vì vậy bridge cho chờ dài: mặc định một lần chờ tối đa 55 giây (nhỏ hơn thời hạn tool 60 giây mặc định của Codex). Muốn chờ lâu hơn nữa, nâng đồng thời hai giá trị: `max_wait_seconds` trong file cấu hình của bridge (5 đến 3600) và thời hạn tool của client (Codex: `tool_timeout_sec` trong `config.toml`; Claude Code: biến môi trường `MCP_TOOL_TIMEOUT` tính bằng mili giây, theo tài liệu của Claude Code, chưa kiểm chứng ở đây). Ví dụ `max_wait_seconds: 540` cùng `tool_timeout_sec = 600` thì một lần gọi chờ tới 9 phút. Nếu thời hạn tool của client ngắn hơn `max_wait_seconds`, lần chờ dài sẽ bị client cắt và báo lỗi timeout. File skill dặn Codex/Claude gọi `wait` không kèm `wait_seconds` và không báo tiến độ giữa các lần chờ.
+**Để Codex/Claude "nghỉ" trong lúc Antigravity làm (tiết kiệm token):** server không thể tự đánh thức Codex/Claude khi có kết quả: thông báo MCP từ server không khiến mô hình chạy, mô hình chỉ hành động khi được nhắn hoặc khi nó gọi tool. Cách gần nhất là **giữ Codex trong một lệnh chờ duy nhất**: `antigravity_task_wait` chặn cho đến khi Antigravity xong hoặc hết thời gian chờ, và trong lúc lệnh bị chặn Codex không tốn token. Có ba phần phối hợp:
+
+1. **Thời gian chờ mỗi lần gọi** chỉnh trong giao diện web (Cài đặt → "Thời gian chờ mỗi lần Codex / Claude gọi"): 55 giây (mặc định), 5, 10, 15, 30 hoặc 60 phút; có hiệu lực ngay, không cần khởi động lại. Cũng đặt được bằng `max_wait_seconds` trong file cấu hình (lựa chọn trong giao diện được ưu tiên). Mức đang dùng được báo cho client qua `max_wait_seconds` của `antigravity_environment`.
+2. **Thời hạn tool của client phải lớn hơn thời gian chờ**, nếu không client cắt lần chờ và báo timeout. Codex: đặt `tool_timeout_sec` trong `config.toml` ở mục `[mcp_servers.antigravity]`, bằng thời gian chờ cộng thêm khoảng 60 giây (ví dụ chờ 600 giây thì `tool_timeout_sec = 660`), rồi mở lại Codex. Lệnh `agy-mcp-bridge setup codex` in sẵn dòng này theo mức đang chọn; giao diện cũng hiện đúng giá trị cần đặt. Claude Code: biến môi trường `MCP_TOOL_TIMEOUT` tính bằng mili giây, theo tài liệu của Claude Code (chưa kiểm chứng ở đây). Nếu chưa chắc về thời hạn tool của client, giữ mặc định 55 giây.
+3. **Skill dặn agent chỉ chờ:** trong lúc task chạy, agent chỉ gọi `antigravity_task_wait`, không đọc file, không chạy git, test hay đọc log, không tự review cùng thay đổi và không viết gì giữa các lần chờ; chỉ khi task kết thúc mới lấy `antigravity_task_output` một lần rồi review. Mỗi lần chờ mà task còn chạy trả kèm ghi chú `next_step` nhắc đúng điều đó ngay lúc agent quyết định bước tiếp theo. Skill cũng cấm agent tự viết script hay client HTTP để gọi bridge: nếu phiên không có các tool `antigravity_*`, agent báo cho bạn (nguyên nhân thường là client được mở khi chưa có `BRIDGE_HTTP_TOKEN`) rồi dừng.
+
+Đây là chỉ dẫn, không phải rào chắn kỹ thuật: bridge không ép được mô hình ngừng đọc file trong lúc chờ. Mức tiết kiệm thực tế chưa được đo.
+
+**Biết Antigravity còn hoạt động, và gia hạn thay vì dừng giữa chừng (time out mềm):** ở chế độ `--print --output-format json`, `agy` không in gì cho đến khi xong, nên bridge không thể biết chắc nó đang "suy luận". Bridge chỉ nhìn được những dấu hiệu còn sống: byte mới ở output, và (khi bạn bật tính năng này) việc file log của `agy` được ghi thêm. Cài đặt → "Gia hạn khi Antigravity còn hoạt động" (mặc định **tắt**, áp dụng cho task mới) làm như sau:
+
+- Bridge yêu cầu `agy` ghi log vào `.bridge-state/agy-logs/<task_id>.log` (cờ `--log-file`) và cho `agy` giới hạn tuyệt đối làm print timeout của chính nó, thay vì hạn của task.
+- Đến hạn của task (`timeout_seconds`), bridge **không dừng ngay**: nó kiểm tra có hoạt động trong khoảng vừa qua không. Còn thì gia hạn rồi kiểm tra lại sau **1 phút, rồi 5 phút, rồi mỗi 10 phút**. Không có hoạt động trong khoảng đó thì dừng task (trạng thái `timeout`, lý do ghi trong `error`).
+- **Giới hạn tuyệt đối** (30 phút đến 8 giờ, mặc định 2 giờ) luôn có hiệu lực: task vẫn còn hoạt động cũng dừng khi tới mức này, để một task treo hay chạy mãi không giữ chỗ vô hạn (chỉ có một task chạy một lúc).
+- Chi tiết task trong giao diện hiện "Log của agy cập nhật … (KB)", "Output cuối …", số lần đã gia hạn và lần kiểm tra tiếp theo. `antigravity_task_wait` và `antigravity_task_status` trả thêm một dòng `activity` (ví dụ `last log activity 12s ago; deadline extended 2x while active`) để Codex/Claude không phải tự đọc log.
+- **Chưa kiểm chứng:** tôi chưa biết `agy` có ghi log đều đặn trong lúc suy luận hay chỉ ghi lúc bắt đầu và kết thúc. Nếu log không tăng khi `agy` đang chạy thì không có dấu hiệu nào để gia hạn, và task dừng đúng hạn như khi tắt tính năng (không tệ hơn). Cách kiểm tra: bật tính năng, giao một task kéo dài vài chục giây và xem dòng "Log của agy cập nhật…" tăng khi task đang chạy.
+- Tắt tính năng thì mọi thứ như cũ: hạn cứng, không có `--log-file`.
+
+**Cấp bậc chờ:** khi Codex/Claude gọi `antigravity_task_wait` mà không chọn số giây, lần chờ đầu của mỗi task dài 1 phút, lần hai 5 phút, từ lần ba là mức tối đa bạn chọn (không bao giờ vượt mức đó; với mặc định 55 giây thì cả ba đều 55 giây). Lệnh chờ kết thúc ngay khi task xong, nên cấp bậc này chủ yếu giúp báo "vẫn đang chạy" đến sớm ở đầu task, không tiết kiệm thêm token. Thời hạn tool của client vẫn phải lớn hơn mức tối đa đó.
 
 **Quyền của Antigravity:** mục Cài đặt → Quyền của Antigravity chọn Antigravity được tự làm đến đâu khi chạy task. Ở chế độ không tương tác, Antigravity tự từ chối việc cần phê duyệt (thấy ở `denied_actions`), nên task sửa file hay chạy lệnh có thể không làm được nếu cài đặt Antigravity chưa cấp quyền. Năm mức, từ thấp đến cao:
 
