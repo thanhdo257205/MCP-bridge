@@ -48,6 +48,10 @@
     {
       "sha256": "978deb00a9eb68780297eaf538da9272ac11e94c2942141b1d5e999fee218354",
       "note": "auto-split mode follows the token-saving workflow (delegate whole, check just enough, short reports)"
+    },
+    {
+      "sha256": "117fa45228f421cf266f45c1a112e37ba2c164fb31c8fd64392495efa025828c",
+      "note": "while a task runs only wait: no reads or messages between waits, next_step note, no custom client"
     }
   ]
 }

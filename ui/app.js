@@ -187,6 +187,14 @@ async function setEffort(effort) {
   try { await api('effort', {method: 'POST', body: {effort}}); notify('Đã đổi mức suy luận cho các task mới'); await refresh(); }
   catch (error) { notify(error.message); await refresh(); }
 }
+const WAIT_PRESETS = [
+  {seconds: 55, title: '55 giây (mặc định)'}, {seconds: 300, title: '5 phút'}, {seconds: 600, title: '10 phút'},
+  {seconds: 900, title: '15 phút'}, {seconds: 1800, title: '30 phút'}, {seconds: 3600, title: '60 phút'}
+];
+async function setWait(seconds) {
+  try { await api('wait', {method: 'POST', body: {seconds}}); notify('Đã đổi thời gian chờ mỗi lần gọi. Nhớ đặt thời hạn tool của Codex/Claude cho khớp.'); await refresh(); }
+  catch (error) { notify(error.message); await refresh(); }
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -372,6 +380,20 @@ function modelCard(o) {
     loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
     h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
 }
+function waitCard(o) {
+  const wait = o.wait || {seconds: 55, client_tool_timeout_seconds: 115};
+  const known = WAIT_PRESETS.some(p => p.seconds === wait.seconds);
+  const select = h('select', {class: 'select', 'aria-label': 'Thời gian chờ tối đa mỗi lần gọi', onchange: event => setWait(Number(event.target.value))},
+    ...WAIT_PRESETS.map(p => h('option', {value: String(p.seconds), text: p.title})),
+    known ? null : h('option', {value: String(wait.seconds), text: `${wait.seconds} giây (từ file cấu hình)`}));
+  select.value = String(wait.seconds);
+  const minutes = Math.round(wait.client_tool_timeout_seconds / 60);
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Thời gian chờ mỗi lần Codex / Claude gọi (tiết kiệm token)'}),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: `${wait.seconds} giây`}),
+      h('span', {class: 'muted', text: 'Khi giao task, Codex gọi chờ và bị giữ lại trong một lệnh duy nhất cho đến khi Antigravity xong hoặc hết thời gian này. Trong lúc bị giữ, Codex không tốn token. Càng dài càng ít lần hỏi lại.'})), select),
+    h('div', {class: 'callout warn'}, `Phải đặt thời hạn tool của client LỚN HƠN mức này, nếu không client sẽ cắt lần chờ và báo timeout. Với mức hiện tại: Codex, trong ~/.codex/config.toml mục [mcp_servers.antigravity] đặt `, h('code', {text: `tool_timeout_sec = ${wait.client_tool_timeout_seconds}`}), ` (khoảng ${minutes} phút), rồi mở lại Codex. Claude Code: biến môi trường MCP_TOOL_TIMEOUT (mili giây) lớn hơn ${wait.seconds * 1000}, theo tài liệu của Claude Code (chưa kiểm chứng ở đây). Lệnh \`agy-mcp-bridge setup codex\` in sẵn dòng này theo mức đang chọn.`),
+    h('p', {text: 'Có hiệu lực ngay cho lần chờ sau, không cần khởi động lại bridge. Nếu bạn chưa chắc về thời hạn tool của client, giữ mức 55 giây.'}));
+}
 function effortCard(o) {
   const current = EFFORT_LEVELS.find(level => level.id === (o.effort || 'default')) || EFFORT_LEVELS[0];
   const select = h('select', {class: 'select', 'aria-label': 'Mức suy luận cho task mới', onchange: event => setEffort(event.target.value)},
@@ -404,6 +426,7 @@ function settingsView(o) {
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
       modelCard(o),
       effortCard(o),
+      waitCard(o),
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
@@ -484,7 +507,7 @@ function patch() {
     if (!rebuilt) patchLogs();
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
-    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }

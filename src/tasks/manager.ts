@@ -11,6 +11,7 @@ import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
 import {helperDirectory} from '../paths.js';
+import {readWait} from '../wait-setting.js';
 import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
@@ -330,7 +331,7 @@ export class TaskManager {
     return {task, request, prompt, activity: {last_output_at: lastOutputAt ? new Date(lastOutputAt).toISOString() : null}};
   }
   /** Longest single wait a client may ask for. */
-  get maxWaitSeconds(): number { return this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
+  get maxWaitSeconds(): number { return readWait(this.runtime.stateDirectory) ?? this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {
     const entry = this.entries.get(id);
@@ -443,7 +444,7 @@ export class TaskManager {
     return this.describeLock(lock);
   }
   overview() {
-    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, max_wait_seconds: this.maxWaitSeconds, recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

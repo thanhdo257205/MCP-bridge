@@ -1,8 +1,12 @@
+import { clientToolTimeoutSeconds } from './wait-setting.js';
+
 export type Client = 'codex' | 'claude';
 export type Shell = 'powershell' | 'cmd' | 'bash';
 
 export interface SetupInput {
   clients: Client[]; mcpUrl: string; tokenFile: string; tokenFileExists: boolean; tokenFromEnv: boolean; shells: Shell[]; bin: string;
+  /** Longest wait the bridge allows per antigravity_task_wait call; Codex's tool timeout must exceed it. Default 55. */
+  waitSeconds?: number;
 }
 
 const powershell = (text: string) => `'${text.replace(/'/g, "''")}'`;
@@ -32,7 +36,7 @@ export function renderSetup(input: SetupInput): string {
   if (input.clients.includes('codex')) {
     add(`${step++}. Codex`, '   Either run:', `     codex mcp add antigravity --url ${posix(input.mcpUrl)} --bearer-token-env-var BRIDGE_HTTP_TOKEN`,
       '   or merge this block into ~/.codex/config.toml (or $CODEX_HOME/config.toml); replace an existing [mcp_servers.antigravity] entry instead of adding a second one:',
-      '', '     [mcp_servers.antigravity]', `     url = '${input.mcpUrl}'`, "     bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'", '     startup_timeout_sec = 30', '     tool_timeout_sec = 60', '     enabled = true', '',
+      '', '     [mcp_servers.antigravity]', `     url = '${input.mcpUrl}'`, "     bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'", '     startup_timeout_sec = 30', `     tool_timeout_sec = ${clientToolTimeoutSeconds(input.waitSeconds ?? 55)}`, '     enabled = true', '',
       '   Check: codex mcp get antigravity   (then ask Codex to call antigravity_environment)', '');
   }
   if (input.clients.includes('claude')) {
