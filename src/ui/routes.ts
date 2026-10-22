@@ -13,6 +13,7 @@ import { validModelId, writeModel } from '../models.js';
 import { readProgress, writeProgress } from '../progress.js';
 import { readUsage, summarizeUsage } from '../usage.js';
 import { EFFORT_LEVELS, isEffortLevel, readEffort, writeEffort } from '../effort.js';
+import { MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS, budgetState, isBudgetTokens, readBudget, writeBudget } from '../budget.js';
 import { MAX_ABSOLUTE_LIMIT_SECONDS, MIN_ABSOLUTE_LIMIT_SECONDS, isAbsoluteLimit, readSoftTimeout, writeSoftTimeout } from '../soft-timeout.js';
 import { MAX_SETTING_WAIT_SECONDS, MIN_WAIT_SECONDS, clientToolTimeoutSeconds, isWaitSeconds, writeWait } from '../wait-setting.js';
 import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
@@ -54,7 +55,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return value as Record<string, unknown>;
 }
 
-async function overview(ctx: UiContext) {
+async function overview(ctx: UiContext, tzOffsetMinutes = 0) {
   const env = ctx.environment as Record<string, unknown>;
   const state = delegationState(ctx.manager.stateDirectory);
   return {
@@ -72,6 +73,7 @@ async function overview(ctx: UiContext) {
     permission: permissionState(ctx.manager.stateDirectory),
     effort: readEffort(ctx.manager.stateDirectory),
     soft_timeout: readSoftTimeout(ctx.manager.stateDirectory),
+    budget: await budgetState(ctx.manager.stateDirectory, tzOffsetMinutes),
     progress: readProgress(ctx.manager.stateDirectory),
     wait: {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)},
     queue: ctx.manager.overview().queue,
@@ -125,10 +127,22 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     }
     if (!ctx.sessions.valid(sessionId)) { json(res, 401, {error: 'Sign in with the bridge token'}); return true; }
     if (pathname === '/ui/api/logout' && method === 'POST') { ctx.sessions.destroy(sessionId); json(res, 200, {ok: true}); return true; }
-    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
+    const tzParam = Number(new URL(req.url ?? '', 'http://localhost').searchParams.get('tz') ?? '0');
+    const tzOffset = Number.isInteger(tzParam) && Math.abs(tzParam) <= 840 ? tzParam : 0;
+    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx, tzOffset)); return true; }
     if (pathname === '/ui/api/usage' && method === 'GET') {
-      const offset = Number(new URL(req.url ?? '', 'http://localhost').searchParams.get('tz') ?? '0');
-      json(res, 200, summarizeUsage(await readUsage(ctx.manager.stateDirectory), {tzOffsetMinutes: Number.isInteger(offset) && Math.abs(offset) <= 840 ? offset : 0})); return true;
+      json(res, 200, summarizeUsage(await readUsage(ctx.manager.stateDirectory), {tzOffsetMinutes: tzOffset})); return true;
+    }
+    if (pathname === '/ui/api/budget' && method === 'POST') {
+      const body = await readJson(req);
+      const current = readBudget(ctx.manager.stateDirectory);
+      const pick = (key: 'task_tokens' | 'day_tokens') => body[key] === undefined ? current[key] : body[key];
+      const next = {task_tokens: pick('task_tokens'), day_tokens: pick('day_tokens')};
+      for (const limit of [next.task_tokens, next.day_tokens]) {
+        if (limit !== null && !isBudgetTokens(limit)) { json(res, 400, {error: `limits must be whole numbers from ${MIN_BUDGET_TOKENS} to ${MAX_BUDGET_TOKENS}, or null for no limit`}); return true; }
+      }
+      await writeBudget(ctx.manager.stateDirectory, next as {task_tokens: number | null; day_tokens: number | null});
+      json(res, 200, await budgetState(ctx.manager.stateDirectory, tzOffset)); return true;
     }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }

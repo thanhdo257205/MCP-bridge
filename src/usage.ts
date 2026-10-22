@@ -102,3 +102,11 @@ export function summarizeUsage(records: UsageRecord[], options: {now?: number; t
     recent: records.slice(-15).reverse().map(r => ({at: r.at, status: r.status, model: r.model, effort: r.effort, duration_ms: r.duration_ms, agy_duration_seconds: r.agy_duration_seconds, num_turns: r.num_turns, usage: r.usage}))
   };
 }
+
+/** Tokens a task cost according to agy: its own total when it reports one, else input plus output; null when it reported neither. */
+export function totalTokens(usage: Record<string, number> | null | undefined): number | null {
+  if (!usage) return null;
+  if (typeof usage.total_tokens === 'number') return usage.total_tokens;
+  const parts = [usage.input_tokens, usage.output_tokens].filter((value): value is number => typeof value === 'number');
+  return parts.length ? parts.reduce((total, value) => total + value, 0) : null;
+}

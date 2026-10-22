@@ -226,3 +226,5 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .usage-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 .usage-table th, .usage-table td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .usage-table th { font-weight: 600; color: var(--muted); }
+
+.over-budget { color: var(--bad); font-weight: 600; }

@@ -143,7 +143,7 @@ async function login(token) {
 
 async function refresh(force) {
   try {
-    state.overview = await api('overview'); state.connected = true;
+    state.overview = await api(`overview?tz=${new Date().getTimezoneOffset()}`); state.connected = true;
     const tasks = state.overview.tasks;
     if (!state.selected || !tasks.some(task => task.task_id === state.selected)) state.selected = tasks[0]?.task_id ?? null;
     state.detail = state.selected ? await api(`tasks/${state.selected}`).catch(() => null) : null;
@@ -241,6 +241,12 @@ async function setSoftTimeout(enabled, limit_seconds) {
     await refresh();
   } catch (error) { notify(error.message); await refresh(); }
 }
+const BUDGET_TASK_PRESETS = [null, 50000, 100000, 200000, 500000, 1000000];
+const BUDGET_DAY_PRESETS = [null, 200000, 500000, 1000000, 2000000, 5000000];
+async function setBudget(body) {
+  try { await api(`budget?tz=${new Date().getTimezoneOffset()}`, {method: 'POST', body}); notify('Đã lưu mức token'); await refresh(); }
+  catch (error) { notify(error.message); await refresh(); }
+}
 async function setProgress(enabled) {
   try { await api('progress', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật tiến độ từng bước (áp dụng cho task mới)' : 'Đã tắt tiến độ từng bước'); await refresh(); }
   catch (error) { notify(error.message); await refresh(); }
@@ -294,6 +300,8 @@ function statsView(o) {
     stat('Antigravity CLI', o.cli.version && o.cli.version !== 'unavailable' ? `agy ${o.cli.version}` : 'Không tìm thấy', o.cli.execution_method || 'Chưa thể giao task'),
     stat('Giao việc', [switchControl(o.delegation.enabled, o.delegation.controllable, 'Cho phép giao việc cho Antigravity'),
       h('span', {class: `pill ${o.delegation.enabled ? 'ok' : 'warn'}`, text: o.delegation.enabled ? 'Đang bật' : 'Đã tắt'})], o.delegation.reason || 'Codex / Claude được phép giao task'),
+    stat('Token hôm nay', [number(o.budget?.today_tokens ?? 0), o.budget?.day_tokens ? h('span', {class: `pill ${o.budget.over_day ? 'bad' : 'ok'}`, text: o.budget.over_day ? 'Vượt mức' : 'Trong mức'}) : null],
+      o.budget?.day_tokens ? `mức ngày ${number(o.budget.day_tokens)}${o.budget.over_day ? ' — đã vượt' : ''}` : 'chưa đặt mức ngày (Cài đặt)'),
     stat('Task', `${count('running')} đang chạy`, `${queued ? `${queued} đang chờ · ` : ''}${o.tasks.length} task gần đây`)
   ];
 }
@@ -302,6 +310,7 @@ function filteredTasks(o) {
   const q = state.q.trim().toLowerCase();
   return o.tasks.filter(task => MATCH[state.filter](task) && (!q || [task.title, task.workspace, task.task_id].some(v => (v || '').toLowerCase().includes(q))));
 }
+const overTask = (o, task) => Boolean(o.budget?.task_tokens) && task.tokens !== null && task.tokens !== undefined && task.tokens > o.budget.task_tokens;
 function taskItems(o) {
   if (!o.tasks.length) return [h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có task nào'}), 'Khi Codex hoặc Claude giao việc cho Antigravity, task sẽ hiện ở đây.')];
   const tasks = filteredTasks(o);
@@ -311,7 +320,8 @@ function taskItems(o) {
   }, h('div', {class: 'row'}, pill(task.status), agoEl(task.queued_at || task.started_at, 'meta')),
     h('div', {class: 'title', text: task.title || '(không có nội dung yêu cầu)'}),
     h('div', {class: 'meta mono', text: `${folder(task.workspace)} · ${task.task_id.slice(0, 8)}`}),
-    h('div', {class: 'meta'}, task.status === 'running' ? elapsedEl(task.started_at, 'Đang chạy ') : task.status === 'queued' ? 'Đang xếp hàng…' : `Mất ${duration(task.duration_ms)}`)));
+    h('div', {class: 'meta'}, task.status === 'running' ? elapsedEl(task.started_at, 'Đang chạy ') : task.status === 'queued' ? 'Đang xếp hàng…' : `Mất ${duration(task.duration_ms)}`,
+      task.tokens !== null && task.tokens !== undefined ? h('span', {class: overTask(o, task) ? 'over-budget' : '', text: ` · ${number(task.tokens)} token${overTask(o, task) ? ' (vượt mức)' : ''}`}) : null)));
 }
 function taskCount(o) { return `${filteredTasks(o).length}/${o.tasks.length} task`; }
 
@@ -375,7 +385,7 @@ function detailView() {
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
-      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Usage (agy báo)', usageLine(state.detail?.stats?.usage) ?? '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
+      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Tổng token', state.detail?.stats?.usage && 'total_tokens' in state.detail.stats.usage ? number(state.detail.stats.usage.total_tokens) : '—'], ['Usage (agy báo)', usageLine(state.detail?.stats?.usage) ?? '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
       ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
   const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
@@ -451,6 +461,20 @@ function progressCard(o) {
       h('span', {}, h('strong', {text: enabled ? 'Đang bật' : 'Đang tắt'}),
         h('span', {class: 'muted', text: 'Bridge chạy agy với --output-format stream-json: ngoài kết quả cuối, agy báo các sự kiện init và step_update khi đang làm việc (đã thấy bằng probe-stream trên agy 1.4.x). Các bước hiện trong chi tiết task, và là bằng chứng "còn sống" thật cho phần gia hạn. Áp dụng cho task mới, không cần khởi động lại.'}))),
     h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: nội dung chi tiết bên trong step_update (nên hiển thị là tóm tắt tự động kèm dữ liệu gốc), và việc kết quả cuối ở chế độ này có cùng dạng với chế độ JSON. Nếu task báo lỗi "CLI output is not a valid stream-json final result" hoặc "stream result fields", hãy tắt tùy chọn này để quay về chế độ JSON đã kiểm chứng và gửi tôi thông báo lỗi.'}));
+}
+function budgetCard(o) {
+  const budget = o.budget || {task_tokens: null, day_tokens: null, today_tokens: 0};
+  const chooser = (key, presets, label) => {
+    const options = presets.includes(budget[key]) ? presets : [...presets, budget[key]];
+    const select = h('select', {class: 'select', 'aria-label': label, onchange: event => setBudget({[key]: event.target.value === '' ? null : Number(event.target.value)})},
+      ...options.map(value => h('option', {value: value === null ? '' : String(value), text: value === null ? 'Không giới hạn' : `${number(value)} token`})));
+    select.value = budget[key] === null ? '' : String(budget[key]);
+    return select;
+  };
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Mức token (đèn cảnh báo)'}),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Mỗi task'}), h('span', {class: 'muted', text: 'Task nào dùng nhiều hơn mức này sẽ được đánh dấu "vượt mức" trong danh sách.'})), chooser('task_tokens', BUDGET_TASK_PRESETS, 'Mức token mỗi task')),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Mỗi ngày'}), h('span', {class: 'muted', text: `Hôm nay đã dùng ${number(budget.today_tokens)} token qua bridge${budget.over_day ? ' — đã vượt mức.' : '.'}`})), chooser('day_tokens', BUDGET_DAY_PRESETS, 'Mức token mỗi ngày')),
+    h('div', {class: 'callout warn', text: 'Đây chỉ là đèn báo, không phải hạn mức thật và không dừng task: agy không cho bridge đọc hạn mức, và số token của một task chỉ biết khi task kết thúc. Số liệu là tổng token (total_tokens) agy báo cho các task chạy qua bridge, tính theo ngày giờ máy của bạn.'}));
 }
 function softTimeoutCard(o) {
   const soft = o.soft_timeout || {enabled: false, limit_seconds: 7200};
@@ -548,6 +572,7 @@ function settingsView(o) {
       effortCard(o),
       waitCard(o),
       progressCard(o),
+      budgetCard(o),
       softTimeoutCard(o),
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
@@ -622,8 +647,8 @@ function patch() {
     o.permission && (o.permission.level === 'full' || o.permission.level === 'auto') ? h('div', {class: 'banner warn', role: 'alert', text: o.permission.level === 'full' ? 'Antigravity đang ở mức TOÀN QUYỀN: mọi thao tác được tự duyệt, kể cả ngoài thư mục dự án. Đổi lại ở Cài đặt.' : 'Antigravity đang ở chế độ Tự động: nó tự quyết định hành động. Đổi lại ở Cài đặt.'}) : null,
     o.update ? h('div', {class: 'banner info', role: 'status'}, `Có bản mới ${o.update.package} ${o.update.latest} (đang chạy ${o.update.current}). Dừng server (Ctrl+C) rồi chạy `, h('code', {text: o.update.command})) : null].filter(Boolean));
   if (regions.view === 'tasks') {
-    setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
-    setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));
+    setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.budget, o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
+    setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
     const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
@@ -637,7 +662,7 @@ function patch() {
     setRegion('usage', JSON.stringify(state.usage), () => usageView(state.usage));
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
-    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.soft_timeout, o.progress, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.budget && [o.budget.task_tokens, o.budget.day_tokens], o.soft_timeout, o.progress, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }
