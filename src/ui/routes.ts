@@ -11,6 +11,7 @@ import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { validModelId, writeModel } from '../models.js';
 import { readProgress, writeProgress } from '../progress.js';
+import { readUsage, summarizeUsage } from '../usage.js';
 import { EFFORT_LEVELS, isEffortLevel, readEffort, writeEffort } from '../effort.js';
 import { MAX_ABSOLUTE_LIMIT_SECONDS, MIN_ABSOLUTE_LIMIT_SECONDS, isAbsoluteLimit, readSoftTimeout, writeSoftTimeout } from '../soft-timeout.js';
 import { MAX_SETTING_WAIT_SECONDS, MIN_WAIT_SECONDS, clientToolTimeoutSeconds, isWaitSeconds, writeWait } from '../wait-setting.js';
@@ -125,6 +126,10 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     if (!ctx.sessions.valid(sessionId)) { json(res, 401, {error: 'Sign in with the bridge token'}); return true; }
     if (pathname === '/ui/api/logout' && method === 'POST') { ctx.sessions.destroy(sessionId); json(res, 200, {ok: true}); return true; }
     if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
+    if (pathname === '/ui/api/usage' && method === 'GET') {
+      const offset = Number(new URL(req.url ?? '', 'http://localhost').searchParams.get('tz') ?? '0');
+      json(res, 200, summarizeUsage(await readUsage(ctx.manager.stateDirectory), {tzOffsetMinutes: Number.isInteger(offset) && Math.abs(offset) <= 840 ? offset : 0})); return true;
+    }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
     const changes = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/changes$`));
