@@ -11,6 +11,7 @@ import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope,type PromptTransport} from '../antigravity/invocation.js';
+import {appendUsage,extractStats,type TaskStats} from '../usage.js';
 import {MAX_RECENT_STEPS,rawStep,readProgress,summarizeStep,type Step} from '../progress.js';
 import {helperDirectory} from '../paths.js';
 import {readWait} from '../wait-setting.js';
@@ -52,6 +53,8 @@ interface Entry {
   logFile?: string;
   /** Soft deadline state, shown in the web UI: how often the task was extended, when the next check is due, and the absolute limit. */
   soft?: {extensions: number; nextCheckAt: number | null; hardLimitAt: number};
+  /** What agy's own result says about this task's cost (usage, duration, turns); persisted with the task. */
+  stats?: TaskStats;
   /** Steps agy reported while it ran (step progress setting): how many, and the most recent ones. Kept in memory only. */
   steps?: {total: number; recent: Step[]};
   /** Waits a client asked for without choosing a length; they get longer each time (see rampedWaitSeconds). */
@@ -311,6 +314,7 @@ export class TaskManager {
         if (!entry.stop) {
           try {
             const result = finalEnvelope(rawStdout,transport);
+            entry.stats = extractStats(result, entry.steps?.total ?? null);
             task.cli_status = typeof result.status === 'string' ? result.status : null;
             task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
             if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
@@ -338,6 +342,11 @@ export class TaskManager {
           try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
         }
         await this.persist(task);
+        await appendUsage(this.runtime.stateDirectory, {
+          at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,
+          permission: entry.request?.permission ?? null, duration_ms: task.duration_ms, agy_duration_seconds: entry.stats?.agy_duration_seconds ?? null,
+          num_turns: entry.stats?.num_turns ?? null, steps: entry.steps?.total ?? null, usage: entry.stats?.usage ?? null
+        });
         this.busy = false;
         entry.finish?.();
         void this.startNext();
@@ -406,7 +415,7 @@ export class TaskManager {
       ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
     },request.client) : null;
     const entry = this.entries.get(id);
-    return {task, request, prompt, activity: entry ? this.activityOf(entry) : null};
+    return {task, request, prompt, activity: entry ? this.activityOf(entry) : null, stats: entry?.stats ?? null};
   }
   /** The latest sign of life: output on stdout/stderr or a write to agy's log file (the file's modification time). 0 when there has been none. */
   private lastActivity(entry: Entry): number {
@@ -498,7 +507,7 @@ export class TaskManager {
     try {
       await mkdir(this.tasksDirectory, {recursive: true, mode: 0o700});
       const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null}), {mode: 0o600});
+      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null, stats: this.entries.get(task.task_id)?.stats ?? null}), {mode: 0o600});
       await rename(`${file}.tmp`, file);
     } catch { /* history is a convenience, not a correctness requirement */ }
   }
@@ -511,14 +520,16 @@ export class TaskManager {
     try { names = (await readdir(this.tasksDirectory)).filter(name => TASK_FILE.test(name)); } catch { return 0; }
     const loaded: Task[] = [];
     const requests = new Map<string, TaskRequest>();
+    const statsById = new Map<string, TaskStats>();
     for (const name of names) {
       try {
-        const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null} & Task;
+        const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null; stats?: TaskStats | null} & Task;
         // Records written before requests were kept hold the bare task.
         const task: Task = parsed.task ?? parsed;
         const request = parsed.task ? parsed.request ?? undefined : undefined;
         if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
         if (request) requests.set(task.task_id, request);
+        if (parsed.task && parsed.stats) statsById.set(task.task_id, parsed.stats);
         if (task.status === 'running' || task.status === 'queued') {
           const wasQueued = task.status === 'queued';
           task.status = 'failed'; task.process_running = false; task.ended_at ??= new Date().toISOString();
@@ -534,7 +545,7 @@ export class TaskManager {
     loaded.sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
     const keep = loaded.slice(0, this.config.max_retained_tasks).reverse();
     for (const task of loaded.slice(this.config.max_retained_tasks)) await this.forget(task.task_id);
-    for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), done: Promise.resolve()});
+    for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), stats: statsById.get(task.task_id), done: Promise.resolve()});
     return keep.length;
   }
   // Diagnose only; never remove a lock automatically, never kill anything. PIDs can be reused, so wording stays cautious.

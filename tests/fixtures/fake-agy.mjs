@@ -15,6 +15,7 @@ else if (scenario === 'active') {
   const timer = setInterval(() => { if (log) appendFileSync(log, 'tick\n'); }, 100);
   setTimeout(() => { clearInterval(timer); ok('finished while active'); }, Number(process.argv[4] ?? 2200));
 }
+else if (scenario === 'usage') process.stdout.write(JSON.stringify({status:'SUCCESS', response:'with usage', num_turns:2, duration_seconds:3.25, conversation_id:'c', usage:{input_tokens:1200, output_tokens:80, cache:{read_tokens:5, note:'text'}, label:'x'}}));
 else if (scenario.startsWith('stream')) {
   // stream-json output as seen with probe-stream: init, step_update events, then result (without a trailing newline). stream-bad returns an
   // unexpected result; stream-many sends thousands of steps (far more than the output cap); stream-hang stops after one step and waits.

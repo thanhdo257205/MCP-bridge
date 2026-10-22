@@ -5,6 +5,7 @@ const STATUS = {queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoà
 const NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
   tasks: 'M4 6h16M4 12h16M4 18h10',
+  usage: 'M4 20V10M10 20V4M16 20v-8M22 20H2',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   out: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'
 };
@@ -244,6 +245,18 @@ async function setProgress(enabled) {
   try { await api('progress', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật tiến độ từng bước (áp dụng cho task mới)' : 'Đã tắt tiến độ từng bước'); await refresh(); }
   catch (error) { notify(error.message); await refresh(); }
 }
+let usageAt = 0;
+/** Usage numbers change only when a task ends, so they are fetched when the page opens and then at most every 15 seconds. */
+async function loadUsage(force) {
+  if (!force && Date.now() - usageAt < 15000) return;
+  usageAt = Date.now();
+  try { state.usage = await api(`usage?tz=${new Date().getTimezoneOffset()}`); } catch { /* keep the numbers already shown */ }
+  patch();
+}
+const USAGE_LABELS = {input_tokens: 'Token vào', output_tokens: 'Token ra', total_tokens: 'Tổng token', cached_tokens: 'Token từ bộ nhớ đệm', cache_read_tokens: 'Token đọc từ bộ nhớ đệm', reasoning_tokens: 'Token suy luận', thinking_tokens: 'Token suy luận', prompt_tokens: 'Token vào', completion_tokens: 'Token ra'};
+const usageName = key => USAGE_LABELS[key] ? `${USAGE_LABELS[key]} (${key})` : key;
+const number = value => Number(value).toLocaleString('vi-VN', {maximumFractionDigits: 2});
+const usageLine = usage => usage && Object.keys(usage).length ? Object.entries(usage).map(([key, value]) => `${key} ${number(value)}`).join(' · ') : null;
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -362,7 +375,7 @@ function detailView() {
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
-      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
+      ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Usage (agy báo)', usageLine(state.detail?.stats?.usage) ?? '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
       ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
   const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
@@ -488,6 +501,39 @@ function permissionCard(o) {
     p.controllable ? null : h('div', {class: 'callout warn', text: `Đang bị khóa bởi biến môi trường BRIDGE_AGY_PERMISSIONS${p.reason && p.reason !== 'BRIDGE_AGY_PERMISSIONS' ? ` (${p.reason})` : ''}. Đổi biến rồi khởi động lại server để mở.`}),
     h('div', {class: 'callout warn', text: 'Danh sách "Workspace được phép" chỉ kiểm tra đường dẫn của task, không phải sandbox. Với mức Tự động hoặc Toàn quyền, Antigravity có thể tác động ra ngoài thư mục đó.'}));
 }
+function usageView(u) {
+  const head = h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Sử dụng'}), h('p', {text: 'Số liệu bridge ghi lại từ các task đã chạy qua nó.'})),
+    h('button', {class: 'btn small', onclick: () => loadUsage(true), text: 'Làm mới'}));
+  if (!u) return [head, h('div', {class: 'card empty', text: 'Đang tải…'})];
+  const t = u.totals;
+  const status = Object.entries(t.by_status).map(([key, count]) => `${STATUS[key] || key} ${count}`).join(' · ');
+  const cards = h('section', {class: 'stats', 'aria-label': 'Tổng quan sử dụng'},
+    stat('Task đã chạy', number(t.tasks), t.tasks ? `${number(t.completed)} hoàn tất · ${status}` : 'chưa có task nào'),
+    stat('Thời gian chạy', duration(t.duration_ms), 'tổng, do bridge đo'),
+    stat('Thời gian agy báo', t.agy_duration_seconds ? duration(t.agy_duration_seconds * 1000) : '—', 'tổng duration_seconds của agy'),
+    stat('Số lượt / bước', `${number(t.turns)} / ${number(t.steps)}`, 'num_turns / bước báo cáo'));
+  const callout = h('div', {class: 'callout warn', text: `Đây là mức dùng qua bridge${u.since ? ` kể từ ${clock(u.since)}` : ''} (nhật ký lưu qua các lần khởi động lại), không phải hạn mức. Hạn mức còn lại không có nguồn từ agy nên bridge không hiển thị; xem trên tài khoản Antigravity của bạn.`});
+  const sums = Object.entries(t.usage);
+  const usageCard = h('section', {class: 'card panel wide'}, h('h2', {text: 'Usage do agy báo'}),
+    sums.length ? [h('dl', {class: 'rows'}, sums.map(([key, value]) => row(usageName(key), number(value)))),
+        h('p', {class: 'muted', text: `Cộng dồn từ ${number(t.with_usage)} task có trường usage trong kết quả của agy. Tên trường do agy quyết định; bridge cộng mọi giá trị số.`})]
+      : h('p', {class: 'muted', text: 'Chưa có task nào mà kết quả của agy kèm số liệu usage. Với task chạy ở chế độ JSON hoặc stream, nếu agy trả trường usage thì tổng sẽ hiện ở đây.'}));
+  const peak = Math.max(1, ...u.by_day.map(d => d.tasks));
+  const bars = h('div', {class: 'bars'}, u.by_day.map(d => {
+    const fill = h('div', {class: 'bar-fill'}); fill.style.width = `${(d.tasks / peak * 100).toFixed(1)}%`;
+    return h('div', {class: 'bar-row'}, h('span', {class: 'muted mono', text: `${d.day.slice(8)}/${d.day.slice(5, 7)}`}), h('div', {class: 'bar-track'}, fill),
+      h('span', {class: 'mono', text: d.tasks ? `${d.tasks} · ${duration(d.duration_ms)}` : '0'}));
+  }));
+  const dayCard = h('section', {class: 'card panel wide'}, h('h2', {text: '14 ngày gần nhất'}), bars);
+  const groupTable = (title, groups, firstColumn) => h('section', {class: 'card panel wide'}, h('h2', {text: title}),
+    groups.length ? h('table', {class: 'usage-table'}, h('thead', {}, h('tr', {}, ...[firstColumn, 'Task', 'Hoàn tất', 'Thời gian', 'Usage'].map(c => h('th', {text: c})))),
+      h('tbody', {}, groups.map(g => h('tr', {}, h('td', {class: 'mono', text: g.key}), h('td', {text: number(g.tasks)}), h('td', {text: number(g.completed)}), h('td', {text: duration(g.duration_ms)}), h('td', {class: 'muted', text: usageLine(g.usage) ?? '—'})))))
+      : h('p', {class: 'muted', text: 'Chưa có dữ liệu.'}));
+  const recent = h('section', {class: 'card panel wide'}, h('h2', {text: 'Task gần nhất'}),
+    u.recent.length ? h('ul', {class: 'path-list'}, u.recent.map(r => h('li', {}, `${clock(r.at)} · ${STATUS[r.status] || r.status} · ${r.model || 'model mặc định'} · effort ${r.effort || 'mặc định'} · ${duration(r.duration_ms)}`,
+      usageLine(r.usage) ? h('span', {class: 'tag', text: usageLine(r.usage)}) : null))) : h('p', {class: 'muted', text: 'Chưa có task nào.'}));
+  return [head, callout, cards, usageCard, dayCard, groupTable('Theo model', u.by_model, 'Model'), groupTable('Theo mức suy luận', u.by_effort, 'Effort'), recent];
+}
 function settingsView(o) {
   const delegation = o.delegation;
   return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Trạng thái và giới hạn của bridge. Phần lớn chỉ đọc; chỉnh bằng file cấu hình rồi khởi động lại.'}))),
@@ -527,10 +573,10 @@ function settingsView(o) {
 
 /* ---------- Shell: built once per view change, then patched region by region ---------- */
 function mount() {
-  const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view === 'tasks' ? 'tasks' : 'settings'), label);
+  const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view === 'tasks' ? 'tasks' : view === 'usage' ? 'usage' : 'settings'), label);
   const live = h('div', {class: 'live', role: 'status'});
   const side = h('aside', {class: 'side'}, h('div', {class: 'brand'}, h('img', {src: '/ui/favicon.svg', alt: ''}), h('span', {text: 'Antigravity Bridge'})),
-    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('settings', 'Cài đặt')),
+    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('usage', 'Sử dụng'), nav('settings', 'Cài đặt')),
     h('div', {class: 'side-foot'}, live));
   const banner = h('div', {'aria-live': 'polite'});
   const main = h('main', {class: 'main'}, banner);
@@ -546,6 +592,9 @@ function mount() {
       class: 'chip-btn', 'data-filter': key, 'aria-pressed': String(state.filter === key), onclick: () => { state.filter = key; for (const b of chips.children) b.setAttribute('aria-pressed', String(b.dataset.filter === key)); patch(); }, text: label})));
     main.append(h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Task'}), h('p', {text: 'Nội dung trao đổi giữa Tech Lead và Antigravity.'}))),
       regions.stats, h('div', {class: 'tasks'}, h('div', {class: 'list-col'}, h('div', {class: 'list-tools'}, search, chips, regions.count), regions.list), regions.detail));
+  } else if (state.view === 'usage') {
+    regions.usage = h('div', {});
+    main.append(regions.usage);
   } else {
     regions.settings = h('div', {});
     main.append(regions.settings);
@@ -583,6 +632,9 @@ function patch() {
     if (!rebuilt) patchLogs();
     patchActivity();
     patchSteps();
+  } else if (regions.view === 'usage') {
+    loadUsage();
+    setRegion('usage', JSON.stringify(state.usage), () => usageView(state.usage));
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
     setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.soft_timeout, o.progress, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
