@@ -64,7 +64,7 @@ export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
   /** Test hooks: grace after the deadline before the first check (default 10s) and the delays between soft-deadline checks (default 1, 5, 10 minutes). */
-  deadlineGraceMs?: number; softCheckDelaysMs?: number[];
+  deadlineGraceMs?: number; softCheckDelaysMs?: number[]; progressIntervalMs?: number;
   /** Replaces running `agy models` (tests). */
   models?: () => Promise<ModelInfo[]>;
 }
@@ -466,6 +466,8 @@ export class TaskManager {
     finally { if (timer) clearTimeout(timer); }
     return this.get(id);
   }
+  /** How often a waiting client that asked for progress hears from the bridge. */
+  get progressIntervalMs(): number { return this.runtime.progressIntervalMs ?? 10000; }
   async wait(id: string): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
