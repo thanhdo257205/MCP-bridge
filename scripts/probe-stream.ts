@@ -22,12 +22,21 @@ clearTimeout(timer);
 
 const lines = stdout.split('\n').filter(line => line.trim());
 const events = lines.map(line => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } });
-const kinds = new Map<string, {count: number; keys: Set<string>}>();
+const kinds = new Map<string, {count: number; keys: Set<string>; inner: Map<string, Set<string>>}>();
+const typeOf = (value: unknown) => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
 for (const event of events) {
   const kind = event ? String(event.event ?? event.type ?? '(no event/type key)') : '(not JSON)';
-  const entry = kinds.get(kind) ?? {count: 0, keys: new Set<string>()};
+  const entry = kinds.get(kind) ?? {count: 0, keys: new Set<string>(), inner: new Map<string, Set<string>>()};
   entry.count++;
   for (const key of Object.keys(event ?? {})) entry.keys.add(key);
+  // One level down: only the names and value types of the fields (never the values), so the shape can be shared without exposing content.
+  for (const [key, value] of Object.entries(event ?? {})) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [innerKey, innerValue] of Object.entries(value as Record<string, unknown>)) {
+        const seen = entry.inner.get(`${key}.${innerKey}`) ?? new Set<string>(); seen.add(typeOf(innerValue)); entry.inner.set(`${key}.${innerKey}`, seen);
+      }
+    }
+  }
   kinds.set(kind, entry);
 }
 const results = paths.resultsDirectory;
@@ -35,6 +44,9 @@ await mkdir(results, {recursive: true});
 await writeFile(path.join(results, 'stream-probe.ndjson'), stdout);
 await writeFile(path.join(results, 'stream-probe.stderr.txt'), stderr);
 console.log(`agy exit code: ${code}; ${lines.length} stdout line(s); raw output saved to ${path.join(results, 'stream-probe.ndjson')} (not committed)`);
-for (const [kind, {count, keys}] of kinds) console.log(`- ${kind} x${count}: keys = ${[...keys].join(', ')}`);
+for (const [kind, {count, keys, inner}] of kinds) {
+  console.log(`- ${kind} x${count}: keys = ${[...keys].join(', ')}`);
+  if (inner.size) console.log(`    fields: ${[...inner].map(([name, types]) => `${name}:${[...types].join('|')}`).join(', ')}`);
+}
 console.log(events.every(Boolean) ? 'Every stdout line is a JSON object.' : 'Some stdout lines are not JSON; see the raw file.');
-console.log('Share the event names and keys above (not the raw file, which may contain paths) to build progress reporting on the real format.');
+console.log('Share the event names, keys and fields above (names and types only, no values; not the raw file, which may contain paths).');

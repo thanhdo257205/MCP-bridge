@@ -216,3 +216,6 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .perm-row.danger.on { border-color: var(--bad); }
 .perm-row input { margin-top: 4px; }
 .perm-row > span { display: grid; gap: 2px; }
+.steps { margin: 8px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; }
+.steps li { padding: 6px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.steps details { margin-top: 4px; }
