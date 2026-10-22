@@ -42,8 +42,17 @@ export function createServer(manager: TaskManager, environment: Record<string, u
   server.registerTool('antigravity_task_wait', {
     description: `Wait up to wait_seconds (1-${manager.maxWaitSeconds}, default ${manager.maxWaitSeconds}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
     inputSchema: waitSchema, annotations: {readOnlyHint: true, openWorldHint: false}
-  }, async ({task_id, wait_seconds}) => guard(async () => {
-    await manager.waitFor(task_id, manager.nextWaitSeconds(task_id, wait_seconds));
+  }, async ({task_id, wait_seconds}, ctx) => guard(async () => {
+    // A client that sent a progress token gets a heartbeat while the wait is held. Clients that reset their tool timeout on progress can then
+    // wait far longer than tool_timeout_sec; clients that do not simply ignore it. Never sent without a token, and a failed send never fails the wait.
+    const token = ctx.mcpReq._meta?.progressToken;
+    let beats = 0;
+    const beat = token === undefined ? null : setInterval(() => {
+      beats += 1;
+      void ctx.mcpReq.notify({method: 'notifications/progress', params: {progressToken: token, progress: beats, message: manager.activityNote(task_id) ?? 'Antigravity is still working'}}).catch(() => {});
+    }, manager.progressIntervalMs);
+    try { await manager.waitFor(task_id, manager.nextWaitSeconds(task_id, wait_seconds)); }
+    finally { if (beat) clearInterval(beat); }
     return withNextStep(manager.summary(task_id), manager.activityNote(task_id));
   }));
   server.registerTool('antigravity_task_output', {
