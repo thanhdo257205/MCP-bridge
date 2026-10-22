@@ -56,6 +56,10 @@
     {
       "sha256": "d4246abf59e2aea3ad08c7b858cd6404ee79f5656e580142d019f6f6c443f8df",
       "note": "activity line, slow is not stuck, soft deadline extension"
+    },
+    {
+      "sha256": "243a279ff026ed30ad91eaeb7376a4556bc9a1c4a9f4c206f64301c63d8853c4",
+      "note": "steps are for the user's web UI; do not fetch them"
     }
   ]
 }

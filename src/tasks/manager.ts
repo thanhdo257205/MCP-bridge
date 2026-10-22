@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput } from '../security/input.js';
@@ -9,7 +10,8 @@ import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
-import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
+import {invocationFor,finalEnvelope,type PromptTransport} from '../antigravity/invocation.js';
+import {MAX_RECENT_STEPS,rawStep,readProgress,summarizeStep,type Step} from '../progress.js';
 import {helperDirectory} from '../paths.js';
 import {readWait} from '../wait-setting.js';
 import {CHECK_DELAYS_SECONDS,readSoftTimeout,rampedWaitSeconds} from '../soft-timeout.js';
@@ -50,6 +52,8 @@ interface Entry {
   logFile?: string;
   /** Soft deadline state, shown in the web UI: how often the task was extended, when the next check is due, and the absolute limit. */
   soft?: {extensions: number; nextCheckAt: number | null; hardLimitAt: number};
+  /** Steps agy reported while it ran (step progress setting): how many, and the most recent ones. Kept in memory only. */
+  steps?: {total: number; recent: Step[]};
   /** Waits a client asked for without choosing a length; they get longer each time (see rampedWaitSeconds). */
   bareWaits?: number;
 }
@@ -185,7 +189,10 @@ export class TaskManager {
         await mkdir(logDirectory,{recursive:true});
         logFile=path.join(logDirectory,`${task.task_id}.log`);
       }
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),soft.enabled?absoluteLimit:timeout,this.config.prompt_transport,entry.request?.model??null,
+      // Step progress (owner setting): same prompt on the command line, but agy streams events (init, step_update, result) instead of one JSON at the end.
+      const transport: PromptTransport = this.config.prompt_transport === 'stdin' ? 'stdin' : readProgress(this.runtime.stateDirectory).enabled ? 'argv-stream' : 'argv';
+      const streaming = transport !== 'argv';
+      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),soft.enabled?absoluteLimit:timeout,transport,entry.request?.model??null,
         [...permissionFlags(permission),...effortFlags(entry.request?.effort??'default'),...(logFile?['--log-file',logFile]:[])]);
       const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
       const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
@@ -214,9 +221,8 @@ export class TaskManager {
         if (!entry.stop) entry.stop = reason;
         void terminateOwned(child).catch(() => { task.error = 'Failed to terminate owned process tree; execution lock is retained until process closes'; });
       };
-      const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
-        entry.lastOutputAt = Date.now();
-        task[`${stream}_bytes`] += chunk.length;
+      // Keeps data for the task's stdout/stderr logs, within the output cap.
+      const retain = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
         const available = this.config.max_output_bytes - lengths[stream];
         if (available > 0) {
           const retained=Buffer.from(chunk.subarray(0,available));
@@ -227,6 +233,35 @@ export class TaskManager {
           task.error = 'Output limit exceeded; incomplete output cannot establish success';
           requestStop('failed');
         }
+      };
+      // Stream mode: stdout is one JSON event per line. step_update events become progress steps and are not kept in the log (they could
+      // otherwise fill the output cap long before the final result); init, result and anything else are kept as before.
+      const decoder = new StringDecoder('utf8');
+      let partialLine = '';
+      const takeStepLine = (line: string): boolean => {
+        if (!line.trim()) return true;
+        let event: unknown;
+        try { event = JSON.parse(line); } catch { return false; }
+        if (typeof event !== 'object' || event === null || (event as {event?: unknown}).event !== 'step_update') return false;
+        const value = (event as {step_update?: unknown}).step_update;
+        const steps = entry.steps ??= {total: 0, recent: []};
+        steps.total += 1;
+        steps.recent.push({n: steps.total, at: Date.now(), summary: summarizeStep(value), raw: rawStep(value)});
+        if (steps.recent.length > MAX_RECENT_STEPS) steps.recent.shift();
+        return true;
+      };
+      const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+        entry.lastOutputAt = Date.now();
+        task[`${stream}_bytes`] += chunk.length;
+        let keep: Buffer = chunk;
+        if (streaming && stream === 'stdout') {
+          const lines = (partialLine + decoder.write(chunk)).split('\n');
+          partialLine = lines.pop() ?? '';
+          keep = Buffer.from(lines.filter(line => !takeStepLine(line)).map(line => `${line}\n`).join(''));
+          // A line that never ends must not grow without bound: treat an oversized one as ordinary output (and so as an overflow).
+          if (partialLine.length > this.config.max_output_bytes) { keep = Buffer.concat([keep, Buffer.from(partialLine)]); partialLine = ''; }
+        }
+        if (keep.length) retain(stream, keep);
         flushOutput();
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
@@ -264,6 +299,7 @@ export class TaskManager {
         finalized = true;
         clearTimeout(timer);
         clearInterval(outputTimer);
+        if (streaming) { const rest = partialLine + decoder.end(); partialLine = ''; if (rest.trim() && !takeStepLine(rest)) retain('stdout', Buffer.from(rest)); }
         flushOutput(true);
         const rawStdout=Buffer.concat(buffers.stdout,lengths.stdout).toString('utf8');
         const rawStderr=Buffer.concat(buffers.stderr,lengths.stderr).toString('utf8');
@@ -274,7 +310,7 @@ export class TaskManager {
         task.status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
-            const result = finalEnvelope(rawStdout,this.config.prompt_transport);
+            const result = finalEnvelope(rawStdout,transport);
             task.cli_status = typeof result.status === 'string' ? result.status : null;
             task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
             if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
@@ -288,11 +324,11 @@ export class TaskManager {
             } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
               task.status = 'completed';
             } else {
-              task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
+              task.error = typeof result.error === 'string' ? redact(result.error) : `CLI did not provide a complete successful response${streaming ? ` (stream result fields: ${Object.keys(result).slice(0, 12).join(', ') || 'none'}; if step progress is on, turn it off in Settings to return to the JSON mode)` : ''}`;
             }
           } catch {
-            task.error ??= this.config.prompt_transport === 'stdin'
-              ? 'CLI output is not a valid stream-json final result. If this happens with a real agy, set "prompt_transport": "argv" in the bridge config (the previously verified mode) and restart'
+            task.error ??= streaming
+              ? 'CLI output is not a valid stream-json final result. Turn off step progress in the web UI Settings (or, for stdin mode, set "prompt_transport": "argv" in the bridge config) to return to the verified JSON mode'
               : 'CLI output is not a valid final JSON envelope';
           }
         }
@@ -386,7 +422,8 @@ export class TaskManager {
     const iso = (value: number | null | undefined) => value ? new Date(value).toISOString() : null;
     return {
       last_output_at: iso(entry.lastOutputAt), log_updated_at: iso(logAt), log_bytes: logBytes, last_activity_at: iso(last || null),
-      soft_deadline: entry.soft ? {extensions: entry.soft.extensions, next_check_at: iso(entry.soft.nextCheckAt), hard_limit_at: iso(entry.soft.hardLimitAt)} : null
+      soft_deadline: entry.soft ? {extensions: entry.soft.extensions, next_check_at: iso(entry.soft.nextCheckAt), hard_limit_at: iso(entry.soft.hardLimitAt)} : null,
+      steps: entry.steps ? {total: entry.steps.total, recent: entry.steps.recent.map(step => ({n: step.n, at: iso(step.at), summary: step.summary, raw: step.raw}))} : null
     };
   }
   /** One short line for the client about whether Antigravity is alive (only while the task runs): the MCP tools carry it so the client need not read logs. */
@@ -395,7 +432,8 @@ export class TaskManager {
     if (!entry || entry.task.status !== 'running') return null;
     const last = this.lastActivity(entry);
     const source = entry.logFile && last && last !== (entry.lastOutputAt ?? 0) ? 'log' : 'output';
-    const extended = entry.soft?.extensions ? `; deadline extended ${entry.soft.extensions}x while active` : '';
+    const extended = (entry.soft?.extensions ? `; deadline extended ${entry.soft.extensions}x while active` : '')
+      + (entry.steps ? `; ${entry.steps.total} steps reported` : '');
     return (last ? `last ${source} activity ${Math.max(0, Math.round((Date.now() - last) / 1000))}s ago` : 'no output or log activity seen yet (normal in print mode: agy prints when it finishes)') + extended;
   }
   /** Length of the next wait for a client that did not choose one: it grows with each call for this task (1 min, 5 min, the owner's maximum). */

@@ -70,6 +70,27 @@ function activityText(activity) {
   if (soft) parts.push(soft.extensions ? `đã gia hạn ${soft.extensions} lần vì còn hoạt động; kiểm tra tiếp ${soft.next_check_at ? clock(soft.next_check_at) : '—'}` : `chưa cần gia hạn; kiểm tra lúc ${soft.next_check_at ? clock(soft.next_check_at) : '—'}`);
   return parts.join(' · ');
 }
+/** Steps agy reported (step progress setting): newest first, each with the raw event (redacted) one click away. */
+function stepsBody(activity) {
+  const steps = activity?.steps;
+  if (!steps) return [h('p', {class: 'muted', text: 'Chưa có bước nào. Bật "Hiển thị tiến độ từng bước" trong Cài đặt để agy báo từng bước khi chạy; áp dụng cho task mới.'})];
+  const shown = steps.recent.slice().reverse();
+  return [
+    h('p', {class: 'muted', text: `Đã nhận ${steps.total} bước${steps.total > steps.recent.length ? ` (hiện ${steps.recent.length} bước gần nhất)` : ''}. Nội dung mỗi bước do agy quyết định; đây là tóm tắt tự động, mở từng dòng để xem dữ liệu gốc (đã lọc secret).`}),
+    h('ol', {class: 'steps'}, shown.map(step => h('li', {},
+      h('span', {class: 'muted mono', text: `#${step.n} · ${clock(step.at)} · `}), h('span', {text: step.summary}),
+      step.raw ? h('details', {}, h('summary', {text: 'dữ liệu gốc'}), h('pre', {class: 'log', text: step.raw})) : null)))
+  ];
+}
+let stepsShown = '';
+function patchSteps() {
+  const el = document.getElementById('steps-body');
+  const steps = state.detail?.activity?.steps;
+  const signature = steps ? `${state.selected}:${steps.total}` : `${state.selected}:none`;
+  if (!el || stepsShown === signature) return;
+  stepsShown = signature;
+  el.replaceChildren(...stepsBody(state.detail.activity));
+}
 function patchActivity() {
   const el = document.getElementById('activity-line');
   const text = el && state.detail?.activity ? activityText(state.detail.activity) : null;
@@ -218,6 +239,10 @@ async function setSoftTimeout(enabled, limit_seconds) {
     notify(enabled ? 'Đã bật gia hạn khi Antigravity còn hoạt động (áp dụng cho task mới)' : 'Đã tắt gia hạn; task dừng đúng hạn như trước');
     await refresh();
   } catch (error) { notify(error.message); await refresh(); }
+}
+async function setProgress(enabled) {
+  try { await api('progress', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật tiến độ từng bước (áp dụng cho task mới)' : 'Đã tắt tiến độ từng bước'); await refresh(); }
+  catch (error) { notify(error.message); await refresh(); }
 }
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
@@ -371,6 +396,7 @@ function detailView() {
 
   return h('article', {class: 'card detail'}, head, progress, facts, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
+    details('steps', 'Các bước Antigravity báo cáo', h('div', {id: 'steps-body'}, stepsBody(state.detail?.activity))),
     details('logs', 'Log của tiến trình agy', logs),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);
 }
@@ -403,6 +429,15 @@ function modelCard(o) {
       h('span', {class: 'muted', text: o.model ? 'Bridge truyền --model này cho mọi task mới.' : 'Bridge không truyền --model; Antigravity tự dùng model đã cấu hình.'})), select),
     loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
     h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
+}
+function progressCard(o) {
+  const enabled = Boolean(o.progress?.enabled);
+  const toggle = h('input', {type: 'checkbox', checked: enabled, 'aria-label': 'Hiển thị tiến độ từng bước', onchange: event => setProgress(event.target.checked)});
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Hiển thị tiến độ từng bước (stream-json)'}),
+    h('label', {class: 'perm-row' + (enabled ? ' on' : '')}, toggle,
+      h('span', {}, h('strong', {text: enabled ? 'Đang bật' : 'Đang tắt'}),
+        h('span', {class: 'muted', text: 'Bridge chạy agy với --output-format stream-json: ngoài kết quả cuối, agy báo các sự kiện init và step_update khi đang làm việc (đã thấy bằng probe-stream trên agy 1.4.x). Các bước hiện trong chi tiết task, và là bằng chứng "còn sống" thật cho phần gia hạn. Áp dụng cho task mới, không cần khởi động lại.'}))),
+    h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: nội dung chi tiết bên trong step_update (nên hiển thị là tóm tắt tự động kèm dữ liệu gốc), và việc kết quả cuối ở chế độ này có cùng dạng với chế độ JSON. Nếu task báo lỗi "CLI output is not a valid stream-json final result" hoặc "stream result fields", hãy tắt tùy chọn này để quay về chế độ JSON đã kiểm chứng và gửi tôi thông báo lỗi.'}));
 }
 function softTimeoutCard(o) {
   const soft = o.soft_timeout || {enabled: false, limit_seconds: 7200};
@@ -466,6 +501,7 @@ function settingsView(o) {
       modelCard(o),
       effortCard(o),
       waitCard(o),
+      progressCard(o),
       softTimeoutCard(o),
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
@@ -546,9 +582,10 @@ function patch() {
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
     patchActivity();
+    patchSteps();
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
-    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.soft_timeout, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.soft_timeout, o.progress, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }
