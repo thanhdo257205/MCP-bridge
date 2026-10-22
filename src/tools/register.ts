@@ -16,9 +16,15 @@ function clientLabel(envelope: unknown): string | null {
 }
 
 /** Said at the moment the client decides what to do next: while the task runs, waiting is the whole job (any other call costs tokens and repeats Antigravity's work). */
-export const WAITING_NOTE = 'Task still running. Do nothing else: no file reads, git, tests, logs or review of this change yourself, and write no message. Call antigravity_task_wait again now.';
-const withNextStep = <T extends {status: string}>(summary: T, activity: string | null = null): T | (T & {next_step: string; activity?: string}) =>
-  summary.status === 'running' || summary.status === 'queued' ? {...summary, ...(activity ? {activity} : {}), next_step: WAITING_NOTE} : summary;
+export const WAITING_NOTE = 'Still running. Do nothing else and write no message; call antigravity_task_wait again now.';
+/**
+ * A task that is still running is reported in a few fields only: the client reads this on every wait, so each field costs tokens many times over,
+ * and everything else (paths, byte counts, pid...) is in the web UI and in the full status once the task has ended.
+ */
+const withNextStep = <T extends {status: string; task_id: string; duration_ms: number}>(summary: T, activity: string | null = null) =>
+  summary.status === 'running' || summary.status === 'queued'
+    ? {task_id: summary.task_id, status: summary.status, duration_ms: summary.duration_ms, ...(activity ? {activity} : {}), next_step: WAITING_NOTE}
+    : summary;
 
 export function createServer(manager: TaskManager, environment: Record<string, unknown>): McpServer {
   const server = new McpServer({name: 'antigravity-mcp-bridge', version: readPackageInfo().version});

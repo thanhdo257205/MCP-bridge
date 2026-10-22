@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
+import { DEFAULT_TOOL_TIMEOUT_SECONDS, codexConfigPath, planCodexConfig, readCodexConfig, writeCodexConfig } from './codex-config.js';
 import { readWait } from './wait-setting.js';
 import { configuredPort } from './http.js';
 import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
@@ -42,6 +43,9 @@ Usage: ${BIN} [command] [options]
                           packaged copy; a file you edited yourself is never overwritten
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
                           Print the exact client configuration and token commands (changes nothing)
+  setup codex|both --apply [--yes] [--tool-timeout N] [--port N]
+                          Write the Codex tool timeout (default 3700 s) into config.toml after showing the change and asking;
+                          a backup is made first. Without an antigravity entry it adds one. Claude Code is never edited
   config [--json]         Show where config, state and the token file live (never prints the token)
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
   unlock                 Reclaim a lock only when both recorded server and child PIDs are dead
@@ -138,23 +142,53 @@ async function updateCommand(args: string[]) {
   process.exitCode = status;
 }
 
-function setup(args: string[]) {
+async function setup(args: string[]) {
   const target = args[0];
-  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(`Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash]`);
+  const usage = `Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash] | setup codex|both --apply [--yes] [--tool-timeout N] [--port N]`;
+  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(usage);
   let port = process.env.PORT !== undefined && process.env.PORT !== '0' ? configuredPort(process.env.PORT) : 3000;
   let shell: Shell[] = process.platform === 'win32' ? ['powershell', 'cmd'] : ['bash'];
+  let apply = false; let yes = false; let toolTimeout = DEFAULT_TOOL_TIMEOUT_SECONDS;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--port' && args[i + 1] !== undefined) port = configuredPort(args[++i]);
     else if (args[i] === '--shell' && args[i + 1] !== undefined) {
       const chosen = args[++i];
       if (chosen !== 'powershell' && chosen !== 'cmd' && chosen !== 'bash') throw new Error('--shell must be powershell, cmd or bash');
       shell = [chosen];
-    } else throw new Error(`Unknown option for setup: ${args[i]}`);
+    } else if (args[i] === '--apply') apply = true;
+    else if (args[i] === '--yes') yes = true;
+    else if (args[i] === '--tool-timeout' && args[i + 1] !== undefined) toolTimeout = Number(args[++i]);
+    else throw new Error(`Unknown option for setup: ${args[i]}`);
   }
   if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
+  const mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  if (apply) { await applyCodexSetup(target, mcpUrl, toolTimeout, yes); return; }
   const tokenFile = path.join(paths.stateDirectory, 'http-token');
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
-  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined}));
+  console.log(renderSetup({clients, mcpUrl, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined}));
+}
+
+/** Shows exactly what would change in Codex's config.toml and writes it only after a yes (or --yes). */
+async function applyCodexSetup(target: string, mcpUrl: string, toolTimeout: number, yes: boolean) {
+  if (target === 'claude') throw new Error('--apply edits Codex only. Claude Code is configured with the claude mcp add command printed by setup claude.');
+  const file = codexConfigPath();
+  const plan = planCodexConfig(await readCodexConfig(file), {mcpUrl, toolTimeoutSeconds: toolTimeout});
+  if (plan.action === 'refuse') { console.error(`Not changed: ${plan.reason}. Edit ${file} by hand (see: ${BIN} setup codex).`); process.exitCode = 1; return; }
+  if (plan.action === 'none') { console.log(`Nothing to do: ${plan.reason} in ${file}.`); return; }
+  console.log(`File: ${file}`, `\nChange (${plan.action}):`, `\n  before: ${plan.before}`, `\n  after:  ${plan.after.split('\n').join('\n          ')}`);
+  console.log(`\nA tool timeout of ${toolTimeout} s lets one antigravity_task_wait call be held for as long as the web UI allows. If the bridge ever hangs, Codex waits that long before reporting an error.`);
+  if (!yes) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY)) { console.error('Not changed: this is not an interactive terminal. Run it in a terminal, or add --yes.'); process.exitCode = 1; return; }
+    const rl = createInterface({input: process.stdin, output: process.stdout});
+    try {
+      const answer = (await rl.question('Apply this change? [y/N] ')).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') { console.log('Not changed.'); return; }
+    } finally { rl.close(); }
+  }
+  const backup = await writeCodexConfig(file, plan);
+  console.log(backup ? `Done. Backup: ${backup}` : 'Done (file created).');
+  console.log('Restart Codex so it reads the new setting. The token variable still has to be set: see the first step of ' + `${BIN} setup codex.`);
+  if (target === 'both') console.log('Claude Code was not edited; see: ' + `${BIN} setup claude.`);
 }
 
 async function workspaces(args: string[]) {

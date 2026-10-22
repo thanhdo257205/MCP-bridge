@@ -37,7 +37,8 @@ export function renderSetup(input: SetupInput): string {
     add(`${step++}. Codex`, '   Either run:', `     codex mcp add antigravity --url ${posix(input.mcpUrl)} --bearer-token-env-var BRIDGE_HTTP_TOKEN`,
       '   or merge this block into ~/.codex/config.toml (or $CODEX_HOME/config.toml); replace an existing [mcp_servers.antigravity] entry instead of adding a second one:',
       '', '     [mcp_servers.antigravity]', `     url = '${input.mcpUrl}'`, "     bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'", '     startup_timeout_sec = 30', `     tool_timeout_sec = ${clientToolTimeoutSeconds(input.waitSeconds ?? 55)}`, '     enabled = true', '',
-      '   Check: codex mcp get antigravity   (then ask Codex to call antigravity_environment)', '');
+      '   Check: codex mcp get antigravity   (then ask Codex to call antigravity_environment)',
+      `   To only set the tool timeout (and add the entry when it is missing) without editing the file yourself: ${input.bin} setup codex --apply`, '');
   }
   if (input.clients.includes('claude')) {
     add(`${step++}. Claude Code`, '   Either run (single quotes keep ${BRIDGE_HTTP_TOKEN} unexpanded so the token is not stored in the config):');
