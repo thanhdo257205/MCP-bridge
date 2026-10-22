@@ -59,6 +59,22 @@ function duration(ms) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}p ${s % 60}s`;
 }
 function agoEl(iso, className) { return h('span', {class: className, 'data-ago': iso, title: clock(iso), text: ago(iso)}); }
+/** What Antigravity has shown while the task runs: output, writes to its log file (when the soft deadline is on), and any extension of the deadline. */
+function activityText(activity) {
+  if (!activity) return 'Chưa có thông tin hoạt động.';
+  const parts = [];
+  if (activity.log_updated_at) parts.push(`Log của agy cập nhật ${ago(activity.log_updated_at)} (${bytes(activity.log_bytes ?? 0)})`);
+  else if (activity.soft_deadline) parts.push('Log của agy: chưa có dữ liệu');
+  parts.push(activity.last_output_at ? `Output cuối ${ago(activity.last_output_at)}` : 'chưa có output từ agy (bình thường ở chế độ print/json: agy chỉ in khi xong)');
+  const soft = activity.soft_deadline;
+  if (soft) parts.push(soft.extensions ? `đã gia hạn ${soft.extensions} lần vì còn hoạt động; kiểm tra tiếp ${soft.next_check_at ? clock(soft.next_check_at) : '—'}` : `chưa cần gia hạn; kiểm tra lúc ${soft.next_check_at ? clock(soft.next_check_at) : '—'}`);
+  return parts.join(' · ');
+}
+function patchActivity() {
+  const el = document.getElementById('activity-line');
+  const text = el && state.detail?.activity ? activityText(state.detail.activity) : null;
+  if (el && text !== null && el.textContent !== text) el.textContent = text;
+}
 function agoElPrefix(prefix, iso) { return h('span', {}, prefix, agoEl(iso)); }
 function elapsedEl(iso, prefix = '') { return h('span', {'data-elapsed': iso, 'data-prefix': prefix, text: prefix + duration(Date.now() - Date.parse(iso))}); }
 function tick() {
@@ -195,6 +211,14 @@ async function setWait(seconds) {
   try { await api('wait', {method: 'POST', body: {seconds}}); notify('Đã đổi thời gian chờ mỗi lần gọi. Nhớ đặt thời hạn tool của Codex/Claude cho khớp.'); await refresh(); }
   catch (error) { notify(error.message); await refresh(); }
 }
+const SOFT_LIMITS = [{seconds: 1800, title: '30 phút'}, {seconds: 3600, title: '1 giờ'}, {seconds: 7200, title: '2 giờ (mặc định)'}, {seconds: 14400, title: '4 giờ'}, {seconds: 28800, title: '8 giờ'}];
+async function setSoftTimeout(enabled, limit_seconds) {
+  try {
+    await api('soft-timeout', {method: 'POST', body: {enabled, limit_seconds}});
+    notify(enabled ? 'Đã bật gia hạn khi Antigravity còn hoạt động (áp dụng cho task mới)' : 'Đã tắt gia hạn; task dừng đúng hạn như trước');
+    await refresh();
+  } catch (error) { notify(error.message); await refresh(); }
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -308,8 +332,8 @@ function detailView() {
   const activity = state.detail?.activity;
   const progress = running ? h('div', {class: 'progress', 'aria-label': 'Tiến độ'},
     h('div', {class: 'bar', 'data-bar-start': task.started_at, 'data-bar-total': String((request?.timeout_seconds ?? 300) * 1000), role: 'presentation'}, h('span', {})),
-    h('div', {class: 'muted'}, elapsedEl(task.started_at, 'Đã chạy '), ` / giới hạn ${request?.timeout_seconds ?? '—'}s · `,
-      activity?.last_output_at ? agoElPrefix('Output cuối: ', activity.last_output_at) : 'chưa có output từ agy (bình thường ở chế độ print/json: agy chỉ in khi xong)')) : null;
+    h('div', {class: 'muted'}, elapsedEl(task.started_at, 'Đã chạy '), ` / giới hạn ${request?.timeout_seconds ?? '—'}s`),
+    h('div', {class: 'muted', id: 'activity-line'}, activityText(activity))) : null;
   const facts = h('dl', {class: 'kv'},
     ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
@@ -380,6 +404,21 @@ function modelCard(o) {
     loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
     h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
 }
+function softTimeoutCard(o) {
+  const soft = o.soft_timeout || {enabled: false, limit_seconds: 7200};
+  const known = SOFT_LIMITS.some(l => l.seconds === soft.limit_seconds);
+  const toggle = h('input', {type: 'checkbox', checked: soft.enabled, 'aria-label': 'Gia hạn khi Antigravity còn hoạt động', onchange: event => setSoftTimeout(event.target.checked, soft.limit_seconds)});
+  const select = h('select', {class: 'select', 'aria-label': 'Giới hạn tuyệt đối', onchange: event => setSoftTimeout(soft.enabled, Number(event.target.value))},
+    ...SOFT_LIMITS.map(l => h('option', {value: String(l.seconds), text: l.title})),
+    known ? null : h('option', {value: String(soft.limit_seconds), text: `${soft.limit_seconds} giây`}));
+  select.value = String(soft.limit_seconds);
+  return h('section', {class: 'card panel wide'}, h('h2', {text: 'Gia hạn khi Antigravity còn hoạt động'}),
+    h('label', {class: 'perm-row' + (soft.enabled ? ' on' : '')}, toggle,
+      h('span', {}, h('strong', {text: soft.enabled ? 'Đang bật' : 'Đang tắt (task dừng đúng hạn)'}),
+        h('span', {class: 'muted', text: 'Đến hạn của task, bridge không dừng ngay mà kiểm tra xem agy còn hoạt động không (có byte mới ở output, hoặc file log của agy vừa được ghi). Nếu còn thì gia hạn rồi kiểm tra lại sau 1 phút, rồi 5 phút, rồi mỗi 10 phút; nếu không thấy hoạt động trong khoảng đó thì dừng task. Khi bật, bridge yêu cầu agy ghi log vào .bridge-state/agy-logs.'}))),
+    h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Giới hạn tuyệt đối'}), h('span', {class: 'muted', text: 'Dù còn hoạt động, task vẫn dừng khi tổng thời gian chạy tới mức này.'})), select),
+    h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: tôi chưa biết agy có ghi log trong lúc suy luận ở chế độ --print. Bật rồi giao một task và xem dòng "Log của agy cập nhật…" trong chi tiết task: nếu số KB tăng khi agy đang chạy thì tín hiệu này dùng được. Nếu log không tăng, task sẽ dừng đúng hạn như khi tắt tính năng (không tệ hơn).'}));
+}
 function waitCard(o) {
   const wait = o.wait || {seconds: 55, client_tool_timeout_seconds: 115};
   const known = WAIT_PRESETS.some(p => p.seconds === wait.seconds);
@@ -427,6 +466,7 @@ function settingsView(o) {
       modelCard(o),
       effortCard(o),
       waitCard(o),
+      softTimeoutCard(o),
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
@@ -501,13 +541,14 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, d && {...d, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
+    patchActivity();
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
-    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.soft_timeout, o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }

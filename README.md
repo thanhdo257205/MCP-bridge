@@ -399,6 +399,17 @@ Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển th�
 
 Đây là chỉ dẫn, không phải rào chắn kỹ thuật: bridge không ép được mô hình ngừng đọc file trong lúc chờ. Mức tiết kiệm thực tế chưa được đo.
 
+**Biết Antigravity còn hoạt động, và gia hạn thay vì dừng giữa chừng (time out mềm):** ở chế độ `--print --output-format json`, `agy` không in gì cho đến khi xong, nên bridge không thể biết chắc nó đang "suy luận". Bridge chỉ nhìn được những dấu hiệu còn sống: byte mới ở output, và (khi bạn bật tính năng này) việc file log của `agy` được ghi thêm. Cài đặt → "Gia hạn khi Antigravity còn hoạt động" (mặc định **tắt**, áp dụng cho task mới) làm như sau:
+
+- Bridge yêu cầu `agy` ghi log vào `.bridge-state/agy-logs/<task_id>.log` (cờ `--log-file`) và cho `agy` giới hạn tuyệt đối làm print timeout của chính nó, thay vì hạn của task.
+- Đến hạn của task (`timeout_seconds`), bridge **không dừng ngay**: nó kiểm tra có hoạt động trong khoảng vừa qua không. Còn thì gia hạn rồi kiểm tra lại sau **1 phút, rồi 5 phút, rồi mỗi 10 phút**. Không có hoạt động trong khoảng đó thì dừng task (trạng thái `timeout`, lý do ghi trong `error`).
+- **Giới hạn tuyệt đối** (30 phút đến 8 giờ, mặc định 2 giờ) luôn có hiệu lực: task vẫn còn hoạt động cũng dừng khi tới mức này, để một task treo hay chạy mãi không giữ chỗ vô hạn (chỉ có một task chạy một lúc).
+- Chi tiết task trong giao diện hiện "Log của agy cập nhật … (KB)", "Output cuối …", số lần đã gia hạn và lần kiểm tra tiếp theo. `antigravity_task_wait` và `antigravity_task_status` trả thêm một dòng `activity` (ví dụ `last log activity 12s ago; deadline extended 2x while active`) để Codex/Claude không phải tự đọc log.
+- **Chưa kiểm chứng:** tôi chưa biết `agy` có ghi log đều đặn trong lúc suy luận hay chỉ ghi lúc bắt đầu và kết thúc. Nếu log không tăng khi `agy` đang chạy thì không có dấu hiệu nào để gia hạn, và task dừng đúng hạn như khi tắt tính năng (không tệ hơn). Cách kiểm tra: bật tính năng, giao một task kéo dài vài chục giây và xem dòng "Log của agy cập nhật…" tăng khi task đang chạy.
+- Tắt tính năng thì mọi thứ như cũ: hạn cứng, không có `--log-file`.
+
+**Cấp bậc chờ:** khi Codex/Claude gọi `antigravity_task_wait` mà không chọn số giây, lần chờ đầu của mỗi task dài 1 phút, lần hai 5 phút, từ lần ba là mức tối đa bạn chọn (không bao giờ vượt mức đó; với mặc định 55 giây thì cả ba đều 55 giây). Lệnh chờ kết thúc ngay khi task xong, nên cấp bậc này chủ yếu giúp báo "vẫn đang chạy" đến sớm ở đầu task, không tiết kiệm thêm token. Thời hạn tool của client vẫn phải lớn hơn mức tối đa đó.
+
 **Quyền của Antigravity:** mục Cài đặt → Quyền của Antigravity chọn Antigravity được tự làm đến đâu khi chạy task. Ở chế độ không tương tác, Antigravity tự từ chối việc cần phê duyệt (thấy ở `denied_actions`), nên task sửa file hay chạy lệnh có thể không làm được nếu cài đặt Antigravity chưa cấp quyền. Năm mức, từ thấp đến cao:
 
 | Mức | Cờ truyền cho `agy` | Ý nghĩa |

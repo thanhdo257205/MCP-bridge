@@ -52,6 +52,10 @@
     {
       "sha256": "117fa45228f421cf266f45c1a112e37ba2c164fb31c8fd64392495efa025828c",
       "note": "while a task runs only wait: no reads or messages between waits, next_step note, no custom client"
+    },
+    {
+      "sha256": "d4246abf59e2aea3ad08c7b858cd6404ee79f5656e580142d019f6f6c443f8df",
+      "note": "activity line, slow is not stuck, soft deadline extension"
     }
   ]
 }
