@@ -253,7 +253,7 @@ async function loadUsage(force) {
   try { state.usage = await api(`usage?tz=${new Date().getTimezoneOffset()}`); } catch { /* keep the numbers already shown */ }
   patch();
 }
-const USAGE_LABELS = {input_tokens: 'Token vào', output_tokens: 'Token ra', total_tokens: 'Tổng token', cached_tokens: 'Token từ bộ nhớ đệm', reasoning_tokens: 'Token suy luận', thinking_tokens: 'Token suy luận', prompt_tokens: 'Token vào', completion_tokens: 'Token ra'};
+const USAGE_LABELS = {input_tokens: 'Token vào', output_tokens: 'Token ra', total_tokens: 'Tổng token', cached_tokens: 'Token từ bộ nhớ đệm', cache_read_tokens: 'Token đọc từ bộ nhớ đệm', reasoning_tokens: 'Token suy luận', thinking_tokens: 'Token suy luận', prompt_tokens: 'Token vào', completion_tokens: 'Token ra'};
 const usageName = key => USAGE_LABELS[key] ? `${USAGE_LABELS[key]} (${key})` : key;
 const number = value => Number(value).toLocaleString('vi-VN', {maximumFractionDigits: 2});
 const usageLine = usage => usage && Object.keys(usage).length ? Object.entries(usage).map(([key, value]) => `${key} ${number(value)}`).join(' · ') : null;
