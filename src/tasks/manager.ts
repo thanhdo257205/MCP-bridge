@@ -11,7 +11,7 @@ import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {invocationFor,finalEnvelope,type PromptTransport} from '../antigravity/invocation.js';
-import {appendUsage,extractStats,type TaskStats} from '../usage.js';
+import {appendUsage,extractStats,totalTokens,type TaskStats} from '../usage.js';
 import {MAX_RECENT_STEPS,rawStep,readProgress,summarizeStep,type Step} from '../progress.js';
 import {helperDirectory} from '../paths.js';
 import {readWait} from '../wait-setting.js';
@@ -395,9 +395,9 @@ export class TaskManager {
     return rest;
   }
   /** All retained tasks, newest first, without logs. */
-  list(): (TaskSummary & {title: string | null})[] {
+  list(): (TaskSummary & {title: string | null; tokens: number | null})[] {
     return [...this.entries.entries()]
-      .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null}))
+      .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null, tokens: totalTokens(entry.stats?.usage)}))
       .sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
   }
   /** Models offered by the installed Antigravity CLI (read on demand, never at startup). */
