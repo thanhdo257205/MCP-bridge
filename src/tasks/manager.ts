@@ -407,7 +407,7 @@ export class TaskManager {
         if (entry.stop) await terminateOwned(child).catch(() => { task.error = 'Owned process group cleanup failed'; });
         task.exit_code = code; task.signal = signal; task.process_running = false;
         task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
-        task.status = entry.stop ?? 'failed';
+        let finalStatus: Status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
             const result = await agent.adapter.parseResult({
@@ -421,9 +421,9 @@ export class TaskManager {
               action: redact(item.action).slice(0, 200), display_name: redact(item.display_name).slice(0, 200)
             }));
             if (result.timeout) {
-              task.status = 'timeout'; task.error = result.error ? redact(result.error) : 'CLI reported a timeout';
+              finalStatus = 'timeout'; task.error = result.error ? redact(result.error) : 'CLI reported a timeout';
             } else if (result.success) {
-              task.status = 'completed';
+              finalStatus = 'completed';
             } else {
               task.error = result.error ? redact(result.error) : `${agent.adapter.label} did not provide a complete successful response`;
             }
@@ -431,8 +431,8 @@ export class TaskManager {
             task.error ??= error instanceof Error ? redact(error.message) : `Could not parse ${agent.adapter.label} output`;
           }
         }
-        if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
-        if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
+        if (finalStatus === 'timeout') task.error ??= 'Task exceeded its execution deadline';
+        if (finalStatus === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
         if (worktree) {
           try {
             task.scope = await inspectScope(worktree, task.owns);
@@ -444,6 +444,9 @@ export class TaskManager {
         if (ownsLock) {
           try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
         }
+        // The terminal status is written last: a reader that polls the moment the process exits must never see
+        // "completed" while the owns-scope check on the worktree is still outstanding.
+        task.status = finalStatus;
         await this.persist(task);
         await appendUsage(this.runtime.stateDirectory, {
           at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,

@@ -194,6 +194,34 @@ test('worktree tasks run in parallel, keep separate branches and report in-scope
   }
 });
 
+test('a worktree task never reports a final status before its owns scope is attached', async () => {
+  const {root, repo, state} = await repository();
+  const agent = codexAgent({executable: process.execPath, prefixArgs: [fixture, 'write', 'scope', '150'], source: 'fixture'}, codexStatus);
+  const manager = new TaskManager(configFor(repo), {
+    executable: process.execPath, supported: true, stateDirectory: state, agents: [agent], defaultAgent: 'codex'
+  });
+  try {
+    const started = await manager.delegate({task: 'edit a', workspace: repo, acceptance_criteria: ['ok'], agent: 'codex', isolation: 'worktree', owns: ['a.txt']});
+    const premature: string[] = [];
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const seen = manager.summary(started.task_id);
+      if (seen.status !== 'queued' && seen.status !== 'running') {
+        if (!seen.scope) premature.push(seen.status);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    const done = await manager.wait(started.task_id);
+    assert.deepEqual(premature, [], `readers saw ${premature.join(',')} without a scope report`);
+    assert.equal(done.status, 'completed');
+    assert.ok(done.scope?.checked, 'the completed task carries its scope report');
+  } finally {
+    await manager.shutdown();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('changes outside the declared owns scope complete but require review', async () => {
   const {root, repo, state} = await repository();
   const agent = codexAgent({executable: process.execPath, prefixArgs: [fixture, 'write', 'stray.txt'], source: 'fixture'}, codexStatus);
