@@ -121,7 +121,7 @@ test('status omits logs, wait tool returns running within its bound, output carr
   try {
     const id=String((await call(client,'antigravity_delegate',{task:'mock delayed response',workspace,acceptance_criteria:['mock']})).task_id);
     const status=await call(client,'antigravity_task_status',{task_id:id});assert.ok(!('final_response' in status));assert.ok(!('stdout' in status));
-    const result=await client.callTool({name:'antigravity_task_wait',arguments:{task_id:id,wait_seconds:26}});assert.equal(result.isError,true);
+    const result=await client.callTool({name:'antigravity_task_wait',arguments:{task_id:id,wait_seconds:3601}});assert.equal(result.isError,true,'above the hard cap is rejected');
     const waited=await call(client,'antigravity_task_wait',{task_id:id,wait_seconds:5});assert.equal(waited.status,'completed');
     assert.equal((await call(client,'antigravity_task_output',{task_id:id})).final_response,'delayed response');
   } finally {await client.close();await bridge.close();}
@@ -152,7 +152,7 @@ test('web UI: overview and task detail expose the request/response exchange',asy
     await manager.wait(id);
     const detail=await (await ui(bridge,`tasks/${id}`)).json() as Record<string,any>;
     assert.equal(detail.task.final_response,'delayed response');
-    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20,client:'http-test 1',agent:'antigravity',isolation:'none',owns:[],autonomy:'auto'});
+    assert.deepEqual(detail.request,{task:'Add <b>feature</b> X',acceptance_criteria:['Criterion one','Criterion two'],context:'Some context',timeout_seconds:20,client:'http-test 1',agent:'antigravity',isolation:'none',owns:[],autonomy:'auto',model:null,permission:'default',effort:'default'});
     assert.equal(detail.task.agent,'antigravity');assert.equal(detail.task.isolation,'none');assert.equal(detail.task.autonomy,'auto');
     assert.deepEqual(overview.concurrency,{normal_running:1,worktrees_running:0,max_parallel_worktrees:2});
     assert.equal(overview.default_agent,'antigravity');assert.equal(overview.agents[0].id,'antigravity');assert.equal(overview.default_autonomy,'auto');
@@ -194,6 +194,19 @@ test('web UI: shutdown requires confirmation and stops the server plus owned tas
     assert.equal(manager.get(id).status,'canceled');
     await assert.rejects(fetch(bridge.healthUrl));
   } finally {await client.close();await bridge.close();}
+});
+test('web UI: a running task reports when its process last produced output',async()=>{
+  const {bridge,workspace,manager}=await setup('hang');
+  try {
+    const task=await manager.delegate({task:'mock hang',workspace,acceptance_criteria:['mock']});
+    const early=await (await ui(bridge,`tasks/${task.task_id}`)).json() as {activity:{last_output_at:string|null}};
+    for(let i=0;i<50&&!(await (await ui(bridge,`tasks/${task.task_id}`)).json() as {activity:{last_output_at:string|null}}).activity.last_output_at;i++)await new Promise(r=>setTimeout(r,100));
+    const later=await (await ui(bridge,`tasks/${task.task_id}`)).json() as {activity:{last_output_at:string|null}};
+    assert.ok(early.activity.last_output_at===null||typeof early.activity.last_output_at==='string');
+    assert.match(String(later.activity.last_output_at),/^\d{4}-\d\d-\d\dT/);
+    assert.ok(!('activity' in await manager.get(task.task_id)),'MCP task data stays unchanged');
+    await manager.cancel(task.task_id);
+  } finally {await bridge.close();}
 });
 test('client identity: modern clients are named by clientInfo, legacy ones fall back to the User-Agent',async()=>{
   const {bridge,workspace,manager}=await setup('delayed');

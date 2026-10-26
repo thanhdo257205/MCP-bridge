@@ -8,11 +8,13 @@ import { paths } from './paths.js';
 import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
+import { DEFAULT_TOOL_TIMEOUT_SECONDS, codexConfigPath, planCodexConfig, readCodexConfig, writeCodexConfig } from './codex-config.js';
+import { readWait } from './wait-setting.js';
 import { configuredPort } from './http.js';
-import { offerSkillInstall } from './onboarding.js';
+import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
 import { addWorkspace, listWorkspaces, removeWorkspace, resolveWorkspaceDirectory } from './workspace-config.js';
 import {
-  checkForUpdate, compareVersions, fetchLatest, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
+  checkForUpdate, compareVersions, fetchLatest, installFailureHint, isGlobalInstall, isSnoozed, readPackageInfo, runGlobalInstall, snooze, updateCheckEnabled, type UpdateInfo
 } from './update.js';
 
 const BIN = 'agy-mcp-bridge';
@@ -33,10 +35,14 @@ Usage: ${BIN} [command] [options]
                           Manage the directories agents may edit (restart the server afterwards)
   delegation on|off|status
                           Switch delegation to Antigravity on or off immediately (no restart)
-  skill install --client codex|claude|both [--project <dir>]
-                          Install the antigravity-bridge skill for the chosen client (first run also offers it once)
+  skill install --client codex|claude|both [--project <dir>] [--update]
+                          Install the antigravity-bridge skill (first run also offers it once). --update replaces an older
+                          packaged copy; a file you edited yourself is never overwritten
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
                           Print the exact client configuration (changes nothing)
+  setup codex|both --apply [--yes] [--tool-timeout N] [--port N]
+                          Write the Codex tool timeout (default 3700 s) into config.toml after showing the change and asking;
+                          a backup is made first. Without an antigravity entry it adds one. Claude Code is never edited
   config [--json]         Show where config and state live
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
   unlock                 Reclaim a lock only when both recorded server and child PIDs are dead
@@ -77,6 +83,8 @@ async function offerUpdate(info: UpdateInfo) {
     process.exit(0);
   }
   console.error(`[update] Installation failed (see npm output above). Starting the current version ${info.current}.`);
+  const hint = installFailureHint(pkg.name);
+  if (hint) console.error(`[update] ${hint}`);
 }
 
 async function start(args: string[]) {
@@ -101,7 +109,11 @@ async function start(args: string[]) {
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if (interactive) {
     const rl = createInterface({input: process.stdin, output: process.stdout});
-    try { await offerSkillInstall({stateDirectory: paths.stateDirectory, interactive, ask: question => rl.question(question)}); }
+    try {
+      const offer = {stateDirectory: paths.stateDirectory, interactive, ask: (question: string) => rl.question(question)};
+      await offerSkillInstall(offer);
+      await offerSkillUpdate(offer);
+    }
     finally { rl.close(); }
   }
   await import('./index.js');
@@ -122,25 +134,56 @@ async function updateCommand(args: string[]) {
   }
   const status = runGlobalInstall(pkg.name, latest);
   if (status === 0) console.log(`Updated to ${latest}. Restart a running server (Ctrl+C, then ${BIN}) to use it.`);
+  else { const hint = installFailureHint(pkg.name); if (hint) console.error(hint); }
   process.exitCode = status;
 }
 
-function setup(args: string[]) {
+async function setup(args: string[]) {
   const target = args[0];
-  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(`Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash]`);
+  const usage = `Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash] | setup codex|both --apply [--yes] [--tool-timeout N] [--port N]`;
+  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(usage);
   let port = process.env.PORT !== undefined && process.env.PORT !== '0' ? configuredPort(process.env.PORT) : 3000;
   let shell: Shell[] = process.platform === 'win32' ? ['powershell', 'cmd'] : ['bash'];
+  let apply = false; let yes = false; let toolTimeout = DEFAULT_TOOL_TIMEOUT_SECONDS;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--port' && args[i + 1] !== undefined) port = configuredPort(args[++i]);
     else if (args[i] === '--shell' && args[i + 1] !== undefined) {
       const chosen = args[++i];
       if (chosen !== 'powershell' && chosen !== 'cmd' && chosen !== 'bash') throw new Error('--shell must be powershell, cmd or bash');
       shell = [chosen];
-    } else throw new Error(`Unknown option for setup: ${args[i]}`);
+    } else if (args[i] === '--apply') apply = true;
+    else if (args[i] === '--yes') yes = true;
+    else if (args[i] === '--tool-timeout' && args[i + 1] !== undefined) toolTimeout = Number(args[++i]);
+    else throw new Error(`Unknown option for setup: ${args[i]}`);
   }
   if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
+  const mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  if (apply) { await applyCodexSetup(target, mcpUrl, toolTimeout, yes); return; }
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
-  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, shells: shell, bin: BIN}));
+  console.log(renderSetup({clients, mcpUrl, shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined}));
+}
+
+/** Shows exactly what would change in Codex's config.toml and writes it only after a yes (or --yes). */
+async function applyCodexSetup(target: string, mcpUrl: string, toolTimeout: number, yes: boolean) {
+  if (target === 'claude') throw new Error('--apply edits Codex only. Claude Code is configured with the claude mcp add command printed by setup claude.');
+  const file = codexConfigPath();
+  const plan = planCodexConfig(await readCodexConfig(file), {mcpUrl, toolTimeoutSeconds: toolTimeout});
+  if (plan.action === 'refuse') { console.error(`Not changed: ${plan.reason}. Edit ${file} by hand (see: ${BIN} setup codex).`); process.exitCode = 1; return; }
+  if (plan.action === 'none') { console.log(`Nothing to do: ${plan.reason} in ${file}.`); return; }
+  console.log(`File: ${file}`, `\nChange (${plan.action}):`, `\n  before: ${plan.before}`, `\n  after:  ${plan.after.split('\n').join('\n          ')}`);
+  console.log(`\nA tool timeout of ${toolTimeout} s lets one antigravity_task_wait call be held for as long as the web UI allows. If the bridge ever hangs, Codex waits that long before reporting an error.`);
+  if (!yes) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY)) { console.error('Not changed: this is not an interactive terminal. Run it in a terminal, or add --yes.'); process.exitCode = 1; return; }
+    const rl = createInterface({input: process.stdin, output: process.stdout});
+    try {
+      const answer = (await rl.question('Apply this change? [y/N] ')).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') { console.log('Not changed.'); return; }
+    } finally { rl.close(); }
+  }
+  const backup = await writeCodexConfig(file, plan);
+  console.log(backup ? `Done. Backup: ${backup}` : 'Done (file created).');
+  console.log('Restart Codex so it reads the new setting.');
+  if (target === 'both') console.log('Claude Code was not edited; see: ' + `${BIN} setup claude.`);
 }
 
 async function workspaces(args: string[]) {

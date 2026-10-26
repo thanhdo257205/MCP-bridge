@@ -1,7 +1,7 @@
 import { CLIENT_INFO_META_KEY, McpServer } from '@modelcontextprotocol/server';
 import { requestContext } from '../request-context.js';
 import * as z from 'zod/v4';
-import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
+import { delegateSchema, taskIdSchema, waitSchema } from '../security/input.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
 import {readPackageInfo} from '../update.js';
@@ -14,6 +14,17 @@ function clientLabel(envelope: unknown): string | null {
   const clean = declared?.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 100);
   return clean || null;
 }
+
+/** Said at the moment the client decides what to do next: while the task runs, waiting is the whole job (any other call costs tokens and repeats Antigravity's work). */
+export const WAITING_NOTE = 'Still running. Do nothing else and write no message; call antigravity_task_wait again now.';
+/**
+ * A task that is still running is reported in a few fields only: the client reads this on every wait, so each field costs tokens many times over,
+ * and everything else (paths, byte counts, pid...) is in the web UI and in the full status once the task has ended.
+ */
+const withNextStep = <T extends {status: string; task_id: string; duration_ms: number}>(summary: T, activity: string | null = null) =>
+  summary.status === 'running' || summary.status === 'queued'
+    ? {task_id: summary.task_id, status: summary.status, duration_ms: summary.duration_ms, ...(activity ? {activity} : {}), next_step: WAITING_NOTE}
+    : summary;
 
 export function createServer(manager: TaskManager, environment: Record<string, unknown>): McpServer {
   const server = new McpServer({name: 'antigravity-mcp-bridge', version: readPackageInfo().version});
@@ -37,13 +48,22 @@ export function createServer(manager: TaskManager, environment: Record<string, u
   server.registerTool('antigravity_task_status', {
     description: 'Get task/process state, timing, error, denied_actions and byte counts without logs (cheap to poll). Accepted tasks survive client disconnect; finished-task history is kept on disk across restarts until retention expiry.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
-  }, async ({task_id}) => guard(() => manager.summary(task_id)));
+  }, async ({task_id}) => guard(() => withNextStep(manager.summary(task_id), manager.activityNote(task_id))));
   server.registerTool('antigravity_task_wait', {
-    description: `Wait up to wait_seconds (1-${MAX_WAIT_SECONDS}, default ${DEFAULT_WAIT_SECONDS}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
+    description: `Wait up to wait_seconds (1-${manager.maxWaitSeconds}, default ${manager.maxWaitSeconds}) for the task to finish, then return its status without logs. Returns early when the task ends; if still running, call again. Does not cancel the task.`,
     inputSchema: waitSchema, annotations: {readOnlyHint: true, openWorldHint: false}
-  }, async ({task_id, wait_seconds}) => guard(async () => {
-    await manager.waitFor(task_id, wait_seconds ?? DEFAULT_WAIT_SECONDS);
-    return manager.summary(task_id);
+  }, async ({task_id, wait_seconds}, ctx) => guard(async () => {
+    // A client that sent a progress token gets a heartbeat while the wait is held. Clients that reset their tool timeout on progress can then
+    // wait far longer than tool_timeout_sec; clients that do not simply ignore it. Never sent without a token, and a failed send never fails the wait.
+    const token = ctx.mcpReq._meta?.progressToken;
+    let beats = 0;
+    const beat = token === undefined ? null : setInterval(() => {
+      beats += 1;
+      void ctx.mcpReq.notify({method: 'notifications/progress', params: {progressToken: token, progress: beats, message: manager.activityNote(task_id) ?? 'Antigravity is still working'}}).catch(() => {});
+    }, manager.progressIntervalMs);
+    try { await manager.waitFor(task_id, manager.nextWaitSeconds(task_id, wait_seconds)); }
+    finally { if (beat) clearInterval(beat); }
+    return withNextStep(manager.summary(task_id), manager.activityNote(task_id));
   }));
   server.registerTool('antigravity_task_output', {
     description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. Does not wait for completion.',

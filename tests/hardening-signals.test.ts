@@ -12,7 +12,10 @@ test('repeated shutdown signals report cleanup in progress and let HTTP cleanup 
   const waitFor=async(value:string)=>{const until=Date.now()+10000;while(!log.includes(value)&&Date.now()<until)await new Promise(r=>setTimeout(r,20));assert.ok(log.includes(value),log);};
   try{
     await waitFor('MCP endpoint:');const url=new URL(log.match(/MCP endpoint: (http:\/\/127\.0\.0\.1:\d+\/mcp)/)![1]);
-    socket=connect(Number(url.port),'127.0.0.1');await once(socket,'connect');socket.write('GET /health HTTP/1.1\r\n');
+    socket=connect(Number(url.port),'127.0.0.1');
+    // The server closes this half-sent request during shutdown, which can reach the client as ECONNRESET (seen on Windows); that is expected, not a failure.
+    socket.on('error',()=>{});
+    await once(socket,'connect');socket.write('GET /health HTTP/1.1\r\n');
     child.send('stop');child.send('stop');await waitFor('cleanup in progress, please wait');assert.equal(child.exitCode,null);
     socket.destroy();await waitFor('[bridge] Stopped');child.send('disconnect');const [code]=await exited;assert.equal(code,0);
   }finally{socket?.destroy();if(child.exitCode===null){child.kill();await exited;}}

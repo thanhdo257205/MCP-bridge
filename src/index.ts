@@ -1,10 +1,8 @@
-import path from 'node:path';
 import { paths } from './paths.js';
 import { openBrowser } from './open.js';
 import { checkForUpdate, knownUpdate, readPackageInfo, setKnownUpdate, updateCheckEnabled } from './update.js';
 import { createRuntime } from './runtime.js';
 import { configuredPort, startHttpBridge } from './http.js';
-
 async function main() {
   const port = configuredPort();
   const {manager, environment} = await createRuntime();

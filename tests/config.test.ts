@@ -34,3 +34,18 @@ test('the prompt goes through argv by default (the mode verified with a real agy
   const example = JSON.parse(await readFile(new URL('../../config/workspaces.example.json', import.meta.url), 'utf8')) as {prompt_transport: string};
   assert.equal(example.prompt_transport, 'argv', 'the shipped example does not silently opt in to stdin');
 });
+test('task time limits: the default maximum stays 15 minutes, the owner can raise it to an hour, nothing above', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-timeout-'));
+  const file = path.join(dir, 'workspaces.json');
+  process.env.ANTIGRAVITY_BRIDGE_CONFIG = file;
+  await writeFile(file, JSON.stringify({allowed_workspaces: []}));
+  const defaults = await loadConfig();
+  assert.equal(defaults.max_timeout_seconds, 900);assert.equal(defaults.default_timeout_seconds, 300);
+  await writeFile(file, JSON.stringify({allowed_workspaces: [], max_timeout_seconds: 3600, default_timeout_seconds: 1200}));
+  const raised = await loadConfig();
+  assert.equal(raised.max_timeout_seconds, 3600);assert.equal(raised.default_timeout_seconds, 1200);
+  await writeFile(file, JSON.stringify({allowed_workspaces: [], max_timeout_seconds: 3601}));
+  await assert.rejects(loadConfig());
+  await writeFile(file, JSON.stringify({allowed_workspaces: [], max_timeout_seconds: 600, default_timeout_seconds: 1200}));
+  await assert.rejects(loadConfig(), /Default timeout exceeds maximum/);
+});

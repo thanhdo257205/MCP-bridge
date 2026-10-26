@@ -1,5 +1,5 @@
 import { loadConfig, sessionOnlyWorkspaces } from './config.js';
-import { paths } from './paths.js';
+import { helperDirectory, paths } from './paths.js';
 import { inspectCli, resolveCommand, startProcess, VERIFIED_AGY_VERSIONS } from './antigravity/process.js';
 import { createAgentRegistry, publicAgents, type AntigravityInspection } from './agents/registry.js';
 import { TaskManager } from './tasks/manager.js';
@@ -11,7 +11,7 @@ export async function createRuntime() {
   let antigravity: AntigravityInspection = {version: 'unavailable', executable: '', supported: false, warnings: []};
   try {
     const command = await resolveCommand(config.executable);
-    cli = await inspectCli(command.executable, paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
+    cli = await inspectCli(command.executable, helperDirectory(), (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
     antigravity = {...cli, executable: cli.executable || command.source};
   } catch {
     antigravity = {version: 'unavailable', executable: '', supported: false, warnings: ['Antigravity CLI unavailable or inspection failed']};
@@ -61,6 +61,7 @@ export async function createRuntime() {
       'CLI SUCCESS/exit 0 does not establish acceptance; tool permissions may have been denied.',
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
       'Existing agent permissions, hooks, MCP and credential access remain governed by each CLI configuration.',
+      'Antigravity permission flags are off unless the bridge owner raises the level in the web UI (a client cannot change it). At the default level, actions that need approval are denied (see denied_actions).',
       'No permission bypass flags. Dangerous actions require separate interactive approval.',
       'Windows uses taskkill on the live owned child tree; abrupt server termination may orphan processes.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'

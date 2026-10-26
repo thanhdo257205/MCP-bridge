@@ -1,26 +1,31 @@
 import type { PromptTransport } from '../antigravity/invocation.js';
 import { finalEnvelope, invocationFor } from '../antigravity/invocation.js';
+import { extractStats } from '../usage.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
 const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
 
-export function antigravityAdapter(executable: string, transport: PromptTransport): AgentAdapter {
+export function antigravityAdapter(executable: string, defaultTransport: PromptTransport): AgentAdapter {
   return {
     id: 'antigravity',
     label: 'Antigravity',
     capabilities: CAPABILITIES,
     buildInvocation(task) {
-      const invocation = invocationFor(task.prompt, task.timeoutSeconds, transport);
-      return {executable, args: invocation.args, stdin: invocation.stdin};
+      const transport = task.promptTransport ?? defaultTransport;
+      const invocation = invocationFor(task.prompt, task.timeoutSeconds, transport, task.model ?? null, task.extraArgs ?? []);
+      return {executable, args: invocation.args, stdin: invocation.stdin, transport};
     },
     async parseResult(raw: RawRun): Promise<AgentResult> {
+      const transport = raw.transport ?? defaultTransport;
       let envelope: Record<string, unknown>;
       try {
         envelope = finalEnvelope(raw.stdout, transport);
       } catch {
         throw new Error(transport === 'stdin'
           ? 'CLI output is not a valid stream-json final result. If this happens with a real agy, set "prompt_transport": "argv" in the bridge config (the previously verified mode) and restart'
-          : 'CLI output is not a valid final JSON envelope');
+          : transport === 'argv-stream'
+            ? 'CLI output is not a valid stream-json final result. Turn off step progress in the web UI Settings to return to the verified JSON mode'
+            : 'CLI output is not a valid final JSON envelope');
       }
       const response = typeof envelope.response === 'string' ? envelope.response : null;
       const deniedActions = Array.isArray(envelope.denied_actions)
@@ -33,7 +38,7 @@ export function antigravityAdapter(executable: string, transport: PromptTranspor
       const result: AgentResult = {
         success: false, response, error: null,
         cliStatus: typeof envelope.status === 'string' ? envelope.status : null,
-        numTurns, deniedActions
+        numTurns, deniedActions, stats: extractStats(envelope, null)
       };
       if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(raw.stderr)) {
         return {...result, timeout: true, error: 'CLI reported a print timeout (possibly with exit code 0)'};
@@ -44,7 +49,9 @@ export function antigravityAdapter(executable: string, transport: PromptTranspor
       if (raw.exitCode === 0 && envelope.status === 'SUCCESS' && numTurns !== null && numTurns > 0 && response?.trim()) {
         return {...result, success: true};
       }
-      return {...result, error: typeof envelope.error === 'string' ? envelope.error : 'CLI did not provide a complete successful response'};
+      // A stream result that is not the expected envelope is reported by field name, because that is what tells the owner to turn step progress off.
+      const fields = transport === 'argv' ? '' : ` (stream result fields: ${Object.keys(envelope).slice(0, 12).join(', ') || 'none'}; if step progress is on, turn it off in Settings to return to the JSON mode)`;
+      return {...result, error: typeof envelope.error === 'string' ? envelope.error : `CLI did not provide a complete successful response${fields}`};
     }
   };
 }

@@ -1,5 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
+import type { PromptTransport } from '../antigravity/invocation.js';
 import type { ProcessOptions } from '../antigravity/process.js';
+import type { TaskStats } from '../usage.js';
 
 export type Autonomy = 'suggest' | 'auto' | 'full';
 export type Isolation = 'none' | 'worktree';
@@ -14,7 +16,11 @@ export interface AgentStatus {
 
 export interface AgentTask {
   prompt: string; workspace: string; timeoutSeconds: number; autonomy: Autonomy;
-  owns: string[]; taskId: string; stateDirectory: string; model?: string;
+  owns: string[]; taskId: string; stateDirectory: string; model?: string | null;
+  /** CLI-specific flags this adapter understands (Antigravity permissions, effort, log file). */
+  extraArgs?: string[];
+  /** Output mode for adapters that support more than one (Antigravity). */
+  promptTransport?: PromptTransport;
 }
 
 export interface Invocation {
@@ -23,11 +29,14 @@ export interface Invocation {
   stdin?: string;
   /** A file the CLI writes its final message to; read after the process closes. */
   resultFile?: string;
+  /** How stdout should be parsed; set only by adapters that support several modes. */
+  transport?: PromptTransport;
 }
 
 export interface RawRun {
   stdout: string; stderr: string; exitCode: number | null; signal: string | null;
   resultFile: string | null;
+  transport?: PromptTransport;
 }
 
 export interface AgentResult {
@@ -37,6 +46,8 @@ export interface AgentResult {
   cliStatus: string | null;
   numTurns: number | null;
   deniedActions: DeniedAction[];
+  /** Usage/duration reported by the CLI, when it reports any. */
+  stats?: TaskStats;
   /** The CLI itself reported a timeout (exit code may still be 0). */
   timeout?: boolean;
 }

@@ -24,7 +24,7 @@ async function setup(scenario = 'ok', overrides: Partial<Config> = {}) {
 }
 
 test('strict validation rejects missing fields, empty criteria, flags and oversized timeout',()=>{
-  for (const item of [{}, {task:'x',workspace:'x',acceptance_criteria:[]},{task:'x',workspace:'x',acceptance_criteria:['ok'],timeout_seconds:901},{task:'x',workspace:'x',acceptance_criteria:['ok'],shell:true}]) assert.equal(delegateSchema.safeParse(item).success,false);
+  for (const item of [{}, {task:'x',workspace:'x',acceptance_criteria:[]},{task:'x',workspace:'x',acceptance_criteria:['ok'],timeout_seconds:3601},{task:'x',workspace:'x',acceptance_criteria:['ok'],shell:true}]) assert.equal(delegateSchema.safeParse(item).success,false);
   assert.equal(delegateSchema.safeParse({task:'x\0',workspace:'x',acceptance_criteria:['ok']}).success,false);
   assert.equal(delegateSchema.safeParse({task:'x'.repeat(16000),workspace:'x',context:'x'.repeat(12000),acceptance_criteria:['ok']}).success,false);
 });

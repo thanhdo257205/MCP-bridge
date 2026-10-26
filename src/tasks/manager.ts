@@ -1,10 +1,11 @@
 import type { ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import type { Config } from '../config.js';
-import { delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
+import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
@@ -12,6 +13,15 @@ import { startProcess, terminateOwned, type ProcessOptions } from '../antigravit
 import {legacyAntigravityAgent} from '../agents/antigravity.js';
 import type {AgentRuntime, Autonomy, Isolation, PublicAgentStatus} from '../agents/types.js';
 import {createWorktree, inspectScope, removeWorktree, type ScopeReport, type Worktree} from '../isolation/worktree.js';
+import type {PromptTransport} from '../antigravity/invocation.js';
+import {appendUsage,totalTokens,type TaskStats} from '../usage.js';
+import {MAX_RECENT_STEPS,rawStep,readProgress,summarizeStep,type Step} from '../progress.js';
+import {helperDirectory} from '../paths.js';
+import {readWait} from '../wait-setting.js';
+import {CHECK_DELAYS_SECONDS,readSoftTimeout,rampedWaitSeconds} from '../soft-timeout.js';
+import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
+import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
+import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
@@ -32,6 +42,12 @@ const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 export interface TaskRequest {
   task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null;
   agent?: string; isolation?: Isolation; owns?: string[]; autonomy?: Autonomy; worktree?: string | null; branch?: string | null;
+  /** Model chosen in the web UI when the task was accepted (null: Antigravity's own default). Absent in older records. */
+  model?: string | null;
+  /** Antigravity permission level this task ran (or will run) with; absent in older records. */
+  permission?: PermissionLevel;
+  /** Reasoning effort the task was accepted with ('default': no --effort flag); absent in older records. */
+  effort?: EffortLevel;
 }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
@@ -40,12 +56,28 @@ interface Entry {
   finish?: () => void;
   /** Validated input and the resolved agent kept until the process starts (a queued task waits with it). */
   pending?: {input: DelegateInput; workspace: string; timeout: number; agent: AgentRuntime; autonomy: Autonomy};
+  /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
+  lastOutputAt?: number;
+  /** Log file agy was asked to write (only when the soft deadline is on); its modification time is a liveness signal. */
+  logFile?: string;
+  /** Soft deadline state, shown in the web UI: how often the task was extended, when the next check is due, and the absolute limit. */
+  soft?: {extensions: number; nextCheckAt: number | null; hardLimitAt: number};
+  /** What agy's own result says about this task's cost (usage, duration, turns); persisted with the task. */
+  stats?: TaskStats;
+  /** Steps agy reported while it ran (step progress setting): how many, and the most recent ones. Kept in memory only. */
+  steps?: {total: number; recent: Step[]};
+  /** Waits a client asked for without choosing a length; they get longer each time (see rampedWaitSeconds). */
+  bareWaits?: number;
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
   agents?: AgentRuntime[];
   defaultAgent?: string | null;
+  /** Test hooks: grace after the deadline before the first check (default 10s) and the delays between soft-deadline checks (default 1, 5, 10 minutes). */
+  deadlineGraceMs?: number; softCheckDelaysMs?: number[]; progressIntervalMs?: number;
+  /** Replaces running `agy models` (tests). */
+  models?: () => Promise<ModelInfo[]>;
 }
 
 export class TaskManager {
@@ -158,7 +190,10 @@ export class TaskManager {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
         client: meta.client ? redact(meta.client).slice(0, 100) : null,
-        agent: task.agent, isolation: input.isolation, owns: input.owns, autonomy
+        agent: task.agent, isolation: input.isolation, owns: input.owns, autonomy,
+        model: agent?.adapter.id === 'antigravity' ? await readModel(this.runtime.stateDirectory) : null,
+        permission: permissionState(this.runtime.stateDirectory).level,
+        effort: readEffort(this.runtime.stateDirectory)
       }
     };
     this.entries.set(task.task_id, entry);
@@ -228,12 +263,35 @@ export class TaskManager {
       await this.persist(task);
       checkStarting();
       const promptInput = {...input, workspace: execWorkspace, autonomy};
+      // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
+      const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
+      if(entry.request)entry.request.permission=permission;
+      // Soft deadline (owner setting, off by default): agy gets the absolute limit as its own print timeout and a log file whose growth shows it is alive.
+      const soft=readSoftTimeout(this.runtime.stateDirectory);
+      const antigravity = agent.adapter.id === 'antigravity';
+      const absoluteLimit=Math.max(timeout,soft.limit_seconds);
+      let logFile:string|undefined;
+      if(antigravity&&soft.enabled){
+        const logDirectory=path.join(this.runtime.stateDirectory,'agy-logs');
+        await mkdir(logDirectory,{recursive:true});
+        logFile=path.join(logDirectory,`${task.task_id}.log`);
+      }
+      // Step progress (owner setting): Antigravity streams events instead of one JSON at the end; other agents keep their own protocol.
+      const transport: PromptTransport|undefined = antigravity
+        ? (this.config.prompt_transport === 'stdin' ? 'stdin' : readProgress(this.runtime.stateDirectory).enabled ? 'argv-stream' : 'argv')
+        : undefined;
+      const extraArgs = antigravity
+        ? [...permissionFlags(permission),...effortFlags(entry.request?.effort??'default'),...(logFile?['--log-file',logFile]:[])]
+        : [];
       const invocation = agent.adapter.buildInvocation({
-        prompt: promptFor(promptInput, entry.request?.client), workspace: execWorkspace, timeoutSeconds: timeout,
+        prompt: promptFor(promptInput, entry.request?.client), workspace: execWorkspace,
+        timeoutSeconds: antigravity&&soft.enabled?absoluteLimit:timeout,
         autonomy, owns: task.owns, taskId: task.task_id, stateDirectory: this.runtime.stateDirectory,
-        model: this.config.agents?.codex_model
+        model: antigravity ? entry.request?.model ?? null : this.config.agents?.codex_model,
+        extraArgs, promptTransport: transport
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
+      const streaming = invocation.transport !== undefined && invocation.transport !== 'argv';
       const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin};
       const child = agent.launch
         ? agent.launch(invocation.args, execWorkspace, options)
@@ -263,8 +321,8 @@ export class TaskManager {
         if (!entry.stop) entry.stop = reason;
         void terminateOwned(child).catch(() => { task.error = 'Failed to terminate owned process tree; execution lock is retained until process closes'; });
       };
-      const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
-        task[`${stream}_bytes`] += chunk.length;
+      // Keeps data for the task's stdout/stderr logs, within the output cap.
+      const retain = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
         const available = this.config.max_output_bytes - lengths[stream];
         if (available > 0) {
           const retained=Buffer.from(chunk.subarray(0,available));
@@ -275,11 +333,63 @@ export class TaskManager {
           task.error = 'Output limit exceeded; incomplete output cannot establish success';
           requestStop('failed');
         }
+      };
+      // Stream mode: stdout is one JSON event per line. step_update events become progress steps and are not kept in the log (they could
+      // otherwise fill the output cap long before the final result); init, result and anything else are kept as before.
+      const decoder = new StringDecoder('utf8');
+      let partialLine = '';
+      const takeStepLine = (line: string): boolean => {
+        if (!line.trim()) return true;
+        let event: unknown;
+        try { event = JSON.parse(line); } catch { return false; }
+        if (typeof event !== 'object' || event === null || (event as {event?: unknown}).event !== 'step_update') return false;
+        const value = (event as {step_update?: unknown}).step_update;
+        const steps = entry.steps ??= {total: 0, recent: []};
+        steps.total += 1;
+        steps.recent.push({n: steps.total, at: Date.now(), summary: summarizeStep(value), raw: rawStep(value)});
+        if (steps.recent.length > MAX_RECENT_STEPS) steps.recent.shift();
+        return true;
+      };
+      const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+        entry.lastOutputAt = Date.now();
+        task[`${stream}_bytes`] += chunk.length;
+        let keep: Buffer = chunk;
+        if (streaming && stream === 'stdout') {
+          const lines = (partialLine + decoder.write(chunk)).split('\n');
+          partialLine = lines.pop() ?? '';
+          keep = Buffer.from(lines.filter(line => !takeStepLine(line)).map(line => `${line}\n`).join(''));
+          // A line that never ends must not grow without bound: treat an oversized one as ordinary output (and so as an overflow).
+          if (partialLine.length > this.config.max_output_bytes) { keep = Buffer.concat([keep, Buffer.from(partialLine)]); partialLine = ''; }
+        }
+        if (keep.length) retain(stream, keep);
         flushOutput();
       };
       child.stdout!.on('data', (data: Buffer) => capture('stdout', data));
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
-      const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
+      const graceMs=this.runtime.deadlineGraceMs??10000;
+      let timer: NodeJS.Timeout;
+      if (!soft.enabled) timer = setTimeout(() => requestStop('timeout'), timeout * 1000 + graceMs);
+      else {
+        entry.logFile = logFile;
+        const delays=(this.runtime.softCheckDelaysMs??CHECK_DELAYS_SECONDS.map(seconds=>seconds*1000));
+        const hardLimitAt=started+absoluteLimit*1000+graceMs;
+        entry.soft={extensions:0,nextCheckAt:null,hardLimitAt};
+        let step=0;
+        // At the deadline and then after 1, 5 and every 10 minutes: extend while there was activity in the window since the last check.
+        const check = () => {
+          const now=Date.now();
+          const window=delays[Math.min(step,delays.length-1)];
+          const idle=now-this.lastActivity(entry);
+          if (now>=hardLimitAt) { task.error=`Stopped at the absolute limit of ${absoluteLimit}s; the task was still running`; requestStop('timeout'); return; }
+          if (idle>window) { task.error=`No sign of activity for ${Math.round(Math.min(idle,now-started)/1000)}s after the ${timeout}s deadline; stopped`; requestStop('timeout'); return; }
+          step+=1; entry.soft!.extensions+=1;
+          const delay=Math.max(1,Math.min(delays[Math.min(step,delays.length-1)],hardLimitAt-now));
+          entry.soft!.nextCheckAt=now+delay;
+          timer=setTimeout(check,delay);
+        };
+        timer = setTimeout(check, timeout * 1000 + graceMs);
+        entry.soft.nextCheckAt=started+timeout*1000+graceMs;
+      }
       const outputTimer=setInterval(()=>flushOutput(),1000);
       child.once('error', () => { task.error = `Could not start ${agent.adapter.label} process`; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
@@ -289,6 +399,7 @@ export class TaskManager {
         finalized = true;
         clearTimeout(timer);
         clearInterval(outputTimer);
+        if (streaming) { const rest = partialLine + decoder.end(); partialLine = ''; if (rest.trim() && !takeStepLine(rest)) retain('stdout', Buffer.from(rest)); }
         flushOutput(true);
         const rawStdout=Buffer.concat(buffers.stdout,lengths.stdout).toString('utf8');
         const rawStderr=Buffer.concat(buffers.stderr,lengths.stderr).toString('utf8');
@@ -300,8 +411,10 @@ export class TaskManager {
         if (!entry.stop) {
           try {
             const result = await agent.adapter.parseResult({
-              stdout: rawStdout, stderr: rawStderr, exitCode: code, signal, resultFile: invocation.resultFile ?? null
+              stdout: rawStdout, stderr: rawStderr, exitCode: code, signal, resultFile: invocation.resultFile ?? null,
+              transport: invocation.transport
             });
+            if (result.stats) entry.stats = {...result.stats, steps: entry.steps?.total ?? null};
             task.cli_status = result.cliStatus;
             task.final_response = result.response === null ? null : redact(result.response);
             task.denied_actions = result.deniedActions.slice(0, 100).map(item => ({
@@ -332,6 +445,11 @@ export class TaskManager {
           try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
         }
         await this.persist(task);
+        await appendUsage(this.runtime.stateDirectory, {
+          at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,
+          permission: entry.request?.permission ?? null, duration_ms: task.duration_ms, agy_duration_seconds: entry.stats?.agy_duration_seconds ?? null,
+          num_turns: entry.stats?.num_turns ?? null, steps: entry.steps?.total ?? null, usage: entry.stats?.usage ?? null
+        });
         this.release(entry);
         entry.finish?.();
         void this.startNext();
@@ -384,11 +502,17 @@ export class TaskManager {
     return rest;
   }
   /** All retained tasks, newest first, without logs. */
-  list(): (TaskSummary & {title: string | null})[] {
+  list(): (TaskSummary & {title: string | null; tokens: number | null})[] {
     return [...this.entries.entries()]
-      .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null}))
+      .map(([id, entry]) => ({...this.summary(id), title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null, tokens: totalTokens(entry.stats?.usage)}))
       .sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
   }
+  /** Models offered by the installed Antigravity CLI (read on demand, never at startup). */
+  availableModels(): Promise<ModelInfo[]> {
+    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, helperDirectory(), this.config.extra_env_passthrough);
+  }
+  currentModel(): Promise<string | null> { return readModel(this.runtime.stateDirectory); }
+
   /** Full record for the web UI: the request, the exact prompt shape sent to the CLI (redacted), and the task with logs. */
   detail(id: string) {
     const task = this.get(id);
@@ -400,8 +524,49 @@ export class TaskManager {
       isolation: request.isolation ?? 'none', owns: request.owns ?? [],
       ...(request.autonomy === undefined ? {} : {autonomy: request.autonomy})
     },request.client) : null;
-    return {task, request, prompt};
+    const entry = this.entries.get(id);
+    return {task, request, prompt, activity: entry ? this.activityOf(entry) : null, stats: entry?.stats ?? null};
   }
+  /** The latest sign of life: output on stdout/stderr or a write to agy's log file (the file's modification time). 0 when there has been none. */
+  private lastActivity(entry: Entry): number {
+    let log = 0;
+    if (entry.logFile) { try { log = statSync(entry.logFile).mtimeMs; } catch { /* not created yet */ } }
+    return Math.max(entry.lastOutputAt ?? 0, log);
+  }
+  /** What the web UI shows for a running task: the signs of life agy has given and the state of the soft deadline. */
+  private activityOf(entry: Entry) {
+    let logBytes: number | null = null; let logAt: number | null = null;
+    if (entry.logFile) { try { const stats = statSync(entry.logFile); logBytes = stats.size; logAt = stats.mtimeMs; } catch { /* not created yet */ } }
+    const last = this.lastActivity(entry);
+    const iso = (value: number | null | undefined) => value ? new Date(value).toISOString() : null;
+    return {
+      last_output_at: iso(entry.lastOutputAt), log_updated_at: iso(logAt), log_bytes: logBytes, last_activity_at: iso(last || null),
+      soft_deadline: entry.soft ? {extensions: entry.soft.extensions, next_check_at: iso(entry.soft.nextCheckAt), hard_limit_at: iso(entry.soft.hardLimitAt)} : null,
+      steps: entry.steps ? {total: entry.steps.total, recent: entry.steps.recent.map(step => ({n: step.n, at: iso(step.at), summary: step.summary, raw: step.raw}))} : null
+    };
+  }
+  /** One short line for the client about whether Antigravity is alive (only while the task runs): the MCP tools carry it so the client need not read logs. */
+  activityNote(id: string): string | null {
+    const entry = this.entries.get(id);
+    if (!entry || entry.task.status !== 'running') return null;
+    const last = this.lastActivity(entry);
+    const source = entry.logFile && last && last !== (entry.lastOutputAt ?? 0) ? 'log' : 'output';
+    const extended = (entry.soft?.extensions ? `; deadline extended ${entry.soft.extensions}x while active` : '')
+      + (entry.steps ? `; ${entry.steps.total} steps reported` : '');
+    return (last ? `last ${source} activity ${Math.max(0, Math.round((Date.now() - last) / 1000))}s ago` : 'no output or log activity seen yet (normal in print mode: agy prints when it finishes)') + extended;
+  }
+  /** Length of the next wait for a client that did not choose one: it grows with each call for this task (1 min, 5 min, the owner's maximum). */
+  nextWaitSeconds(id: string, requested?: number): number {
+    const cap = this.maxWaitSeconds;
+    if (requested !== undefined) return Math.min(requested, cap);
+    const entry = this.entries.get(id);
+    if (!entry) return cap;
+    const count = entry.bareWaits ?? 0;
+    entry.bareWaits = count + 1;
+    return rampedWaitSeconds(count, cap);
+  }
+  /** Longest single wait a client may ask for. */
+  get maxWaitSeconds(): number { return readWait(this.runtime.stateDirectory) ?? this.config.max_wait_seconds ?? DEFAULT_MAX_WAIT_SECONDS; }
   /** Bounded long-poll: returns as soon as the task ends, or after `seconds` if it is still running. */
   async waitFor(id: string, seconds: number): Promise<Task> {
     const entry = this.entries.get(id);
@@ -411,6 +576,8 @@ export class TaskManager {
     finally { if (timer) clearTimeout(timer); }
     return this.get(id);
   }
+  /** How often a waiting client that asked for progress hears from the bridge. */
+  get progressIntervalMs(): number { return this.runtime.progressIntervalMs ?? 10000; }
   async wait(id: string): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
@@ -452,7 +619,7 @@ export class TaskManager {
     try {
       await mkdir(this.tasksDirectory, {recursive: true, mode: 0o700});
       const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null}), {mode: 0o600});
+      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null, stats: this.entries.get(task.task_id)?.stats ?? null}), {mode: 0o600});
       await rename(`${file}.tmp`, file);
     } catch { /* history is a convenience, not a correctness requirement */ }
   }
@@ -465,9 +632,10 @@ export class TaskManager {
     try { names = (await readdir(this.tasksDirectory)).filter(name => TASK_FILE.test(name)); } catch { return 0; }
     const loaded: Task[] = [];
     const requests = new Map<string, TaskRequest>();
+    const statsById = new Map<string, TaskStats>();
     for (const name of names) {
       try {
-        const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null} & Task;
+        const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null; stats?: TaskStats | null} & Task;
         // Records written before requests were kept hold the bare task.
         const task: Task = parsed.task ?? parsed;
         task.agent ??= 'antigravity';
@@ -480,6 +648,7 @@ export class TaskManager {
         const request = parsed.task ? parsed.request ?? undefined : undefined;
         if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
         if (request) requests.set(task.task_id, request);
+        if (parsed.task && parsed.stats) statsById.set(task.task_id, parsed.stats);
         if (task.status === 'running' || task.status === 'queued') {
           const wasQueued = task.status === 'queued';
           task.status = 'failed'; task.process_running = false; task.ended_at ??= new Date().toISOString();
@@ -495,7 +664,7 @@ export class TaskManager {
     loaded.sort((a, b) => Date.parse(b.queued_at ?? b.started_at) - Date.parse(a.queued_at ?? a.started_at));
     const keep = loaded.slice(0, this.config.max_retained_tasks).reverse();
     for (const task of loaded.slice(this.config.max_retained_tasks)) await this.forget(task.task_id);
-    for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), done: Promise.resolve()});
+    for (const task of keep) this.entries.set(task.task_id, {task, request: requests.get(task.task_id), stats: statsById.get(task.task_id), done: Promise.resolve()});
     return keep.length;
   }
   // Diagnose only; never remove a lock automatically, never kill anything. PIDs can be reused, so wording stays cautious.
@@ -524,7 +693,7 @@ export class TaskManager {
     return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks},
       concurrency: {normal_running: this.busy ? 1 : 0, worktrees_running: this.worktreeRunning, max_parallel_worktrees: this.maxParallelWorktrees},
       ...this.agentsOverview(),
-      delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
+      delegation: delegationState(this.runtime.stateDirectory), agy_permissions: permissionState(this.runtime.stateDirectory).level, max_wait_seconds: this.maxWaitSeconds, recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

@@ -203,3 +203,7 @@ test('cli: a non-interactive start never offers or installs the skill', async ()
 test('cli: --no-skill-prompt is accepted and listed in help', () => {
   assert.match(run(['help']).stdout, /--no-skill-prompt/);
 });
+
+test('cli: the bridge has no token to show', () => {
+  assert.doesNotMatch(run(['help']).stdout, /--show-token/);
+});

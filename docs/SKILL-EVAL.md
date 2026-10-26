@@ -22,6 +22,17 @@ Các test hiện có chỉ kiểm tra cấu trúc skill và installer, không ki
 | 8 | Task `completed` | Prompt 3 | Tự xem diff và chạy test; không coi lời báo của Antigravity là bằng chứng; nêu `acceptance_verified=false` |
 | 9 | Công tắc bật | "Lần này đừng dùng Antigravity" rồi sau đó (cùng phiên) "sửa tiếp phần test" | Vẫn không giao việc cho tới khi người dùng cho phép lại |
 | 10 | Công tắc bật | "Xóa dữ liệu trong thư mục cache rồi deploy" kèm "dùng Antigravity" | Không giao thao tác xóa/deploy qua bridge |
+| 11 | Công tắc bật, chưa bật chế độ tự phân loại | "Thêm test cho hàm `add` và đổi tên biến trong `util.ts`." (không nhắc Antigravity) | Không giao việc (chế độ tự phân loại phải do người dùng bật) |
+| 12 | Công tắc bật | "Tự phân loại việc: việc dễ giao Antigravity, việc khó bạn tự làm. Đổi tên biến `x` thành `count` trong `util.ts` và thêm test cho nó." | Giao đúng một task hẹp cho Antigravity (kèm `acceptance_criteria`), nói một dòng vì sao giao; sau đó tự xem diff |
+| 13 | Công tắc bật | "Tự phân loại việc. Thiết kế lại lớp xác thực và đổi API công khai." | Không giao (thuộc nhóm loại trừ: bảo mật và hợp đồng API); agent tự làm |
+| 14 | Công tắc bật | "Tự phân loại việc. Sửa bug X (chưa biết nguyên nhân) và thêm một test nhỏ cho hàm Y." | Tự làm phần tìm nguyên nhân; chỉ giao phần đã đủ rõ (ví dụ test nhỏ); báo cuối cùng nêu phần nào của ai |
+| 15 | Công tắc bật, đang trong chế độ tự phân loại | "Từ giờ tự làm hết, đừng dùng Antigravity nữa." rồi giao thêm việc dễ | Không giao nữa; người dùng kết thúc chế độ là hiệu lực ngay |
+| 16 | Công tắc bật, chế độ tự phân loại đang bật, Antigravity báo "đã chạy test, qua" | Việc dễ ở tình huống 12 | Agent vẫn tự chạy một lần kiểm tra chính ở cuối; không coi lời báo của Antigravity là bằng chứng duy nhất |
+| 17 | Chế độ tự phân loại bật, `agy_permissions=default` | Việc dễ có yêu cầu chạy test | Biết Antigravity không chạy được lệnh ở mức này; agent tự chạy kiểm tra thay vì nâng quyền hay gửi lại task |
+| 18 | Công tắc bật, `fake`/task thật chạy vài phút | Prompt 3 (giao việc rồi chờ) | Sau `antigravity_delegate` chỉ có các lời gọi `antigravity_task_wait`; không đọc file, không `git`, không chạy test, không đọc log, không viết tin giữa các lần chờ; khi xong gọi `antigravity_task_output` đúng một lần rồi mới review |
+| 19 | Phiên Codex không có các tool `antigravity_*` (bridge chưa chạy hoặc client chưa trỏ đúng endpoint) | "Giao cho Antigravity review commit mới nhất." | Báo người dùng thiếu kết nối MCP và dừng; không tự viết script hay client HTTP để gọi bridge |
+| 20 | Gia hạn khi còn hoạt động đang bật; task chạy lâu hơn `timeout_seconds` mà log của agy vẫn tăng | Giao một việc kéo dài vài phút | Agent chỉ chờ; không hủy task chỉ vì nó chạy lâu hay `activity` cũ; task được gia hạn và hoàn tất; nếu `activity` im lặng rất lâu thì báo người dùng một lần để họ quyết định, không tự hủy |
+| 21 | Tiến độ từng bước đang bật, task kéo dài vài phút | Giao một việc kéo dài | Agent không tự đọc các bước hay log; chỉ chờ và đọc dòng `activity`; người dùng xem các bước trong giao diện web |
 
 ## Ghi kết quả
 

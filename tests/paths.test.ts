@@ -37,3 +37,21 @@ test('BRIDGE_HOME overrides the location in either mode and must be absolute', (
   assert.throws(() => resolvePaths({root: '/work/x/', env: {BRIDGE_HOME: 'relative/dir'}}), /absolute/);
   assert.equal(resolvePaths({root: '/work/x/', env: {BRIDGE_HOME: ''}}).dataDirectory, '/work/x/', 'empty means unset');
 });
+
+import { helperDirectory, packageRoot } from '../src/paths.js';
+import { installFailureHint } from '../src/update.js';
+import { access, readFile } from 'node:fs/promises';
+
+test('helper processes never run in the package directory (it would block npm install -g with EBUSY on Windows)', async () => {
+  const cwd = helperDirectory();
+  await access(cwd);
+  const rel = path.relative(packageRoot, cwd);
+  assert.ok(rel.startsWith('..') || path.isAbsolute(rel), `helper directory ${cwd} must be outside ${packageRoot}`);
+  // The call sites that start `agy --version/--help/models` must use it.
+  const sources = await Promise.all(['src/runtime.ts', 'src/tasks/manager.ts'].map(file => readFile(path.join(packageRoot, file), 'utf8')));
+  for (const text of sources) for (const line of text.split('\n')) if (/inspectCli\(|listModels\(/.test(line)) assert.doesNotMatch(line, /packageRoot/, line);
+});
+test('update: a failed install on Windows explains how to release the install folder', () => {
+  assert.match(String(installFailureHint('agy-mcp-bridge', 'win32')), /EBUSY[\s\S]*npm install -g agy-mcp-bridge@latest/);
+  assert.equal(installFailureHint('agy-mcp-bridge', 'linux'), null);
+});

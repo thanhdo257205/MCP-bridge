@@ -7,6 +7,14 @@ import type { TaskManager } from '../tasks/manager.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
+import { validModelId, writeModel } from '../models.js';
+import { readProgress, writeProgress } from '../progress.js';
+import { readUsage, summarizeUsage } from '../usage.js';
+import { EFFORT_LEVELS, isEffortLevel, readEffort, writeEffort } from '../effort.js';
+import { MAX_BUDGET_TOKENS, MIN_BUDGET_TOKENS, budgetState, isBudgetTokens, readBudget, writeBudget } from '../budget.js';
+import { MAX_ABSOLUTE_LIMIT_SECONDS, MIN_ABSOLUTE_LIMIT_SECONDS, isAbsoluteLimit, readSoftTimeout, writeSoftTimeout } from '../soft-timeout.js';
+import { MAX_SETTING_WAIT_SECONDS, MIN_WAIT_SECONDS, clientToolTimeoutSeconds, isWaitSeconds, writeWait } from '../wait-setting.js';
+import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
 import { inside } from '../security/workspace.js';
 
 export interface UiContext {
@@ -46,7 +54,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return value as Record<string, unknown>;
 }
 
-async function overview(ctx: UiContext) {
+async function overview(ctx: UiContext, tzOffsetMinutes = 0) {
   const env = ctx.environment as Record<string, unknown>;
   const state = delegationState(ctx.manager.stateDirectory);
   return {
@@ -64,6 +72,13 @@ async function overview(ctx: UiContext) {
     concurrency: ctx.manager.overview().concurrency,
     limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], session_workspaces: env.session_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
+    model: await ctx.manager.currentModel(),
+    permission: permissionState(ctx.manager.stateDirectory),
+    effort: readEffort(ctx.manager.stateDirectory),
+    soft_timeout: readSoftTimeout(ctx.manager.stateDirectory),
+    budget: await budgetState(ctx.manager.stateDirectory, tzOffsetMinutes),
+    progress: readProgress(ctx.manager.stateDirectory),
+    wait: {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)},
     queue: ctx.manager.overview().queue,
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
@@ -115,7 +130,23 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
   if (!pathname.startsWith('/ui/api/')) { json(res, 404, {error: 'Not found'}); return true; }
 
   try {
-    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
+    const tzParam = Number(new URL(req.url ?? '', 'http://localhost').searchParams.get('tz') ?? '0');
+    const tzOffset = Number.isInteger(tzParam) && Math.abs(tzParam) <= 840 ? tzParam : 0;
+    if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx, tzOffset)); return true; }
+    if (pathname === '/ui/api/usage' && method === 'GET') {
+      json(res, 200, summarizeUsage(await readUsage(ctx.manager.stateDirectory), {tzOffsetMinutes: tzOffset})); return true;
+    }
+    if (pathname === '/ui/api/budget' && method === 'POST') {
+      const body = await readJson(req);
+      const current = readBudget(ctx.manager.stateDirectory);
+      const pick = (key: 'task_tokens' | 'day_tokens') => body[key] === undefined ? current[key] : body[key];
+      const next = {task_tokens: pick('task_tokens'), day_tokens: pick('day_tokens')};
+      for (const limit of [next.task_tokens, next.day_tokens]) {
+        if (limit !== null && !isBudgetTokens(limit)) { json(res, 400, {error: `limits must be whole numbers from ${MIN_BUDGET_TOKENS} to ${MAX_BUDGET_TOKENS}, or null for no limit`}); return true; }
+      }
+      await writeBudget(ctx.manager.stateDirectory, next as {task_tokens: number | null; day_tokens: number | null});
+      json(res, 200, await budgetState(ctx.manager.stateDirectory, tzOffset)); return true;
+    }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
     const changes = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/changes$`));
@@ -138,6 +169,59 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       // Let the response flush before the listener and owned processes are torn down.
       setTimeout(() => { void shutdown().catch(() => {}); }, 50);
       return true;
+    }
+    if (pathname === '/ui/api/progress' && method === 'POST') {
+      const body = await readJson(req);
+      if (typeof body.enabled !== 'boolean') { json(res, 400, {error: 'enabled must be true or false'}); return true; }
+      await writeProgress(ctx.manager.stateDirectory, body.enabled);
+      json(res, 200, readProgress(ctx.manager.stateDirectory)); return true;
+    }
+    if (pathname === '/ui/api/soft-timeout' && method === 'POST') {
+      const body = await readJson(req);
+      if (typeof body.enabled !== 'boolean') { json(res, 400, {error: 'enabled must be true or false'}); return true; }
+      const current = readSoftTimeout(ctx.manager.stateDirectory);
+      const limit = body.limit_seconds === undefined ? current.limit_seconds : body.limit_seconds;
+      if (body.limit_seconds !== undefined && !isAbsoluteLimit(body.limit_seconds)) { json(res, 400, {error: `limit_seconds must be a whole number from ${MIN_ABSOLUTE_LIMIT_SECONDS} to ${MAX_ABSOLUTE_LIMIT_SECONDS}`}); return true; }
+      await writeSoftTimeout(ctx.manager.stateDirectory, {enabled: body.enabled, limit_seconds: limit as number});
+      json(res, 200, readSoftTimeout(ctx.manager.stateDirectory)); return true;
+    }
+    if (pathname === '/ui/api/wait' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.seconds !== null && !isWaitSeconds(body.seconds)) { json(res, 400, {error: `seconds must be a whole number from ${MIN_WAIT_SECONDS} to ${MAX_SETTING_WAIT_SECONDS}, or null for the default`}); return true; }
+      await writeWait(ctx.manager.stateDirectory, body.seconds as number | null);
+      json(res, 200, {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)}); return true;
+    }
+    if (pathname === '/ui/api/effort' && method === 'POST') {
+      const body = await readJson(req);
+      if (!isEffortLevel(body.effort)) { json(res, 400, {error: `effort must be one of: ${EFFORT_LEVELS.join(', ')}`}); return true; }
+      await writeEffort(ctx.manager.stateDirectory, body.effort);
+      json(res, 200, {effort: body.effort}); return true;
+    }
+    if (pathname === '/ui/api/permission' && method === 'POST') {
+      const body = await readJson(req);
+      if (!isPermissionLevel(body.level)) { json(res, 400, {error: `level must be one of: ${PERMISSION_LEVELS.join(', ')}`}); return true; }
+      if (!permissionState(ctx.manager.stateDirectory).controllable) { json(res, 409, {error: 'The permission level is locked by BRIDGE_AGY_PERMISSIONS in the server environment'}); return true; }
+      if (needsAcknowledgement(body.level) && body.acknowledge_risk !== true) { json(res, 400, {error: 'This level lets Antigravity act without asking; send acknowledge_risk: true to confirm'}); return true; }
+      await writePermission(ctx.manager.stateDirectory, body.level);
+      json(res, 200, permissionState(ctx.manager.stateDirectory)); return true;
+    }
+    if (pathname === '/ui/api/models' && method === 'GET') {
+      const current = await ctx.manager.currentModel();
+      try { json(res, 200, {models: await ctx.manager.availableModels(), current}); }
+      catch (error) { json(res, 200, {models: [], current, error: error instanceof Error ? redact(error.message) : 'Could not list models'}); }
+      return true;
+    }
+    if (pathname === '/ui/api/model' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.model !== null && !validModelId(body.model)) { json(res, 400, {error: 'model must be a model id or null'}); return true; }
+      // Only ids that `agy models` lists are accepted; if the list cannot be read, the choice cannot be verified, so it is refused.
+      if (body.model !== null) {
+        const listed = await ctx.manager.availableModels().catch(() => null);
+        if (!listed) { json(res, 409, {error: 'Cannot verify the model: `agy models` is not available'}); return true; }
+        if (!listed.some(model => model.id === body.model)) { json(res, 400, {error: 'Unknown model; choose one listed by `agy models`'}); return true; }
+      }
+      await writeModel(ctx.manager.stateDirectory, body.model);
+      json(res, 200, {current: body.model}); return true;
     }
     json(res, 404, {error: 'Not found'});
   } catch (error) {

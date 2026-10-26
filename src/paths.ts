@@ -1,9 +1,15 @@
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Read-only assets shipped with the code (ui/, skills/, package.json). Two levels above dist/src. */
 export const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+/**
+ * Working directory for helper processes (`agy --version`, `--help`, `models`). Never the package directory: on Windows a process keeps its
+ * working directory open, so a helper (or anything it leaves running) there would make `npm install -g` fail with EBUSY.
+ */
+export const helperDirectory = (): string => tmpdir();
 
 export interface Paths {
   /** `checkout`: running from a git clone (state next to the code, as before). `installed`: running from node_modules (state in the user's data directory). */
