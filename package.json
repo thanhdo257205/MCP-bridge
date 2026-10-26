@@ -1,6 +1,6 @@
 {
   "name": "agy-mcp-bridge",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Local loopback HTTP MCP bridge that delegates bounded coding tasks to multiple agent CLIs (Antigravity, Codex) with optional parallel git worktrees",
   "license": "MIT",
   "keywords": [
