@@ -172,7 +172,8 @@ test('worktree tasks run in parallel, keep separate branches and report in-scope
     assert.equal(first.status, 'running');
     assert.equal(second.status, 'running', 'worktree lane allows a second task without queuing');
     assert.notEqual(first.worktree, second.worktree);
-    assert.ok(first.worktree && inside(state, first.worktree));
+    // The worktree root is reported canonically, so the guard has to compare it against a canonical state directory.
+    assert.ok(first.worktree && inside(await realpath(state), first.worktree), `${first.worktree} is not under ${await realpath(state)}`);
     assert.match(String(first.branch), new RegExp(`^bridge/${first.task_id}$`));
 
     const [doneA, doneB] = await Promise.all([manager.wait(first.task_id), manager.wait(second.task_id)]);
