@@ -26,8 +26,12 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     description: 'Inspect verified CLI capabilities. Does not prove current authentication or task acceptance.',
     inputSchema: z.object({}).strict(), annotations: {readOnlyHint: true, openWorldHint: false}
   }, async () => response({...environment, ...manager.overview()}));
+  server.registerTool('agents_list', {
+    description: 'List detected CLI agents, capabilities, availability, default agent and worktree limit. Does not change anything.',
+    inputSchema: z.object({}).strict(), annotations: {readOnlyHint: true, openWorldHint: false}
+  }, async () => response(manager.agentsOverview()));
   server.registerTool('antigravity_delegate', {
-    description: 'Start one supervised agy print task. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
+    description: 'Start one supervised agent task. Pick agent (default from config), isolation "worktree" plus owns paths for parallel isolated work, and autonomy. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
     inputSchema: delegateSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
   }, async (input, ctx) => guard(() => manager.delegate(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_task_status', {

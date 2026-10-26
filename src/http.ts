@@ -3,10 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createServer } from './tools/register.js';
-import { authorized, validateToken } from './security/http-auth.js';
-import { registerSecret } from './security/redact.js';
 import type { TaskManager } from './tasks/manager.js';
-import { SessionStore } from './ui/session.js';
 import { requestContext } from './request-context.js';
 import { handleUi } from './ui/routes.js';
 
@@ -18,13 +15,12 @@ export function configuredPort(value = process.env.PORT): number {
 }
 
 export async function startHttpBridge(options: {
-  manager: TaskManager; environment: Record<string, unknown>; token: string; port: number;
+  manager: TaskManager; environment: Record<string, unknown>; port: number;
+  requestShutdown?: () => Promise<void>;
 }) {
-  validateToken(options.token);
-  registerSecret(options.token);
   let stopping = false;
   let baseUrl = '';
-  const ui = {manager: options.manager, environment: options.environment, token: options.token, mcpUrl: () => `${baseUrl}/mcp`, startedAt: Date.now(), sessions: new SessionStore()};
+  const ui = {manager: options.manager, environment: options.environment, mcpUrl: () => `${baseUrl}/mcp`, startedAt: Date.now(), requestShutdown: options.requestShutdown};
   const handler = createMcpHandler(() => createServer(options.manager, options.environment), {maxRequestBodySize: 131072, maxSubscriptions: 16});
   const mcp = toNodeHandler(handler, {maxRequestBodySize: 131072});
   const server = createHttpServer((req, res) => {
@@ -36,16 +32,11 @@ export async function startHttpBridge(options: {
     if (req.headers.host !== new URL(baseUrl).host || (req.headers.origin !== undefined && req.headers.origin !== baseUrl)) {
       reply(403, {error: 'Host or Origin is not allowed'}); return;
     }
-    // The web UI signs in with the bridge token and then uses a header session; /mcp and /health keep requiring the bearer token.
     if (req.method === 'GET' && req.url === '/') { res.writeHead(302, {Location: '/ui', 'Cache-Control': 'no-store'}); res.end(); return; }
     if (req.url === '/ui' || req.url?.startsWith('/ui/')) {
       if (stopping) { reply(503, {error: 'Bridge is shutting down.'}); return; }
       void handleUi(req, res, ui).catch(() => { if (!res.headersSent) reply(500, {error: 'UI request failed'}); else res.destroy(); });
       return;
-    }
-    if (!authorized(req.headers.authorization, options.token)) {
-      res.setHeader('WWW-Authenticate', 'Bearer realm="antigravity-bridge"');
-      reply(401, {error: 'Missing or invalid bearer token. Load the bridge token into BRIDGE_HTTP_TOKEN in the client terminal.'}); return;
     }
     if (stopping) { reply(503, {error: 'Bridge is shutting down. Restart it (agy-mcp-bridge, or npm start in a git checkout) before reconnecting.'}); return; }
     if (req.url === '/health' && req.method === 'GET') {
@@ -83,5 +74,6 @@ export async function startHttpBridge(options: {
     })();
     return closing;
   };
+  ui.requestShutdown ??= close;
   return {baseUrl, mcpUrl: `${baseUrl}/mcp`, healthUrl: `${baseUrl}/health`, close, server};
 }

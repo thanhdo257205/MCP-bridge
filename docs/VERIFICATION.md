@@ -4,19 +4,21 @@
 
 Bổ sung skill `skills/antigravity-bridge/SKILL.md` và installer chủ động `npm run skill:install`. Tổng 26/26 test đạt sau bổ sung; 3 test mới xác minh cài đúng nội dung, cài lặp không đổi, không ghi đè tùy chỉnh, scope user/project và CLI chạy từ thư mục khác. Test dùng thư mục tạm, không cài vào profile thật. Skill đã qua `quick_validate.py`; đây là kiểm tra cấu trúc và installer, không phải behavioral eval hay cam kết agent luôn tuân thủ hướng dẫn.
 
-`npm start` hiện chạy Streamable HTTP tại 127.0.0.1, PORT mặc định 3000; PORT=0 chỉ chọn cổng động khi người dùng yêu cầu. `/mcp` và `/health` đều yêu cầu bearer token. Mẫu client HTTP thay cho command/args ở `config/codex-mcp.windows.toml`, bổ sung `config/claude-mcp.http.json`. Các mục khảo sát CLI bên dưới giữ lại bằng chứng ban đầu; STDIO hiện chỉ là tùy chọn riêng `npm run start:stdio`.
+`npm start` hiện chạy Streamable HTTP tại 127.0.0.1, PORT mặc định 3000; PORT=0 chỉ chọn cổng động khi người dùng yêu cầu. `/mcp` và `/health` không yêu cầu xác thực (chỉ loopback; Host/Origin vẫn bị kiểm tra). Mẫu client HTTP thay cho command/args ở `config/codex-mcp.windows.toml`, bổ sung `config/claude-mcp.http.json`. Các mục khảo sát CLI bên dưới giữ lại bằng chứng ban đầu; STDIO hiện chỉ là tùy chọn riêng `npm run start:stdio`.
 
-Đã chạy 23/23 unit/integration test: auth, Host/Origin, HTTP body cap, startup giữ sống khi stdin đóng, cổng mặc định bị chiếm, PORT khác, kết nối modern và legacy, mất kết nối lúc task đang chạy, kết nối lại lấy kết quả, và đóng server khi task có child tree. Các test này dùng executable giả và CLI không tồn tại, không gọi AI.
+Đã chạy 23/23 unit/integration test: Host/Origin, HTTP body cap, startup giữ sống khi stdin đóng, cổng mặc định bị chiếm, PORT khác, kết nối modern và legacy, mất kết nối lúc task đang chạy, kết nối lại lấy kết quả, và đóng server khi task có child tree. Các test này dùng executable giả và CLI không tồn tại, không gọi AI.
 
 Smoke HTTP AI thật ở `test-results/live-report.json`: SDK client ngắt rồi kết nối lại trong khi agy thật đang chạy, trả đúng BRIDGE_SMOKE_OK, sentinel không đổi, hủy task thật thành công. Script còn kiểm tra SIGINT handler với task đang chạy, server exit và PID con không còn; xem trường shutdown_with_active_task_verified của lần chạy mới nhất. Không dùng test mock để kết luận tích hợp AI hoặc sửa code thành công.
 
 Lần HTTP live cuối ngày khảo sát đạt: endpoint tạm 127.0.0.1:54791, task trả đúng phản hồi trong khoảng 17.2s, reconnected=true, shutdown_with_active_task_verified=true và server_exit_code=0. Endpoint này là cổng thử đã đóng, không phải URL cấu hình sử dụng lâu dài.
 
-Đã khởi động `npm start` thật trong terminal với PORT=0 tại 127.0.0.1:64646, không mở IDE/client để giữ server sống. `npm run check` gọi environment qua HTTP thành công, sau đó gửi Ctrl+C trong terminal: in Shutting down và Stopped. Check lại đúng endpoint đã tắt trả lỗi kết nối kèm hướng dẫn npm start/PORT/token, exit 1. Cổng thử đã đóng; không để lại HTTP server chạy nền. Shutdown có task chạy được xác minh riêng bằng harness SIGINT và agy thật; thao tác Ctrl+C terminal trực tiếp được thử khi không có task.
+**Cập nhật 2026-10-26:** chạy lại `npm run test:live` với `agy 1.4.7` trên cùng máy, đạt đầy đủ: task trả đúng `BRIDGE_SMOKE_OK`, `response_verified=true`, `workspace_unchanged=true`, hủy task thật `canceled`, `shutdown_with_active_task_verified=true`, `server_exit_code=0`. Vì vậy 1.4.7 được thêm vào danh sách patch đã xác minh; các số liệu 1.4.3 phía trên giữ nguyên làm bằng chứng lịch sử.
+
+Đã khởi động `npm start` thật trong terminal với PORT=0 tại 127.0.0.1:64646, không mở IDE/client để giữ server sống. `npm run check` gọi environment qua HTTP thành công, sau đó gửi Ctrl+C trong terminal: in Shutting down và Stopped. Check lại đúng endpoint đã tắt trả lỗi kết nối kèm hướng dẫn npm start/PORT, exit 1. Cổng thử đã đóng; không để lại HTTP server chạy nền. Shutdown có task chạy được xác minh riêng bằng harness SIGINT và agy thật; thao tác Ctrl+C terminal trực tiếp được thử khi không có task.
 
 Chưa sửa cấu hình client thực tế. Tài liệu kết nối đã đối chiếu [Codex HTTP MCP](https://developers.openai.com/codex/mcp/) và [Claude Code MCP](https://code.claude.com/docs/en/mcp), cùng help CLI tại máy. Protocol handshake bằng SDK không chứng minh Codex/Claude Code đã được đăng ký hoặc tải tool.
 
-Chính sách shutdown: ngừng nhận task mới, hủy task đang chạy, dọn process thuộc server rồi đóng HTTP. Disconnect client không kích hoạt shutdown. Task/history sống trong RAM của server, mất khi restart hoặc hết retention. Token và task là phạm vi dùng chung của một người dùng, không có isolation giữa hai client.
+Chính sách shutdown: ngừng nhận task mới, hủy task đang chạy, dọn process thuộc server rồi đóng HTTP. Disconnect client không kích hoạt shutdown. Task/history sống trong RAM của server, mất khi restart hoặc hết retention. Task là phạm vi dùng chung của mọi client kết nối tới bridge, không có isolation giữa hai client.
 
 ## Máy thực tế
 

@@ -1,6 +1,5 @@
 'use strict';
 // All dynamic text is inserted with textContent. Model output is untrusted and must never reach innerHTML.
-const STORE = 'antigravity-bridge-ui-session';
 const STATUS = {queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', timeout: 'Quá hạn', canceled: 'Đã hủy', unsupported: 'Không hỗ trợ'};
 const NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
@@ -15,15 +14,12 @@ const MATCH = {
   problem: t => t.status === 'failed' || t.status === 'timeout' || t.status === 'unsupported', canceled: t => t.status === 'canceled'
 };
 const state = {
-  session: read(), overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
-  open: new Set(), changes: null, connected: true, loginError: '', busy: false, toast: '', q: '', filter: 'all'
+  overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
+  open: new Set(), changes: null, connected: true, toast: '', q: '', filter: 'all'
 };
 let timer = null;
 let regions = null; // live containers of the mounted shell; patched in place so selection and scroll survive polling
 const signatures = {};
-
-function read() { try { return localStorage.getItem(STORE); } catch { return null; } }
-function write(value) { try { value ? localStorage.setItem(STORE, value) : localStorage.removeItem(STORE); } catch { /* storage unavailable */ } }
 
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -72,15 +68,13 @@ function folder(path) { return path.split(/[\\/]/).filter(Boolean).pop() || path
 async function api(path, options = {}) {
   const response = await fetch(`/ui/api/${path}`, {
     method: options.method || 'GET', cache: 'no-store',
-    headers: {...(state.session ? {'X-Bridge-Session': state.session} : {}), ...(options.body ? {'Content-Type': 'application/json'} : {})},
+    headers: options.body ? {'Content-Type': 'application/json'} : {},
     body: options.body ? JSON.stringify(options.body) : undefined
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== 'login') { signedOut(); throw new Error('Phiên đã hết hạn'); }
   if (!response.ok) throw new Error(data.error || `Lỗi ${response.status}`);
   return data;
 }
-function signedOut() { state.session = null; write(null); state.overview = null; state.detail = null; stop(); render(); }
 let toastTimer = null;
 function notify(message) {
   document.querySelector('.toast')?.remove();
@@ -89,28 +83,18 @@ function notify(message) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.remove(), 2600);
 }
 
-async function login(token) {
-  state.busy = true; state.loginError = ''; render();
-  try {
-    const {session} = await api('login', {method: 'POST', body: {token}});
-    state.session = session; write(session); state.busy = false;
-    await refresh(true); start();
-  } catch (error) { state.busy = false; state.loginError = error.message; render(); }
-}
-
 async function refresh(force) {
   try {
     state.overview = await api('overview'); state.connected = true;
     const tasks = state.overview.tasks;
     if (!state.selected || !tasks.some(task => task.task_id === state.selected)) state.selected = tasks[0]?.task_id ?? null;
     state.detail = state.selected ? await api(`tasks/${state.selected}`).catch(() => null) : null;
-  } catch (error) { if (state.session) state.connected = false; }
+  } catch (error) { state.connected = false; }
   if (force || !regions) render(); else patch();
 }
 function start() { stop(); schedule(); }
 function stop() { if (timer) clearTimeout(timer); timer = null; }
 function schedule() {
-  if (!state.session) return;
   const busy = state.overview?.tasks.some(task => task.status === 'running' || task.status === 'queued');
   timer = setTimeout(async () => { if (!document.hidden) await refresh(); schedule(); }, busy ? 1500 : 4000);
 }
@@ -132,29 +116,25 @@ async function cancel(id) {
   try { await api(`tasks/${id}/cancel`, {method: 'POST'}); notify('Đã hủy task'); await refresh(); } catch (error) { notify(error.message); }
 }
 async function setDelegation(enabled) {
-  try { await api('delegation', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật giao việc cho Antigravity' : 'Đã tắt giao việc cho Antigravity'); await refresh(); }
+  try { await api('delegation', {method: 'POST', body: {enabled}}); notify(enabled ? 'Đã bật giao việc' : 'Đã tắt giao việc'); await refresh(); }
   catch (error) { notify(error.message); }
+}
+async function shutdownBridge() {
+  if (!confirm('Tắt hoàn toàn bridge?\n\nServer sẽ dừng, task đang chạy hoặc đang chờ bị hủy và các tiến trình agent do bridge khởi tạo sẽ bị dọn. Không thể hoàn tác; mở lại bằng agy-mcp-bridge (hoặc npm start trong bản clone).')) return;
+  try {
+    await api('shutdown', {method: 'POST', body: {confirm: true}});
+    stop();
+    document.title = 'Bridge đang tắt';
+    document.getElementById('root').replaceChildren(h('main', {class: 'main'},
+      h('div', {class: 'card empty'}, h('strong', {text: 'Đã gửi lệnh tắt bridge'}),
+        'Server đang dừng, task đang chạy bị hủy và tiến trình con đang được dọn. Bạn có thể đóng tab này; mở lại bằng agy-mcp-bridge (hoặc npm start trong bản clone).')));
+  } catch (error) { notify(error.message); }
 }
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
 
 /* ---------- Views ---------- */
-function loginView() {
-  const input = h('input', {id: 'token', type: 'password', autocomplete: 'off', spellcheck: 'false', required: true, placeholder: 'Dán token của bridge'});
-  const form = h('form', {class: 'login-card', onsubmit: event => { event.preventDefault(); login(input.value.trim()); }},
-    h('div', {class: 'brand'}, h('img', {src: '/ui/favicon.svg', alt: ''}), 'Antigravity Bridge'),
-    h('h1', {text: 'Đăng nhập'}),
-    h('p', {text: 'Giao diện theo dõi phần giao tiếp giữa Codex / Claude Code và Antigravity. Chạy trên máy này.'}),
-    h('div', {class: 'field'}, h('label', {for: 'token', text: 'Bridge token'}), input),
-    h('div', {class: 'form-error', role: 'alert', text: state.loginError}),
-    h('button', {class: 'btn primary', type: 'submit', disabled: state.busy, text: state.busy ? 'Đang kiểm tra…' : 'Vào giao diện'}),
-    h('div', {class: 'hint'}, 'Token nằm trong file trên máy chạy bridge. Bản cài từ npm: chạy lệnh dưới để thấy đường dẫn "token file", rồi mở file đó.',
-      h('code', {text: 'agy-mcp-bridge config'}),
-      'Bản clone từ git:', h('code', {text: 'cat .bridge-state/http-token'})));
-  return h('div', {class: 'login'}, form);
-}
-
 function stat(label, value, sub) {
   return h('div', {class: 'card stat'}, h('div', {class: 'label', text: label}), h('div', {class: 'value'}, value), sub ? h('div', {class: 'sub'}, sub) : null);
 }
@@ -164,14 +144,19 @@ function switchControl(enabled, controllable, label) {
 
 function statsView(o) {
   const count = status => o.tasks.filter(task => task.status === status).length;
-  const ready = o.cli.bridge_status === 'ready';
+  const agents = o.agents || [];
+  const enabledAgents = agents.filter(agent => agent.enabled);
+  const readyAgents = enabledAgents.filter(agent => agent.available);
+  const ready = readyAgents.length > 0;
   const accepting = o.server.accepting_tasks;
   const queued = count('queued');
   return [
-    stat('Bridge', h('span', {class: `pill ${ready && accepting ? 'ok' : 'bad'}`, text: !accepting ? 'Đang tắt' : ready ? 'Sẵn sàng' : 'CLI chưa hỗ trợ'}), h('span', {'data-elapsed': o.server.started_at, 'data-prefix': 'Hoạt động ', text: `Hoạt động ${duration(Date.now() - Date.parse(o.server.started_at))}`})),
-    stat('Antigravity CLI', o.cli.version && o.cli.version !== 'unavailable' ? `agy ${o.cli.version}` : 'Không tìm thấy', o.cli.execution_method || 'Chưa thể giao task'),
-    stat('Giao việc', [switchControl(o.delegation.enabled, o.delegation.controllable, 'Cho phép giao việc cho Antigravity'),
-      h('span', {class: `pill ${o.delegation.enabled ? 'ok' : 'warn'}`, text: o.delegation.enabled ? 'Đang bật' : 'Đã tắt'})], o.delegation.reason || 'Codex / Claude được phép giao task'),
+    stat('Bridge', h('span', {class: `pill ${ready && accepting ? 'ok' : 'bad'}`, text: !accepting ? 'Đang tắt' : ready ? 'Sẵn sàng' : 'Chưa có agent'}), h('span', {'data-elapsed': o.server.started_at, 'data-prefix': 'Hoạt động ', text: `Hoạt động ${duration(Date.now() - Date.parse(o.server.started_at))}`})),
+    stat('Agent', `${readyAgents.length}/${enabledAgents.length} sẵn sàng`, enabledAgents.length
+      ? enabledAgents.map(agent => `${agent.label}${agent.available ? '' : ' (không có)'}`).join(' · ')
+      : 'Chưa cấu hình agent nào'),
+    stat('Giao việc', [switchControl(o.delegation.enabled, o.delegation.controllable, 'Cho phép giao việc cho agent'),
+      h('span', {class: `pill ${o.delegation.enabled ? 'ok' : 'warn'}`, text: o.delegation.enabled ? 'Đang bật' : 'Đã tắt'})], o.delegation.reason || 'Tech Lead được phép giao task'),
     stat('Task', `${count('running')} đang chạy`, `${queued ? `${queued} đang chờ · ` : ''}${o.tasks.length} task gần đây`)
   ];
 }
@@ -181,14 +166,14 @@ function filteredTasks(o) {
   return o.tasks.filter(task => MATCH[state.filter](task) && (!q || [task.title, task.workspace, task.task_id].some(v => (v || '').toLowerCase().includes(q))));
 }
 function taskItems(o) {
-  if (!o.tasks.length) return [h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có task nào'}), 'Khi Codex hoặc Claude giao việc cho Antigravity, task sẽ hiện ở đây.')];
+  if (!o.tasks.length) return [h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có task nào'}), 'Khi Tech Lead giao việc cho một agent, task sẽ hiện ở đây.')];
   const tasks = filteredTasks(o);
   if (!tasks.length) return [h('div', {class: 'empty'}, h('strong', {text: 'Không có task phù hợp'}), 'Thử đổi bộ lọc hoặc từ khóa.')];
   return tasks.map(task => h('button', {
     class: 'task-item', role: 'listitem', 'data-task': task.task_id, 'aria-current': String(task.task_id === state.selected), onclick: () => select(task.task_id)
   }, h('div', {class: 'row'}, pill(task.status), agoEl(task.queued_at || task.started_at, 'meta')),
     h('div', {class: 'title', text: task.title || '(không có nội dung yêu cầu)'}),
-    h('div', {class: 'meta mono', text: `${folder(task.workspace)} · ${task.task_id.slice(0, 8)}`}),
+    h('div', {class: 'meta mono', text: `${task.agent}${task.isolation === 'worktree' ? ' · worktree' : ''} · ${folder(task.worktree || task.workspace)} · ${task.task_id.slice(0, 8)}`}),
     h('div', {class: 'meta'}, task.status === 'running' ? elapsedEl(task.started_at, 'Đang chạy ') : task.status === 'queued' ? 'Đang xếp hàng…' : `Mất ${duration(task.duration_ms)}`)));
 }
 function taskCount(o) { return `${filteredTasks(o).length}/${o.tasks.length} task`; }
@@ -234,6 +219,15 @@ function logTabs(task) {
   }));
 }
 function logText(task) { return task[state.logTab] || '(trống)'; }
+function scopeBody(task) {
+  const scope = task.scope;
+  if (!scope) return null;
+  if (!scope.checked) return h('div', {class: 'callout warn', text: `Không kiểm tra được phạm vi owns: ${scope.reason || 'lỗi không xác định'}`});
+  if (scope.out_of_scope.length) {
+    return h('div', {class: 'callout bad', text: `Có ${scope.out_of_scope.length} file ngoài owns (${scope.out_of_scope.join(', ')}). Không tự động merge; Tech Lead phải review.`});
+  }
+  return h('div', {class: 'callout', text: `${scope.changed} file thay đổi, tất cả nằm trong owns.`});
+}
 
 function detailView() {
   const d = state.detail;
@@ -241,19 +235,23 @@ function detailView() {
   const {task, request, prompt} = d;
   const running = task.status === 'running';
   const queued = task.status === 'queued';
+  const agentName = task.agent || 'agent';
   const head = h('div', {class: 'detail-head'},
     h('div', {}, h('h2', {}, 'Task ', h('span', {class: 'mono', text: task.task_id.slice(0, 8)}), pill(task.status)),
-      h('div', {class: 'muted mono', text: task.workspace})),
+      h('div', {class: 'muted mono', text: task.workspace}),
+      task.worktree ? h('div', {class: 'muted mono', text: `worktree: ${task.worktree}`}) : null),
     running || queued ? h('button', {class: 'btn danger small', onclick: () => cancel(task.task_id), text: 'Hủy task'}) : null);
   const facts = h('dl', {class: 'kv'},
-    ...[['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
+    ...[['Agent', agentName], ['Cách ly', task.isolation === 'worktree' ? 'worktree (song song)' : 'tuần tự'],
+      ['Nhánh', task.branch || '—'], ['Quyền tự duyệt', task.autonomy || 'auto'],
+      ['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
       ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
       ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
-  const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead (Codex / Claude)';
+  const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead';
   const asked = h('div', {class: 'msg out'},
-    h('div', {class: 'msg-head'}, asker, h('span', {class: 'arrow', text: '→'}), 'Antigravity'),
+    h('div', {class: 'msg-head'}, asker, h('span', {class: 'arrow', text: '→'}), agentName),
     request ? [h('p', {class: 'text', text: request.task}),
       h('div', {}, h('div', {class: 'msg-head', text: 'Tiêu chí nghiệm thu'}), h('ul', {class: 'crit'}, request.acceptance_criteria.map(c => h('li', {text: c})))),
       request.context ? details('context', 'Ngữ cảnh kèm theo', h('p', {class: 'text', text: request.context})) : null]
@@ -261,19 +259,22 @@ function detailView() {
 
   let answer;
   if (queued) {
-    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), 'Đang xếp hàng, chờ task trước kết thúc. Bridge chỉ chạy một task tại một thời điểm.');
+    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), task.isolation === 'worktree'
+      ? 'Đang xếp hàng, chờ một slot worktree trống.'
+      : 'Đang xếp hàng, chờ task trước kết thúc. Task thường chạy tuần tự.');
   } else if (running) {
-    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), elapsedEl(task.started_at, 'Antigravity đang xử lý… đã chạy '));
+    answer = h('div', {class: 'typing'}, h('span', {class: 'spinner'}), elapsedEl(task.started_at, `${agentName} đang xử lý… đã chạy `));
   } else {
     answer = [
-      task.final_response ? h('p', {class: 'text', text: task.final_response}) : h('p', {class: 'muted', text: 'Antigravity không trả về phản hồi cuối.'}),
+      task.final_response ? h('p', {class: 'text', text: task.final_response}) : h('p', {class: 'muted', text: `${agentName} không trả về phản hồi cuối.`}),
       task.denied_actions.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Thao tác bị từ chối quyền'}),
         h('div', {class: 'chips'}, task.denied_actions.map(a => h('span', {class: 'chip', text: a.display_name || a.action})))) : null,
+      scopeBody(task),
       task.error ? h('div', {class: 'callout bad', text: task.error}) : null,
       task.status === 'completed' ? h('div', {class: 'callout warn', text: 'CLI báo hoàn tất nhưng chưa được xác minh. Tech Lead cần xem diff thực tế và chạy test.'}) : null
     ];
   }
-  const replied = h('div', {class: 'msg in'}, h('div', {class: 'msg-head'}, 'Antigravity', h('span', {class: 'arrow', text: '→'}), asker), answer);
+  const replied = h('div', {class: 'msg in'}, h('div', {class: 'msg-head'}, agentName, h('span', {class: 'arrow', text: '→'}), asker), answer);
 
   const logs = h('div', {},
     h('div', {class: 'tabs', id: 'log-tabs', role: 'group', 'aria-label': 'Loại log'}, logTabs(task)),
@@ -282,7 +283,7 @@ function detailView() {
 
   return h('article', {class: 'card detail'}, head, facts, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
-    details('logs', 'Log của tiến trình agy', logs),
+    details('logs', `Log của tiến trình ${agentName}`, logs),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);
 }
 
@@ -305,7 +306,7 @@ function settingsView(o) {
   const delegation = o.delegation;
   return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Trạng thái và giới hạn của bridge. Phần lớn chỉ đọc; chỉnh bằng file cấu hình rồi khởi động lại.'}))),
     h('div', {class: 'settings'},
-      h('section', {class: 'card panel wide'}, h('h2', {text: 'Giao việc cho Antigravity'}),
+      h('section', {class: 'card panel wide'}, h('h2', {text: 'Giao việc cho agent'}),
         h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: delegation.enabled ? 'Đang bật' : 'Đã tắt'}),
           h('span', {class: 'muted', text: delegation.enabled ? 'Codex / Claude có thể giao task mới.' : `Task mới bị từ chối. ${delegation.reason || ''}`})),
           switchControl(delegation.enabled, delegation.controllable, 'Cho phép giao việc cho Antigravity')),
@@ -313,9 +314,16 @@ function settingsView(o) {
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
-        h('dl', {class: 'rows'}, row('Giao thức', 'MCP Streamable HTTP'), row('Xác thực', 'Bearer token dùng chung'), row('Phiên bản bridge', o.server.version),
+        h('dl', {class: 'rows'}, row('Giao thức', 'MCP Streamable HTTP'), row('Xác thực', 'Không — chỉ 127.0.0.1'), row('Phiên bản bridge', o.server.version),
           row('Khởi động', clock(o.server.started_at))),
-        h('p', {text: 'Chỉ lắng nghe 127.0.0.1. Token không hiển thị ở đây.'})),
+        h('p', {class: 'callout warn', text: 'Không có xác thực: bất kỳ tiến trình nào chạy trên máy này với cùng user đều có thể điều khiển bridge. Không mở cổng ra ngoài.'})),
+      h('section', {class: 'card panel wide'}, h('h2', {text: 'Agent CLI'}),
+        h('div', {class: 'agent-list'}, (o.agents || []).length ? (o.agents || []).map(agent => h('div', {class: 'switch-row'},
+          h('div', {}, h('strong', {text: `${agent.label} · ${agent.id}`}),
+            h('span', {class: 'muted', text: [agent.enabled ? 'đang bật' : 'đã tắt', agent.version || 'không rõ phiên bản', (agent.capabilities || []).join(', ')].filter(Boolean).join(' · ')})),
+          h('span', {class: `pill ${agent.enabled && agent.available ? 'ok' : agent.enabled ? 'bad' : 'warn'}`, text: !agent.enabled ? 'Tắt' : agent.available ? 'Sẵn sàng' : 'Không có'}))) : h('p', {class: 'muted', text: 'Chưa có agent nào được cấu hình.'})),
+        h('p', {class: 'muted', text: `Agent mặc định: ${o.default_agent || 'không có'}. Thứ tự ưu tiên đặt trong config/workspaces.json.`}),
+        (o.agents || []).some(agent => (agent.warnings || []).length) ? h('div', {class: 'callout warn', text: (o.agents || []).flatMap(agent => agent.warnings || []).join(' · ')}) : null),
       h('section', {class: 'card panel'}, h('h2', {text: 'Antigravity CLI'}),
         h('dl', {class: 'rows'}, row('Trạng thái', o.cli.bridge_status), row('Phiên bản', o.cli.version), row('Đường dẫn', o.cli.executable || '—'),
           row('Cách chạy', o.cli.execution_method || '—')),
@@ -325,11 +333,14 @@ function settingsView(o) {
           : h('div', {class: 'callout warn', text: 'Chưa có workspace nào. Thêm đường dẫn tuyệt đối vào config/workspaces.json rồi khởi động lại.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Giới hạn'}),
         h('dl', {class: 'rows'}, row('Timeout tối đa', `${o.limits.max_timeout_seconds ?? '—'}s`), row('Output mỗi luồng', bytes(o.limits.max_output_bytes_per_stream ?? 0)),
-          row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task chạy cùng lúc', o.limits.concurrent_tasks ?? '—'),
+          row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task thường chạy cùng lúc', o.limits.concurrent_normal_tasks ?? 1),
+          row('Worktree chạy song song', o.limits.max_parallel_worktrees ?? o.concurrency?.max_parallel_worktrees ?? '—'),
+          row('Quyền tự duyệt mặc định', o.default_autonomy ?? 'auto'),
           row('Hàng đợi tối đa', o.limits.max_queued_tasks ?? '—'))),
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Lưu ý khi dùng'}), h('ul', {class: 'list'}, o.limitations.map(item => h('li', {text: item})))),
-      h('section', {class: 'card panel wide'}, h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Phiên đăng nhập'}), h('span', {class: 'muted', text: 'Hết hạn sau 8 giờ hoặc khi server khởi động lại.'})),
-        h('button', {class: 'btn', onclick: async () => { await api('logout', {method: 'POST'}).catch(() => {}); signedOut(); }, text: 'Đăng xuất'}))))];
+      h('section', {class: 'card panel wide'}, h('h2', {text: 'Dừng bridge'}),
+        h('p', {text: 'Đóng tab không dừng server. Nút này tắt HTTP server, hủy task đang chạy hoặc đang chờ và dọn các tiến trình agent do bridge khởi tạo. Không thể hoàn tác.'}),
+        h('button', {class: 'btn danger', onclick: shutdownBridge, text: 'Tắt bridge'})))];
 }
 
 /* ---------- Shell: built once per view change, then patched region by region ---------- */
@@ -351,7 +362,7 @@ function mount() {
       oninput: event => { state.q = event.target.value; patch(); }});
     const chips = h('div', {class: 'filters', role: 'group', 'aria-label': 'Lọc theo trạng thái'}, FILTERS.map(([key, label]) => h('button', {
       class: 'chip-btn', 'data-filter': key, 'aria-pressed': String(state.filter === key), onclick: () => { state.filter = key; for (const b of chips.children) b.setAttribute('aria-pressed', String(b.dataset.filter === key)); patch(); }, text: label})));
-    main.append(h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Task'}), h('p', {text: 'Nội dung trao đổi giữa Tech Lead và Antigravity.'}))),
+    main.append(h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Task'}), h('p', {text: 'Nội dung trao đổi giữa Tech Lead và các agent.'}))),
       regions.stats, h('div', {class: 'tasks'}, h('div', {class: 'list-col'}, h('div', {class: 'list-tools'}, search, chips, regions.count), regions.list), regions.detail));
   } else {
     regions.settings = h('div', {});
@@ -379,7 +390,7 @@ function patch() {
     ...(o.warnings || []).map(text => h('div', {class: 'banner warn', role: 'alert', text})),
     o.update ? h('div', {class: 'banner info', role: 'status'}, `Có bản mới ${o.update.package} ${o.update.latest} (đang chạy ${o.update.current}). Dừng server (Ctrl+C) rồi chạy `, h('code', {text: o.update.command})) : null].filter(Boolean));
   if (regions.view === 'tasks') {
-    setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
+    setRegion('stats', JSON.stringify([o.tasks.map(t => [t.task_id, t.status]), o.agents, o.cli, o.delegation, o.server.accepting_tasks]), () => statsView(o));
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
@@ -388,20 +399,13 @@ function patch() {
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
   } else {
-    setRegion('settings', JSON.stringify([o.cli, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
+    setRegion('settings', JSON.stringify([o.cli, o.agents, o.default_agent, o.default_autonomy, o.concurrency, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));
   }
   tick();
 }
 
 function render() {
   const root = document.getElementById('root');
-  if (!state.session) {
-    const typed = root.querySelector('#token')?.value;
-    regions = null; root.replaceChildren(loginView());
-    const input = root.querySelector('#token');
-    if (typed) input.value = typed;
-    input.focus(); return;
-  }
   const page = window.scrollY;
   root.replaceChildren(mount());
   if (!state.overview) {
@@ -411,4 +415,4 @@ function render() {
 }
 
 render();
-if (state.session) refresh(true).then(start);
+refresh(true).then(start);

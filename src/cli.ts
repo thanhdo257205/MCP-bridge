@@ -5,7 +5,6 @@ import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { paths } from './paths.js';
-import { existsSync } from 'node:fs';
 import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
@@ -37,14 +36,14 @@ Usage: ${BIN} [command] [options]
   skill install --client codex|claude|both [--project <dir>]
                           Install the antigravity-bridge skill for the chosen client (first run also offers it once)
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
-                          Print the exact client configuration and token commands (changes nothing)
-  config [--json]         Show where config, state and the token file live (never prints the token)
+                          Print the exact client configuration (changes nothing)
+  config [--json]         Show where config and state live
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
   unlock                 Reclaim a lock only when both recorded server and child PIDs are dead
   probe-stream            Capture the real agy stream-json event shape (one tiny AI call)
   version, help
 
-Environment: BRIDGE_HOME (data directory), PORT, BRIDGE_HTTP_TOKEN, BRIDGE_DELEGATION=off,
+Environment: BRIDGE_HOME (data directory), PORT, BRIDGE_DELEGATION=off,
 BRIDGE_NO_UPDATE_CHECK=1, ANTIGRAVITY_BRIDGE_CONFIG. Details: README.md in ${paths.packageRoot}`;
 
 function runScript(script: string, args: string[]): never {
@@ -55,7 +54,7 @@ function runScript(script: string, args: string[]): never {
 function describeConfig() {
   return {
     package: pkg.name, version: pkg.version, mode: paths.mode, package_directory: paths.packageRoot, data_directory: paths.dataDirectory,
-    config_file: configFile, state_directory: paths.stateDirectory, token_file: path.join(paths.stateDirectory, 'http-token'),
+    config_file: configFile, state_directory: paths.stateDirectory,
     update_check: updateCheckEnabled(paths.mode) ? 'enabled' : 'disabled'
   };
 }
@@ -140,9 +139,8 @@ function setup(args: string[]) {
     } else throw new Error(`Unknown option for setup: ${args[i]}`);
   }
   if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
-  const tokenFile = path.join(paths.stateDirectory, 'http-token');
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
-  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, tokenFile, tokenFileExists: existsSync(tokenFile), tokenFromEnv: Boolean(process.env.BRIDGE_HTTP_TOKEN), shells: shell, bin: BIN}));
+  console.log(renderSetup({clients, mcpUrl: `http://127.0.0.1:${port}/mcp`, shells: shell, bin: BIN}));
 }
 
 async function workspaces(args: string[]) {

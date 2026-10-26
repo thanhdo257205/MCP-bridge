@@ -1,20 +1,65 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, realpath } from 'node:fs/promises';
+import { access, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { inside } from '../security/workspace.js';
 
-export async function findExecutable(configured: string): Promise<string> {
-  const candidates = path.isAbsolute(configured) ? [configured] :
-    (process.env.PATH ?? '').split(path.delimiter).flatMap(dir =>
-      process.platform === 'win32' ? [path.join(dir, `${configured}.exe`), path.join(dir, configured)] : [path.join(dir, configured)]);
+export interface ResolvedCommand { executable: string; prefixArgs: string[]; source: string; }
+
+/** Patch releases exercised with a real agent run; other 1.4.x patches still run but warn. */
+export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7'] as const;
+
+/**
+ * Resolve a command without ever going through a shell. On Windows an npm-installed CLI is usually a `.cmd`
+ * shim; spawning it with shell:false fails, and spawning it through cmd.exe would allow argument injection.
+ * A shim is accepted only when it points at a local `.js` entry inside the shim's own directory, which is then
+ * run with the current Node binary.
+ */
+export async function resolveCommand(configured: string): Promise<ResolvedCommand> {
+  if (!configured || configured.includes('\0')) throw new Error('Command name is invalid');
+  const bases = path.isAbsolute(configured) ? [configured] :
+    (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, configured));
+  const candidates = bases.flatMap(base => process.platform === 'win32' && !path.extname(base)
+    ? [`${base}.exe`, base, `${base}.cmd`, `${base}.bat`] : [base]);
   for (const candidate of candidates) {
+    let resolved: string;
     try {
       await access(candidate);
-      const resolved = await realpath(candidate);
-      if (process.platform === 'win32' && path.extname(resolved).toLowerCase() !== '.exe') continue;
-      return resolved;
-    } catch { /* Try the next PATH entry. */ }
+      resolved = await realpath(candidate);
+    } catch { continue; /* Try the next PATH entry. */ }
+    const extension = path.extname(resolved).toLowerCase();
+    // A shim that exists but cannot be resolved safely is a definitive failure: silently falling through
+    // to the next PATH entry would hide why the configured command cannot run.
+    if (process.platform === 'win32' && (extension === '.cmd' || extension === '.bat')) {
+      const script = await shimEntry(resolved);
+      return {executable: process.execPath, prefixArgs: [script], source: resolved};
+    }
+    if (process.platform === 'win32' && extension !== '.exe') continue;
+    return {executable: resolved, prefixArgs: [], source: resolved};
   }
-  throw new Error('Antigravity executable not found (Windows requires a native .exe)');
+  throw new Error(`Command not found: ${configured}${process.platform === 'win32' ? ' (a native .exe or an npm .cmd shim pointing at a local .js entry is required)' : ''}`);
+}
+
+const SHIM_ENTRY = /(?:%dp0%|%~dp0)[\\/]([^"\r\n]+?\.(?:js|mjs|cjs))/gi;
+async function shimEntry(shim: string): Promise<string> {
+  const text = await readFile(shim, 'utf8');
+  if (text.length > 65536) throw new Error('Unsupported .cmd shim: file is too large');
+  const directory = path.dirname(shim);
+  for (const match of text.matchAll(SHIM_ENTRY)) {
+    const candidate = path.resolve(directory, match[1]);
+    if (!inside(directory, candidate)) continue;
+    try {
+      const resolved = await realpath(candidate);
+      if (!inside(await realpath(directory), resolved)) continue;
+      await access(resolved);
+      return resolved;
+    } catch { /* Try another entry in the shim. */ }
+  }
+  throw new Error('Unsupported .cmd shim: no local .js entry found');
+}
+
+/** Resolves the executable only. Use resolveCommand when the command may be a Windows shim with a script prefix. */
+export async function findExecutable(configured: string): Promise<string> {
+  return (await resolveCommand(configured)).executable;
 }
 
 export function childEnvironment(parent:NodeJS.ProcessEnv, extra:string[]=[]):NodeJS.ProcessEnv {
@@ -88,6 +133,7 @@ export async function inspectCli(executable: string, cwd: string, run: typeof st
   const actual=version.text.trim();
   const supported = version.code === 0 && /^1\.4\.\d+$/.test(actual) && help.code === 0 &&
     ['--print', '--output-format', '--print-timeout', '--disable-slash-commands',...(requireStdin?['--input-format']:[])].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
-  const warnings=supported&&actual!=='1.4.3'?[`agy ${actual} is compatible by 1.4.x version/help checks, but only 1.4.3 has been verified with real agent execution`]:[];
+  const verified = (VERIFIED_AGY_VERSIONS as readonly string[]).includes(actual);
+  const warnings=supported&&!verified?[`agy ${actual} is compatible by 1.4.x version/help checks, but only ${VERIFIED_AGY_VERSIONS.join(' and ')} have been verified with real agent execution`]:[];
   return { version: actual, supported, executable, warnings };
 }

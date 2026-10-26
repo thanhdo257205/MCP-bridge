@@ -22,15 +22,14 @@ test('cli: version, help, unknown command', () => {
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /Unknown command: frobnicate/);
 });
-test('cli: config reports locations without printing the token', async () => {
+test('cli: config reports locations', async () => {
   const dir = await home();
-  const out = JSON.parse(run(['config', '--json'], {BRIDGE_HOME: dir, BRIDGE_HTTP_TOKEN: 'x'.repeat(40)}).stdout) as Record<string, string>;
+  const out = JSON.parse(run(['config', '--json'], {BRIDGE_HOME: dir}).stdout) as Record<string, string>;
   assert.equal(out.data_directory, dir);
   assert.equal(out.config_file, path.join(dir, 'workspaces.json'));
   assert.equal(out.state_directory, path.join(dir, 'state'));
-  assert.equal(out.token_file, path.join(dir, 'state', 'http-token'));
+  assert.equal(out.token_file, undefined);
   assert.equal(out.version, version);
-  assert.ok(!JSON.stringify(out).includes('x'.repeat(40)));
   assert.match(run(['config'], {BRIDGE_HOME: dir}).stdout, /config file: /);
 });
 test('cli: workspaces add / list / remove edit the config in the data directory', async () => {
@@ -61,8 +60,7 @@ test('cli: start serves the UI, keeps state in BRIDGE_HOME, and announces an upd
   const hits: string[] = [];
   const registry = createServer((req, res) => { hits.push(req.url ?? ''); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({version: '99.0.0'})); });
   await new Promise<void>(resolve => registry.listen(0, '127.0.0.1', resolve));
-  const token = 'cli_test_token_123456789012345678901234567';
-  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: token, PORT: '0', BRIDGE_UPDATE_CHECK: 'force',
+  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: data, PORT: '0', BRIDGE_UPDATE_CHECK: 'force',
     BRIDGE_UPDATE_REGISTRY: `http://127.0.0.1:${(registry.address() as {port: number}).port}`};
   delete env.BRIDGE_NO_UPDATE_CHECK; delete env.CI;
   await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(data, 'missing')}));
@@ -77,13 +75,11 @@ test('cli: start serves the UI, keeps state in BRIDGE_HOME, and announces an upd
     assert.match(log, /Update available: agy-mcp-bridge 99\.0\.0/, 'announced while running');
     assert.equal((await fetch(`${base}/ui`)).status, 200);
     assert.ok(log.includes(`[bridge] Web UI: ${base}/ui`), 'the terminal shows the link to the web UI');
-    const login = await (await fetch(`${base}/ui/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})).json() as {session: string};
-    const overview = await (await fetch(`${base}/ui/api/overview`, {headers: {'x-bridge-session': login.session}})).json() as {update: {latest: string; command: string}};
+    const overview = await (await fetch(`${base}/ui/api/overview`)).json() as {update: {latest: string; command: string}};
     assert.equal(overview.update.latest, '99.0.0');
     assert.equal(overview.update.command, 'agy-mcp-bridge update');
     assert.equal(hits.length, 1, 'one registry lookup serves both the start-up notice and the running server');
     assert.ok(await readFile(path.join(data, 'state', 'update-check.json'), 'utf8'));
-    assert.ok(!log.includes(token));
   } finally {
     child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); registry.close();
   }
@@ -93,7 +89,7 @@ test('cli: --no-update-check makes no registry request', async () => {
   let hits = 0;
   const registry = createServer((_req, res) => { hits++; res.end('{}'); });
   await new Promise<void>(resolve => registry.listen(0, '127.0.0.1', resolve));
-  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: 'cli_test_token_123456789012345678901234567', PORT: '0',
+  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: data, PORT: '0',
     BRIDGE_UPDATE_REGISTRY: `http://127.0.0.1:${(registry.address() as {port: number}).port}`};
   delete env.BRIDGE_UPDATE_CHECK; delete env.BRIDGE_NO_UPDATE_CHECK; delete env.CI;
   await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(data, 'missing')}));
@@ -110,8 +106,7 @@ test('cli: --no-update-check makes no registry request', async () => {
   } finally { child.kill('SIGINT'); await new Promise(resolve => child.once('close', resolve)); registry.close(); }
 });
 async function startWith(args: string[], options: {cwd?: string; data: string}) {
-  const token = 'cli_test_token_123456789012345678901234567';
-  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: options.data, BRIDGE_HTTP_TOKEN: token, PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  const env: NodeJS.ProcessEnv = {...process.env, BRIDGE_HOME: options.data, PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
   await mkdir(options.data, {recursive: true});
   await writeFile(path.join(options.data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(options.data, 'missing')}));
   const child = spawn(process.execPath, [cli, 'start', ...args], {env, cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe']});
@@ -120,10 +115,7 @@ async function startWith(args: string[], options: {cwd?: string; data: string}) 
   const until = Date.now() + 10000;
   while (!/MCP endpoint:/.test(log) && child.exitCode === null && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
   const base = /MCP endpoint: (http:\/\/127\.0\.0\.1:\d+)\/mcp/.exec(log)?.[1];
-  const overview = async () => {
-    const login = await (await fetch(`${base}/ui/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})).json() as {session: string};
-    return await (await fetch(`${base}/ui/api/overview`, {headers: {'x-bridge-session': login.session}})).json() as {allowed_workspaces: string[]; session_workspaces: string[]};
-  };
+  const overview = async () => await (await fetch(`${base}/ui/api/overview`)).json() as {allowed_workspaces: string[]; session_workspaces: string[]};
   const stop = async () => { child.kill('SIGINT'); return exited; };
   return {log: () => log, base, overview, stop, exited};
 }
@@ -177,7 +169,7 @@ test('cli: --open hands the UI address to the system browser opener (Linux only:
   await writeFile(path.join(bin, 'xdg-open'), `#!/bin/sh\necho "$1" > "${record}"\n`, {mode: 0o755});
   const data = path.join(dir, 'data'); await mkdir(data);
   await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(dir, 'missing')}));
-  const env: NodeJS.ProcessEnv = {...process.env, PATH: `${bin}:${process.env.PATH}`, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: 'cli_test_token_123456789012345678901234567', PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  const env: NodeJS.ProcessEnv = {...process.env, PATH: `${bin}:${process.env.PATH}`, BRIDGE_HOME: data, PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
   const child = spawn(process.execPath, [cli, 'start', '--open'], {env, stdio: ['ignore', 'pipe', 'pipe']});
   let log = ''; child.stderr.on('data', chunk => log += chunk);
   try {
@@ -196,7 +188,7 @@ test('cli: a non-interactive start never offers or installs the skill', async ()
   const fakeHome = path.join(dir, 'home'); await mkdir(fakeHome);
   const data = path.join(dir, 'data'); await mkdir(data);
   await writeFile(path.join(data, 'workspaces.json'), JSON.stringify({allowed_workspaces: [], executable: path.join(dir, 'missing')}));
-  const env: NodeJS.ProcessEnv = {...process.env, HOME: fakeHome, USERPROFILE: fakeHome, BRIDGE_HOME: data, BRIDGE_HTTP_TOKEN: 'cli_test_token_123456789012345678901234567', PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
+  const env: NodeJS.ProcessEnv = {...process.env, HOME: fakeHome, USERPROFILE: fakeHome, BRIDGE_HOME: data, PORT: '0', BRIDGE_NO_UPDATE_CHECK: '1'};
   delete env.BRIDGE_NO_SKILL_PROMPT; delete env.CI;
   const child = spawn(process.execPath, [cli, 'start'], {env, stdio: ['ignore', 'pipe', 'pipe']});
   let log = ''; child.stderr.on('data', chunk => log += chunk);

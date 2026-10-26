@@ -1,38 +1,66 @@
-import path from 'node:path';
 import { loadConfig, sessionOnlyWorkspaces } from './config.js';
 import { paths } from './paths.js';
-import { findExecutable, inspectCli, startProcess } from './antigravity/process.js';
+import { inspectCli, resolveCommand, startProcess, VERIFIED_AGY_VERSIONS } from './antigravity/process.js';
+import { createAgentRegistry, publicAgents, type AntigravityInspection } from './agents/registry.js';
 import { TaskManager } from './tasks/manager.js';
 import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
   let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
-  try { cli = await inspectCli(await findExecutable(config.executable), paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin'); }
-  catch { console.error('[bridge] CLI unavailable or inspection failed'); }
-  for(const warning of cli.warnings)console.error(`[bridge] WARNING: ${warning}`);
-  const manager = new TaskManager(config, {...cli, stateDirectory: paths.stateDirectory});
+  let antigravity: AntigravityInspection = {version: 'unavailable', executable: '', supported: false, warnings: []};
+  try {
+    const command = await resolveCommand(config.executable);
+    cli = await inspectCli(command.executable, paths.packageRoot, (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
+    antigravity = {...cli, executable: cli.executable || command.source};
+  } catch {
+    antigravity = {version: 'unavailable', executable: '', supported: false, warnings: ['Antigravity CLI unavailable or inspection failed']};
+    console.error('[bridge] CLI unavailable or inspection failed');
+  }
+  for(const warning of antigravity.warnings)console.error(`[bridge] WARNING: ${warning}`);
+
+  const registry = await createAgentRegistry(config, antigravity);
+  for (const warning of registry.warnings) console.error(`[bridge] WARNING: ${warning}`);
+  for (const agent of registry.agents) {
+    const state = !agent.enabled ? 'disabled' : agent.status.available ? `ready${agent.status.version ? ` ${agent.status.version}` : ''}` : 'unavailable';
+    console.error(`[bridge] Agent ${agent.adapter.id}: ${state}`);
+  }
+
+  const maxParallelWorktrees = config.max_parallel_worktrees ?? 2;
+  const manager = new TaskManager(config, {
+    executable: antigravity.executable, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
+    agents: registry.agents, defaultAgent: registry.defaultAgent
+  });
   await recoverExecutionLock(paths.stateDirectory);
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const lockWarning = await manager.lockDiagnostic();
   if (lockWarning) console.error(`[bridge] WARNING: ${lockWarning}`);
+
+  const anyAgent = registry.defaultAgent !== null;
   const environment = {
-    cli_version: cli.version, executable: cli.executable,
-    bridge_status: cli.supported ? 'ready' : 'unsupported',
-    execution_method: cli.supported ? (config.prompt_transport==='stdin'?'supervised-stdin-stream-json':'supervised-print-json') : null,
+    cli_version: antigravity.version, executable: antigravity.executable,
+    bridge_status: antigravity.supported ? 'ready' : 'unsupported',
+    execution_method: antigravity.supported ? (config.prompt_transport==='stdin'?'supervised-stdin-stream-json':'supervised-print-json') : null,
     transport: 'streamable-http',
-    supported: {delegate: cli.supported, status: true, wait: true, output: true, cancel_owned_process: true, detached_resume: false},
+    agents: publicAgents(registry.agents),
+    default_agent: registry.defaultAgent,
+    max_parallel_worktrees: maxParallelWorktrees,
+    default_autonomy: config.default_autonomy ?? 'auto',
+    supported: {delegate: anyAgent, status: true, wait: true, output: true, cancel_owned_process: true, agents_list: true, worktree_isolation: true, detached_resume: false},
     allowed_workspaces: config.allowed_workspaces, session_workspaces: sessionOnlyWorkspaces(),
-    authentication: 'Cached CLI authentication required; only a live task verifies it.',
-    limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: 1, max_queued_tasks: config.max_queued_tasks},
+    authentication: 'Each agent CLI uses its own cached login; only a live task verifies it.',
+    limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, concurrent_tasks: maxParallelWorktrees + 1, concurrent_normal_tasks: 1, max_parallel_worktrees: maxParallelWorktrees, max_queued_tasks: config.max_queued_tasks},
     limitations: [
-      'Only agy 1.4.x with all required flags is enabled; real agent execution was verified on 1.4.3.',
-      ...cli.warnings,
+      `Antigravity requires agy 1.4.x with all required flags; real execution was verified on ${VERIFIED_AGY_VERSIONS.join(' and ')}.`,
+      'Codex runs non-interactively with sandbox workspace-write; approval-requiring actions still fail instead of bypassing the sandbox.',
+      'Ordinary tasks are serialized globally. Only tasks with isolation "worktree" run concurrently, each in its own git worktree and branch.',
+      'Worktree tasks declare owns; files outside that list are reported for review and are never merged automatically.',
+      ...antigravity.warnings,
       'Client disconnect does not cancel accepted tasks. Finished-task records persist in .bridge-state/tasks; a task running during a restart is marked failed and its process is not recovered.',
       'CLI SUCCESS/exit 0 does not establish acceptance; tool permissions may have been denied.',
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
-      'Existing Antigravity permissions, hooks, MCP and credential access remain governed by its configuration.',
+      'Existing agent permissions, hooks, MCP and credential access remain governed by each CLI configuration.',
       'No permission bypass flags. Dangerous actions require separate interactive approval.',
       'Windows uses taskkill on the live owned child tree; abrupt server termination may orphan processes.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'

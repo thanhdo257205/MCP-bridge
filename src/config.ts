@@ -3,6 +3,13 @@ import path from 'node:path';
 import { paths, packageRoot } from './paths.js';
 import * as z from 'zod/v4';
 
+const agentsSchema = z.object({
+  priority: z.array(z.string().min(1).max(64)).max(50).optional(),
+  enabled: z.array(z.string().min(1).max(64)).max(50).optional(),
+  codex_executable: z.string().min(1).max(4096).optional(),
+  codex_model: z.string().min(1).max(200).optional()
+}).strict();
+
 const schema = z.object({
   allowed_workspaces: z.array(z.string()),
   executable: z.string().min(1).default('agy'),
@@ -11,10 +18,13 @@ const schema = z.object({
   max_output_bytes: z.number().int().min(1024).max(1048576).default(262144),
   max_retained_tasks: z.number().int().min(1).max(200).default(50),
   max_queued_tasks: z.number().int().min(0).max(20).default(3),
+  max_parallel_worktrees: z.number().int().min(1).max(8).optional(),
+  default_autonomy: z.enum(['suggest', 'auto', 'full']).optional(),
+  agents: agentsSchema.optional(),
   extra_env_passthrough: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100).default([]),
   prompt_transport:z.enum(['stdin','argv']).default('argv')
 }).strict();
-const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3, extra_env_passthrough: [], prompt_transport:'argv'};
+const DEFAULT_LIMITS = {max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144, max_retained_tasks: 50, max_queued_tasks: 3, max_parallel_worktrees: 2, default_autonomy: 'auto', extra_env_passthrough: [], prompt_transport:'argv'};
 export type Config = z.infer<typeof schema>;
 
 // Directories allowed for this run only (agy-mcp-bridge --workspace <dir>); never written to the config file.

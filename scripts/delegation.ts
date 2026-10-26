@@ -1,7 +1,7 @@
 import { paths } from '../src/paths.js';
 import { delegationState, setDelegationSwitch } from '../src/delegation.js';
 
-// Local, immediate switch for whether the running bridge accepts new delegations. No restart, no token needed.
+// Local, immediate switch for whether the running bridge accepts new delegations. No restart needed.
 const stateDirectory = paths.stateDirectory;
 const command = process.argv[2];
 if (command === 'off') await setDelegationSwitch(stateDirectory, false);

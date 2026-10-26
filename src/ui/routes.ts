@@ -2,18 +2,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { delegationControllable, delegationState, setDelegationSwitch } from '../delegation.js';
-import { tokensEqual } from '../security/http-auth.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
-import { SessionStore } from './session.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { inside } from '../security/workspace.js';
 
 export interface UiContext {
-  manager: TaskManager; environment: Record<string, unknown>; token: string;
-  mcpUrl: () => string; startedAt: number; sessions: SessionStore;
+  manager: TaskManager; environment: Record<string, unknown>;
+  mcpUrl: () => string; startedAt: number;
+  requestShutdown?: () => Promise<void>;
 }
 
 const assets: Record<string, {file: string; type: string}> = {
@@ -59,6 +58,10 @@ async function overview(ctx: UiContext) {
       version: env.cli_version, executable: env.executable, bridge_status: env.bridge_status,
       execution_method: env.execution_method, authentication: env.authentication
     },
+    agents: env.agents ?? ctx.manager.agentsOverview().agents,
+    default_agent: env.default_agent ?? ctx.manager.agentsOverview().default_agent,
+    default_autonomy: env.default_autonomy ?? 'auto',
+    concurrency: ctx.manager.overview().concurrency,
     limits: env.limits ?? {}, allowed_workspaces: env.allowed_workspaces ?? [], session_workspaces: env.session_workspaces ?? [], limitations: env.limitations ?? [],
     delegation: {...state, controllable: delegationControllable()},
     queue: ctx.manager.overview().queue,
@@ -71,14 +74,26 @@ async function overview(ctx: UiContext) {
 let changesInFlight: Promise<unknown> | null = null;
 /** Changes in a task's workspace, only while that directory is still allowed, and one scan at a time so repeated clicks cannot pile up git processes. */
 async function changesFor(ctx: UiContext, id: string) {
-  const {workspace} = ctx.manager.get(id);
-  const allowed = await Promise.all(((ctx.environment.allowed_workspaces as string[] | undefined) ?? []).map(root => realpath(root).catch(() => root)));
-  const canonical = await realpath(workspace).catch(() => null);
-  if (!canonical || !allowed.some(root => inside(root, canonical))) {
-    return {available: false, reason: 'This workspace is no longer in the allowlist, so its files are not read.', head: null, changes: [], untracked: [], truncated: false};
+  const task = ctx.manager.get(id);
+  const unavailable = {available: false, reason: 'This task workspace is no longer readable under the bridge policy, so its files are not read.', head: null, changes: [], untracked: [], truncated: false};
+  let target: string;
+  if (task.worktree) {
+    const [root, canonical] = await Promise.all([
+      realpath(path.join(ctx.manager.stateDirectory, 'worktrees')).catch(() => null),
+      realpath(task.worktree).catch(() => null)
+    ]);
+    if (!root || !canonical || !inside(root, canonical)) return {...unavailable, reason: 'This task worktree is outside the bridge state directory, so its files are not read.'};
+    target = canonical;
+  } else {
+    const allowed = await Promise.all(((ctx.environment.allowed_workspaces as string[] | undefined) ?? []).map(root => realpath(root).catch(() => root)));
+    const canonical = await realpath(task.workspace).catch(() => null);
+    if (!canonical || !allowed.some(root => inside(root, canonical))) {
+      return {...unavailable, reason: 'This workspace is no longer in the allowlist, so its files are not read.'};
+    }
+    target = canonical;
   }
   if (changesInFlight) return {available: false, reason: 'Another scan is still running; try again in a moment.', head: null, changes: [], untracked: [], truncated: false};
-  const scan = workspaceChanges(canonical);
+  const scan = workspaceChanges(target);
   changesInFlight = scan;
   try { return await scan; } finally { changesInFlight = null; }
 }
@@ -99,19 +114,7 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
   }
   if (!pathname.startsWith('/ui/api/')) { json(res, 404, {error: 'Not found'}); return true; }
 
-  const session = req.headers['x-bridge-session'];
-  const sessionId = typeof session === 'string' ? session : undefined;
   try {
-    if (pathname === '/ui/api/login' && method === 'POST') {
-      if (ctx.sessions.throttled()) { json(res, 429, {error: 'Too many failed attempts. Wait a minute and try again.'}); return true; }
-      const body = await readJson(req);
-      if (typeof body.token !== 'string' || !tokensEqual(body.token.trim(), ctx.token)) {
-        ctx.sessions.recordFailure(); json(res, 401, {error: 'Invalid token'}); return true;
-      }
-      json(res, 200, {session: ctx.sessions.create()}); return true;
-    }
-    if (!ctx.sessions.valid(sessionId)) { json(res, 401, {error: 'Sign in with the bridge token'}); return true; }
-    if (pathname === '/ui/api/logout' && method === 'POST') { ctx.sessions.destroy(sessionId); json(res, 200, {ok: true}); return true; }
     if (pathname === '/ui/api/overview' && method === 'GET') { json(res, 200, await overview(ctx)); return true; }
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
@@ -125,6 +128,16 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       if (!delegationControllable()) { json(res, 409, {error: 'Delegation is locked by BRIDGE_DELEGATION in the server environment'}); return true; }
       await setDelegationSwitch(ctx.manager.stateDirectory, body.enabled);
       json(res, 200, {...delegationState(ctx.manager.stateDirectory), controllable: true}); return true;
+    }
+    if (pathname === '/ui/api/shutdown' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
+      if (!ctx.requestShutdown) { json(res, 503, {error: 'Shutdown is unavailable'}); return true; }
+      const shutdown = ctx.requestShutdown;
+      json(res, 202, {status: 'shutting_down'});
+      // Let the response flush before the listener and owned processes are torn down.
+      setTimeout(() => { void shutdown().catch(() => {}); }, 50);
+      return true;
     }
     json(res, 404, {error: 'Not found'});
   } catch (error) {

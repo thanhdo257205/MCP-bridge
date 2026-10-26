@@ -16,16 +16,15 @@ test('Developer prompts identify the actual Tech Lead and escape client-label co
     assert.ok(!prompt.includes('Codex is Tech Lead'));if(client.includes('\n'))assert.ok(!prompt.includes(client));
   }
 });
-test('MCP handshake and authenticated UI report the package manifest version',async()=>{
+test('MCP handshake and web UI report the package manifest version',async()=>{
   const stateDirectory=await mkdtemp(path.join(tmpdir(),'bridge-version-'));
   const manager=new TaskManager({allowed_workspaces:[],executable:'missing',max_timeout_seconds:10,default_timeout_seconds:10,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'stdin'},{executable:'missing',supported:false,stateDirectory});
-  const token='version_test_token_123456789012345678901234';const bridge=await startHttpBridge({manager,environment:{},token,port:0});
+  const bridge=await startHttpBridge({manager,environment:{},port:0});
   const client=new Client({name:'version-test',version:'1'},{versionNegotiation:{mode:'legacy'}});
   try{
-    await client.connect(new StreamableHTTPClientTransport(new URL(bridge.mcpUrl),{requestInit:{headers:{Authorization:`Bearer ${token}`}}}));
+    await client.connect(new StreamableHTTPClientTransport(new URL(bridge.mcpUrl)));
     assert.equal(client.getServerVersion()?.version,readPackageInfo().version);
-    const {session}=await (await fetch(`${bridge.baseUrl}/ui/api/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})})).json() as {session:string};
-    const overview=await (await fetch(`${bridge.baseUrl}/ui/api/overview`,{headers:{'x-bridge-session':session}})).json() as {server:{version:string}};
+    const overview=await (await fetch(`${bridge.baseUrl}/ui/api/overview`)).json() as {server:{version:string}};
     assert.equal(overview.server.version,readPackageInfo().version);
   }finally{await client.close();await bridge.close();}
 });

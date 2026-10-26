@@ -2,15 +2,15 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { paths } from '../src/paths.js';
-import { findExecutable, startProcess, terminateOwned } from '../src/antigravity/process.js';
+import { resolveCommand, startProcess, terminateOwned } from '../src/antigravity/process.js';
 import { loadConfig } from '../src/config.js';
 
 // Captures what `agy --output-format stream-json` really emits so progress reporting can be built on the real format.
 // It makes one tiny real AI call (cached login, no tools, scratch directory) and only writes under test-results/.
 const config = await loadConfig();
-const executable = await findExecutable(config.executable);
+const command = await resolveCommand(config.executable);
 const workspace = await mkdtemp(path.join(tmpdir(), 'agy-stream-probe-'));
-const child = startProcess(executable, ['--print', 'Reply with exactly STREAM_PROBE_OK. Do not use any tools, read files, change files or run commands.',
+const child = startProcess(command.executable, [...command.prefixArgs, '--print', 'Reply with exactly STREAM_PROBE_OK. Do not use any tools, read files, change files or run commands.',
   '--output-format', 'stream-json', '--print-timeout', '90s', '--disable-slash-commands'], workspace);
 let stdout = '';
 let stderr = '';

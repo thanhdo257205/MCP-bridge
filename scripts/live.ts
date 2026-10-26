@@ -1,7 +1,6 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,14 +14,13 @@ await writeFile(path.join(workspace,'sentinel.txt'),'UNCHANGED');
 const configPath = path.join(workspace,'..',`config-${Date.now()}.json`);
 await writeFile(configPath,JSON.stringify({allowed_workspaces:[workspace],executable:'agy'}));
 let client = new Client({name:'bridge-live-verifier',version:'0.1.0'});
-const token = randomBytes(32).toString('base64url');
 // IPC is test-harness control only: exercise the same SIGINT shutdown handler on Windows.
 const server=spawn(process.execPath,['--input-type=module','-e',"await import('./dist/src/index.js'); process.on('message',()=>{process.emit('SIGINT');process.disconnect();});"],
-  {cwd:root,windowsHide:true,env:{...process.env,PORT:'0',BRIDGE_HTTP_TOKEN:token,ANTIGRAVITY_BRIDGE_CONFIG:configPath},stdio:['ignore','pipe','pipe','ipc']});
+  {cwd:root,windowsHide:true,env:{...process.env,PORT:'0',ANTIGRAVITY_BRIDGE_CONFIG:configPath},stdio:['ignore','pipe','pipe','ipc']});
 const exited=new Promise<number|null>(resolve=>server.once('close',resolve));
 let diagnostics=''; server.stderr!.on('data',(data:Buffer)=>diagnostics+=data.toString());server.stdout!.resume();
 let endpoint = '';
-const connect = () => client.connect(new StreamableHTTPClientTransport(new URL(endpoint),{requestInit:{headers:{Authorization:`Bearer ${token}`}}}));
+const connect = () => client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
 const call = async (name:string,args:Record<string,unknown>={}) => {
   const result=await client.callTool({name,arguments:args});
   if(result.isError) throw new Error(JSON.stringify(result));
@@ -37,7 +35,7 @@ try {
   assert.ok(endpoint,'HTTP server did not start');report.endpoint=endpoint;
   await connect();
   const environment=await call('antigravity_environment');
-  assert.equal(environment.cli_version,'1.4.3');assert.equal(environment.bridge_status,'ready');
+  assert.match(String(environment.cli_version),/^1\.4\.\d+$/);assert.equal(environment.bridge_status,'ready');
   report.environment=environment;
   const task=await call('antigravity_delegate',{
     task:'Reply with exactly BRIDGE_SMOKE_OK. Do not use any tools, read files, change files or run commands.',

@@ -1,20 +1,22 @@
-# MCP Bridge HTTP: Codex / Claude Code → Antigravity
+# MCP Bridge HTTP: agent điều phối → Antigravity / Codex
 
-Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTTP**. Codex và Claude Code kết nối tới cùng endpoint; không khởi chạy process bridge riêng. Không cần mở Antigravity IDE; bridge gọi executable `agy` đã đăng nhập.
+Server TypeScript chạy độc lập trong terminal, dùng **MCP Streamable HTTP**. Codex, Claude Code hoặc agent điều phối khác kết nối tới cùng endpoint; không khởi chạy process bridge riêng. Bridge gọi CLI agent đã đăng nhập: `agy` (Antigravity) và/hoặc `codex exec` (Codex). Mỗi task chọn agent, chế độ cách ly và quyền tự duyệt; task worktree chạy song song trong git worktree riêng.
 
-`npm start` hiện chạy HTTP. STDIO cũ chỉ còn là chế độ tùy chọn `npm run start:stdio`, không dùng trong các cấu hình client bên dưới. Source bridge ở thư mục phát triển riêng `MCP-bridge`, ngoài repository ứng dụng được giao sửa.
+`npm start` hiện chạy HTTP. STDIO cũ chỉ còn là chế độ tùy chọn `npm run start:stdio`, không dùng trong các cấu hình client bên dưới. Source bridge ở thư mục phát triển riêng `MCP-bridge`, ngoài repository ứng dụng được giao sửa. Kế hoạch nhiều agent và trạng thái từng phase ở [docs/MULTI-AGENT-PLAN.md](docs/MULTI-AGENT-PLAN.md).
 
 ## Cài từ npm (người dùng)
 
 ```bash
-npm install -g agy-mcp-bridge        # cần Node.js >= 20 và Antigravity CLI `agy` 1.4.x đã đăng nhập
+npm install -g agy-mcp-bridge        # cần Node.js >= 20; Antigravity CLI `agy` 1.4.x và/hoặc Codex CLI là tùy chọn
 agy-mcp-bridge workspaces add /duong/dan/toi/project   # cấp quyền cho một thư mục (khởi động lại server sau khi đổi)
 agy-mcp-bridge                       # mở server http://127.0.0.1:3000 ; giao diện web ở /ui
 ```
 
+Bridge tự dò `agy` và `codex` khi khởi động; agent nào không có thì bị đánh dấu unavailable và không nhận task. Chọn thứ tự ưu tiên và bật/tắt từng agent trong `agents` của `config/workspaces.json`.
+
 **Cách nhanh nhất:** mở terminal tại thư mục dự án rồi chạy `agy-mcp-bridge --workspace .` (cho phép thư mục hiện tại **chỉ trong lần chạy này**, không lưu vào cấu hình; có thể lặp lại cờ cho nhiều thư mục, và log in ra từng thư mục đã được cho phép; thư mục sai hoặc là chính thư mục cài bridge thì dừng ngay, không khởi động server). Muốn lưu lâu dài thì dùng `agy-mcp-bridge workspaces add .`. Trong giao diện web, mục Cài đặt đánh dấu "chỉ lần chạy này" bên cạnh các thư mục này.
 
-Các lệnh khác: `agy-mcp-bridge check | setup codex|claude|both | delegation on|off|status | skill install --client codex|claude|both | config | update | help`. Thêm `--open` để tự mở giao diện web trong trình duyệt mặc định khi server đã chạy (`agy-mcp-bridge --open`). Cấu hình, token và lịch sử task nằm trong thư mục dữ liệu của người dùng (Linux `~/.config/agy-mcp-bridge`, macOS `~/Library/Application Support/agy-mcp-bridge`, Windows `%APPDATA%\agy-mcp-bridge`), không nằm trong thư mục cài đặt nên không mất khi cập nhật; đổi chỗ bằng `BRIDGE_HOME`. `agy-mcp-bridge config` in ra các đường dẫn thật, gồm `token file` (đọc token ở đó để dán vào giao diện web hoặc nạp vào `BRIDGE_HTTP_TOKEN` cho Codex/Claude Code). Phần dưới đây dùng `npm start`/`npm run ...` cho bản clone từ git; với bản cài từ npm hãy dùng lệnh `agy-mcp-bridge` tương ứng.
+Các lệnh khác: `agy-mcp-bridge check | setup codex|claude|both | delegation on|off|status | skill install --client codex|claude|both | config | update | help`. Thêm `--open` để tự mở giao diện web trong trình duyệt mặc định khi server đã chạy (`agy-mcp-bridge --open`). Cấu hình và lịch sử task nằm trong thư mục dữ liệu của người dùng (Linux `~/.config/agy-mcp-bridge`, macOS `~/Library/Application Support/agy-mcp-bridge`, Windows `%APPDATA%\agy-mcp-bridge`), không nằm trong thư mục cài đặt nên không mất khi cập nhật; đổi chỗ bằng `BRIDGE_HOME`. `agy-mcp-bridge config` in ra các đường dẫn thật. Phần dưới đây dùng `npm start`/`npm run ...` cho bản clone từ git; với bản cài từ npm hãy dùng lệnh `agy-mcp-bridge` tương ứng.
 
 **Skill cho Codex / Claude Code:** gói npm chứa file skill nhưng `npm install` không tự ghi vào thư mục cấu hình của client. Thay vào đó, lần đầu bạn chạy `agy-mcp-bridge` trong terminal tương tác, bridge hiện đường dẫn sẽ ghi rồi hỏi `Install it now? [codex / claude / both / N]`. Chọn mới cài (chỉ cho client chưa có skill; skill bạn đã tự sửa không bao giờ bị đụng tới); chọn `N` hoặc nhấn Enter thì không cài gì và không hỏi lại (câu trả lời lưu ở `onboarding.json` trong thư mục state). Không hỏi khi chạy ngoài terminal tương tác hoặc `CI=true`; tắt hẳn bằng `--no-skill-prompt` hoặc `BRIDGE_NO_SKILL_PROMPT=1`. Cài sau bất kỳ lúc nào bằng `agy-mcp-bridge skill install --client both`. Lỗi khi cài chỉ được báo, server vẫn khởi động.
 
@@ -50,21 +52,22 @@ Nếu publish lỗi sau khi commit version/tag đã được push, dùng **Re-ru
 
 ## Quickstart
 
-Requires Git, Node.js ≥20 and a logged-in Antigravity CLI `agy` 1.4.x on PATH (real agent execution was verified on 1.4.3). The longer sections below use PowerShell; the POSIX equivalents are:
+Requires Git, Node.js ≥20 and a logged-in Antigravity CLI `agy` 1.4.x on PATH (real agent execution was verified on 1.4.3 and 1.4.7). The longer sections below use PowerShell; the POSIX equivalents are:
 
 ```bash
 git clone https://github.com/thanhdo257205/MCP-bridge.git && cd MCP-bridge
 agy --version && npm ci && npm run build
 npm start                                   # terminal 1: server on http://127.0.0.1:3000/mcp
-export BRIDGE_HTTP_TOKEN="$(cat .bridge-state/http-token)"   # terminal 2, same clone
-npm run check                               # calls antigravity_environment
+npm run check                               # terminal 2, same clone: calls antigravity_environment
 ```
 
-Then allow a workspace in `config/workspaces.json` (created empty on first run, git-ignored), register the client ([Codex](#3-kết-nối-codex), [Claude Code](#4-kết-nối-claude-code)) and install the [skill](#9-skill-giao-tiếp-với-antigravity). Bash equivalents of PowerShell snippets: `$env:X = 'v'` → `export X=v`; `Get-Content -Raw f` → `cat f`; `Remove-Item Env:X` → `unset X`.
+Then allow a workspace in `config/workspaces.json` (created empty on first run, git-ignored), register the client ([Codex](#3-kết-nối-codex), [Claude Code](#4-kết-nối-claude-code)) and install the [skill](#9-skill-giao-tiếp-với-antigravity). Bash equivalents of PowerShell snippets: `$env:X = 'v'` → `export X=v`; `Remove-Item Env:X` → `unset X`.
+
+> **Không có xác thực.** Bridge chỉ nghe trên `127.0.0.1`, nhưng bất kỳ tiến trình nào chạy trên cùng máy với cùng user đều có thể gọi tool để điều khiển agent. Không mở cổng ra ngoài, không đặt sau reverse proxy công khai, và chỉ dùng trên máy bạn kiểm soát.
 
 ## 1. Cài đặt và khởi động
 
-Yêu cầu Git, Node.js ≥20, npm và Antigravity CLI **1.4.x** đã đăng nhập, có lệnh `agy` trong PATH và đủ cờ bắt buộc trong help. Patch khác 1.4.3 vẫn chạy nhưng có cảnh báo trong log và environment vì chưa được xác minh thực thi agent thật; major/minor khác bị từ chối. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency. Các lệnh bên dưới dùng PowerShell trên Windows. Xem [thay đổi hardening và giới hạn kiểm chứng](docs/HARDENING.md).
+Yêu cầu Git, Node.js ≥20, npm và Antigravity CLI **1.4.x** đã đăng nhập, có lệnh `agy` trong PATH và đủ cờ bắt buộc trong help. Patch 1.4.3 và 1.4.7 đã được xác minh thực thi agent thật; patch 1.4.x khác vẫn chạy nhưng có cảnh báo trong log và environment; major/minor khác bị từ chối. SDK chính thức: server 2.3.1, Node HTTP adapter 2.1.1; lockfile khóa dependency. Các lệnh bên dưới dùng PowerShell trên Windows. Xem [thay đổi hardening và giới hạn kiểm chứng](docs/HARDENING.md).
 
 Mở PowerShell tại thư mục bạn muốn lưu source, rồi clone và chạy:
 
@@ -91,7 +94,7 @@ Chế độ phát triển:
 npm run dev
 ```
 
-`dev` build rồi chạy HTTP với cùng cơ chế bảo mật; hiện không có hot reload. Sau khi sửa source, Ctrl+C rồi chạy `npm run dev` lại. Không tự restart để tránh gián đoạn task đang sửa code.
+`dev` build rồi chạy HTTP; hiện không có hot reload. Sau khi sửa source, Ctrl+C rồi chạy `npm run dev` lại. Không tự restart để tránh gián đoạn task đang sửa code.
 
 Server giữ terminal hoạt động tới khi **Ctrl+C**, SIGTERM hoặc lỗi nghiêm trọng. Việc đóng Codex, Claude Code hoặc stdin của bridge không dừng HTTP server. Đóng cưỡng bức cửa sổ terminal không tương đương shutdown an toàn.
 
@@ -100,9 +103,9 @@ Mặc định bind duy nhất `127.0.0.1:3000`. Khi cổng còn trống, termina
 ```text
 [bridge] HTTP server: http://127.0.0.1:3000
 [bridge] MCP endpoint: http://127.0.0.1:3000/mcp
-[bridge] Health check: http://127.0.0.1:3000/health (bearer authentication required)
-[bridge] Token source: <đường dẫn file token hoặc BRIDGE_HTTP_TOKEN> (value never logged)
-[bridge] Web UI: http://127.0.0.1:3000/ui  (open in a browser on this machine; sign in with the token from the source above)
+[bridge] Health check: http://127.0.0.1:3000/health
+[bridge] No authentication: any local process running as this user can control the bridge. Keep it on this machine.
+[bridge] Web UI: http://127.0.0.1:3000/ui (open in a browser on this machine)
 ```
 
 Dòng `Web UI` là đường dẫn tới giao diện web; nhấn giữ Ctrl (hoặc Cmd) và bấm vào nó trong terminal hỗ trợ liên kết để mở trình duyệt.
@@ -116,43 +119,40 @@ npm start
 
 Muốn hệ điều hành chọn một cổng đang trống, đặt `PORT='0'`. Đây là lựa chọn minh bạch do người dùng chỉ định: đọc URL thực tế được in ở terminal rồi cập nhật tất cả client. `PORT` nhận số nguyên 0–65535, không nhận giá trị rỗng. Xóa override để về mặc định: `Remove-Item Env:PORT`.
 
-## 2. Token xác thực và health check
+## 2. Không xác thực và health check
 
-Mọi request tới `/mcp` và `/health` phải có `Authorization: Bearer <token>`. Đây là token dùng chung cho một người dùng cục bộ, không phải OAuth. Không cần `codex mcp login` hay `claude mcp login` cho bridge này.
+Bridge **không có bearer token**. `/mcp` và `/health` nhận request trực tiếp từ loopback. Đây là lựa chọn có chủ đích cho công cụ cục bộ; đổi lại, bất kỳ tiến trình nào trên cùng máy với cùng user đều có thể dùng tool, xem và hủy task, hoặc tắt server. Chỉ chạy bridge trên máy cá nhân hoặc máy bạn kiểm soát hoàn toàn.
 
-Nếu chưa đặt `BRIDGE_HTTP_TOKEN`, lần khởi động đầu tự tạo token ngẫu nhiên 256 bit tại `.bridge-state/http-token`, rồi tái sử dụng qua các lần chạy. Server chỉ in **đường dẫn nguồn token**, không in giá trị. Thư mục này được gitignore. Token file mới dùng mode 0600 trên POSIX; Windows dùng `whoami /user` và `icacls` không qua shell để bỏ kế thừa ACL và cấp đọc/ghi cho SID tài khoản hiện tại. Nếu ACL lỗi, server cảnh báo và vẫn chạy: chủ máy cần bảo vệ file thủ công. File có sẵn không bị tự đổi ACL. Bất cứ ai đọc được token đều có quyền dùng các tool, xem và hủy task của server.
+Các lớp bảo vệ còn lại: chỉ bind `127.0.0.1`, kiểm tra `Host`/`Origin`, giới hạn body, timeout, allowlist workspace và allowlist biến môi trường cho tiến trình con.
 
-Mở **terminal thứ hai tại thư mục gốc của cùng bản clone** (nơi có `package.json`), rồi đọc token vào môi trường mà không in nó:
+Mở **terminal thứ hai tại thư mục gốc của cùng bản clone** (nơi có `package.json`):
 
 ```powershell
-$env:BRIDGE_HTTP_TOKEN = (Get-Content -Raw '.bridge-state/http-token').Trim()
-$headers = @{ Authorization = "Bearer $env:BRIDGE_HTTP_TOKEN" }
-Invoke-RestMethod 'http://127.0.0.1:3000/health' -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:3000/health'
 npm run check
 ```
 
-`npm run check` không khởi động server hay gọi AI; nó kết nối HTTP và gọi `antigravity_environment`. Nếu không có token trong env, script đọc file token mặc định. Khi server tắt, token sai hoặc URL sai, script thoát mã 1 và hướng dẫn chạy `npm start`, kiểm tra PORT/URL/token, rồi kết nối lại.
+`npm run check` không khởi động server hay gọi AI; nó kết nối HTTP và gọi `antigravity_environment`. Khi server tắt hoặc URL sai, script thoát mã 1 và hướng dẫn chạy `npm start`, kiểm tra PORT/URL, rồi kết nối lại.
 
 Với cổng khác, ví dụ 3001:
 
 ```powershell
 $env:BRIDGE_MCP_URL = 'http://127.0.0.1:3001/mcp'
 npm run check
-Invoke-RestMethod 'http://127.0.0.1:3001/health' -Headers $headers
+Invoke-RestMethod 'http://127.0.0.1:3001/health'
 ```
 
-`BRIDGE_MCP_URL` dành cho script check; URL của Codex và Claude Code phải cập nhật riêng. Nếu chủ động cấp token bằng env trước `npm start`, dùng token đó ở các client; token env phải dài 32–256 ký tự thuộc A–Z, a–z, 0–9, `_`, `-`. Env ưu tiên hơn file. Không commit token hoặc dán vào prompt. Child `agy` chỉ nhận allowlist môi trường; secret, gồm `BRIDGE_HTTP_TOKEN`, bị chặn mặc định. Chỉ dùng `extra_env_passthrough` cho biến thực sự cần và không liệt kê bearer token của bridge. Xem danh sách và ví dụ trong [HARDENING.md](docs/HARDENING.md).
+`BRIDGE_MCP_URL` dành cho script check; URL của Codex và Claude Code phải cập nhật riêng. Child `agy` chỉ nhận allowlist môi trường; tên chứa `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY` bị chặn mặc định. Chỉ dùng `extra_env_passthrough` cho biến thực sự cần. Xem danh sách và ví dụ trong [HARDENING.md](docs/HARDENING.md).
 
 ## 3. Kết nối Codex
 
-> Muốn có sẵn đúng lệnh cho máy của bạn (đường dẫn token, cổng, PowerShell/cmd/bash) chạy `agy-mcp-bridge setup codex` hoặc `setup claude` (hoặc `setup both`, thêm `--port` và `--shell` nếu cần). Lệnh chỉ in ra, không sửa cấu hình của Codex hay Claude Code; bạn xem rồi tự áp dụng.
+> Muốn có sẵn đúng lệnh cho máy của bạn (cổng, PowerShell/cmd/bash) chạy `agy-mcp-bridge setup codex` hoặc `setup claude` (hoặc `setup both`, thêm `--port` và `--shell` nếu cần). Lệnh chỉ in ra, không sửa cấu hình của Codex hay Claude Code; bạn xem rồi tự áp dụng.
 
 **Các đoạn dưới là thay đổi đề xuất, chưa áp dụng.** Trình bày để chủ máy duyệt trước khi chạy lệnh ghi cấu hình. Mẫu: [config/codex-mcp.windows.toml](config/codex-mcp.windows.toml).
 
 ```toml
 [mcp_servers.antigravity]
 url = 'http://127.0.0.1:3000/mcp'
-bearer_token_env_var = 'BRIDGE_HTTP_TOKEN'
 startup_timeout_sec = 30
 tool_timeout_sec = 60
 enabled = true
@@ -163,17 +163,17 @@ File cấu hình Codex mặc định là `~/.codex/config.toml` (trên Windows: 
 Sau khi được duyệt có thể dùng CLI thay cho merge TOML (CLI dùng timeout mặc định, thêm timeout bằng TOML nếu cần):
 
 ```powershell
-codex mcp add antigravity --url 'http://127.0.0.1:3000/mcp' --bearer-token-env-var BRIDGE_HTTP_TOKEN
+codex mcp add antigravity --url 'http://127.0.0.1:3000/mcp'
 codex mcp get antigravity
 codex mcp list
 codex
 ```
 
-Khởi chạy Codex từ terminal đã nạp token. Với IDE/app đang mở, phải nạp env vào môi trường của app và khởi động lại app; đặt env ở terminal khác không cập nhật tiến trình đã chạy. Trong phiên mới, yêu cầu gọi `antigravity_environment`; kiểm tra phiên bản thuộc 1.4.x, đủ cờ và các cảnh báo patch. `codex mcp list/get` xác nhận cấu hình, không thay thế một tool call thật.
+Khởi chạy Codex ở terminal bất kỳ. Trong phiên mới, yêu cầu gọi `antigravity_environment`; kiểm tra phiên bản thuộc 1.4.x, đủ cờ và các cảnh báo patch. `codex mcp list/get` xác nhận cấu hình, không thay thế một tool call thật.
 
 Ngắt kết nối: thoát phiên Codex; server và task vẫn chạy. Muốn bỏ cấu hình, sau khi duyệt chạy `codex mcp remove antigravity`, rồi mở phiên mới. Hoặc đặt `enabled=false` trong block và mở lại phiên. Server chỉ dừng khi bạn Ctrl+C tại terminal server.
 
-Khi đổi cổng, sửa `url`, giữ `bearer_token_env_var`, rồi mở phiên mới. Khi server tắt, Codex báo lỗi kết nối/MCP startup. Không có tiến trình HTTP nào có thể tự trả hướng dẫn khi nó đã tắt; chạy `npm run check` để có chẩn đoán và hướng dẫn cụ thể, sau đó `npm start` ở terminal server và mở lại phiên Codex.
+Khi đổi cổng, sửa `url` rồi mở phiên mới. Khi server tắt, Codex báo lỗi kết nối/MCP startup. Không có tiến trình HTTP nào có thể tự trả hướng dẫn khi nó đã tắt; chạy `npm run check` để có chẩn đoán và hướng dẫn cụ thể, sau đó `npm start` ở terminal server và mở lại phiên Codex.
 
 Tham khảo [tài liệu MCP chính thức của Codex](https://developers.openai.com/codex/mcp/).
 
@@ -186,27 +186,26 @@ Mẫu cấu hình đề xuất ở [config/claude-mcp.http.json](config/claude-m
   "mcpServers": {
     "antigravity": {
       "type": "http",
-      "url": "http://127.0.0.1:3000/mcp",
-      "headers": {"Authorization": "Bearer ${BRIDGE_HTTP_TOKEN}"}
+      "url": "http://127.0.0.1:3000/mcp"
     }
   }
 }
 ```
 
-Sau khi duyệt, từ terminal đã nạp token và thư mục project của bạn:
+Sau khi duyệt, từ thư mục project của bạn:
 
 ```powershell
-claude mcp add --transport http --scope local antigravity 'http://127.0.0.1:3000/mcp' --header 'Authorization: Bearer ${BRIDGE_HTTP_TOKEN}'
+claude mcp add --transport http --scope local antigravity 'http://127.0.0.1:3000/mcp'
 claude mcp get antigravity
 claude mcp list
 claude
 ```
 
-Dấu nháy đơn PowerShell giữ nguyên `${BRIDGE_HTTP_TOKEN}` trong cấu hình; Claude Code đọc env khi khởi động. Không thay bằng token literal trong lệnh, để tránh lưu token vào history/config. `--scope local` chỉ cấu hình cho project và người dùng hiện tại. Mẫu JSON wrapper dành cho `.mcp.json`; không tự tạo file đó trong repository ứng dụng.
+`--scope local` chỉ cấu hình cho project và người dùng hiện tại. Mẫu JSON wrapper dành cho `.mcp.json`; không tự tạo file đó trong repository ứng dụng.
 
 Trong Claude Code dùng `/mcp` để xem trạng thái, reconnect hoặc disable server, và gọi `antigravity_environment` để kiểm tra tool. Nếu server tắt, `/mcp` hiển thị lỗi kết nối; chạy `npm run check`, bật server bằng `npm start`, rồi reconnect qua `/mcp` hoặc mở lại phiên. Thoát Claude Code/disable kết nối không hủy task.
 
-Gỡ sau khi duyệt: `claude mcp remove antigravity --scope local`. Đổi cổng: cập nhật URL trong cùng entry, hoặc remove rồi add lại URL mới với cùng header env, sau đó reconnect. Không cần dừng server vì client ngắt kết nối.
+Gỡ sau khi duyệt: `claude mcp remove antigravity --scope local`. Đổi cổng: cập nhật URL trong cùng entry, hoặc remove rồi add lại URL mới, sau đó reconnect. Không cần dừng server vì client ngắt kết nối.
 
 Tham khảo [tài liệu MCP chính thức của Claude Code](https://code.claude.com/docs/en/mcp). Các phiên bản CLI và kết quả đã kiểm chứng được ghi trong [báo cáo khảo sát](docs/VERIFICATION.md). Sau khi cấu hình trên máy của bạn, hãy gọi tool thật từ từng client để kiểm tra kết nối; kiểm thử protocol bằng SDK không thay thế bước này.
 
@@ -235,34 +234,57 @@ Luồng sử dụng trong Codex hoặc Claude Code:
   "task": "Sửa hàm parseCount trong src/count.ts để từ chối số âm. Chỉ sửa hàm này và test liên quan. Không chạy lệnh; Tech Lead tự test. Báo cáo file đã sửa và vấn đề còn lại.",
   "workspace": "C:/absolute/path/to/approved-project",
   "acceptance_criteria": ["Số âm trả lỗi validation hiện hành", "0 và số nguyên dương giữ hành vi cũ"],
-  "timeout_seconds": 300
+  "timeout_seconds": 300,
+  "agent": "codex",
+  "autonomy": "auto"
 }
 ```
 
+Task chạy song song an toàn dùng `isolation: "worktree"` và khai báo đúng các đường dẫn agent được sửa trong `owns`:
+
+```json
+{
+  "task": "Thêm validate cho parser và test tương ứng.",
+  "workspace": "C:/absolute/path/to/approved-project",
+  "acceptance_criteria": ["Test mới chạy qua"],
+  "agent": "codex",
+  "isolation": "worktree",
+  "owns": ["src/parser", "test/parser.test.ts"]
+}
+```
+
+- `agent`: id lấy từ `agents_list` (`antigravity`, `codex`). Bỏ trống thì dùng agent ưu tiên đang available; agent được chỉ định nhưng không available sẽ báo lỗi, không âm thầm đổi agent.
+- `isolation`: `none` (mặc định, sửa trực tiếp workspace, chạy tuần tự toàn cục) hoặc `worktree` (tạo branch `bridge/<task_id>` trong `.bridge-state/worktrees/<task_id>`, chạy song song tối đa `max_parallel_worktrees`). Task worktree bắt buộc có `owns`.
+- `owns`: đường dẫn tương đối trong workspace. Sau khi agent xong, bridge so diff thực tế với danh sách này; file ngoài phạm vi được báo trong `scope.out_of_scope` và task cần review. Bridge **không tự merge** worktree.
+- `autonomy`: `suggest` | `auto` | `full` (mặc định lấy `default_autonomy`, thường là `auto`). Đây là chỉ dẫn cho agent CLI; các hành động phá hủy, deploy, xóa dữ liệu, đọc credential và thay đổi hệ thống vẫn bị cấm tuyệt đối, không có cờ bypass permission.
+
 | Tool | Công dụng |
 |---|---|
-| `antigravity_environment` | CLI/version/allowlist/giới hạn và recent_tasks để tìm lại task ID |
-| `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?; trả `running` (hoặc `queued` nếu bridge đang bận và hàng đợi còn chỗ) cùng task_id |
+| `antigravity_environment` | CLI/version/allowlist/giới hạn, danh sách agent, mức song song và recent_tasks để tìm lại task ID |
+| `agents_list` | Agent đã dò được, capabilities, available/version, agent mặc định và giới hạn worktree; chỉ đọc |
+| `antigravity_delegate` | Nhận task, workspace, acceptance_criteria, context?, timeout_seconds?, agent?, isolation?, owns?, autonomy?; trả `running` (hoặc `queued` nếu hết slot) cùng task_id |
 | `antigravity_task_status` | Trạng thái/process/thời gian/lỗi/denied_actions/số byte theo task_id, không kèm log (rẻ để poll) |
 | `antigravity_task_wait` | Chờ tối đa `wait_seconds` (1–25, mặc định 20) tới khi task kết thúc, trả cùng nội dung như status; còn chạy thì gọi lại |
 | `antigravity_task_output` | Phản hồi cuối, stdout/stderr, lỗi, denied_actions, truncation theo task_id |
 | `antigravity_cancel_task` | Hủy cây tiến trình thuộc task; không rollback thay đổi file |
 
-`completed` chỉ là CLI chạy xong và có envelope hợp lệ. Luôn `review_required=true`, `acceptance_verified=false`. SUCCESS/exit 0 vẫn có thể bị bridge đánh dấu failed do permission denial hoặc timeout. Prompt mẫu review/sửa tiếp: [docs/PROMPTS.md](docs/PROMPTS.md).
+`completed` chỉ là CLI chạy xong và có kết quả hợp lệ. Luôn `review_required=true`, `acceptance_verified=false`. SUCCESS/exit 0 vẫn có thể bị bridge đánh dấu failed do permission denial hoặc timeout. Prompt mẫu review/sửa tiếp: [docs/PROMPTS.md](docs/PROMPTS.md).
 
 ### Khi chỉ muốn Codex/Claude tự làm
 
-- **Công tắc cứng (khuyến nghị):** `npm run delegation -- off` chặn mọi lần giao task mới ngay lập tức, không cần restart hay token. `npm run delegation -- on` bật lại, `-- status` xem trạng thái. Có thể đặt `BRIDGE_DELEGATION=off` trước `npm start` (giá trị khác `on`/`off` cũng bị coi là tắt). Khi tắt, `antigravity_delegate` trả lỗi nêu rõ "disabled by the bridge owner" và `antigravity_environment` trả `delegation: {enabled: false, reason}`. Task đang chạy không bị dừng và vẫn xem/hủy được.
+- **Công tắc cứng (khuyến nghị):** `npm run delegation -- off` chặn mọi lần giao task mới ngay lập tức, không cần restart. `npm run delegation -- on` bật lại, `-- status` xem trạng thái. Có thể đặt `BRIDGE_DELEGATION=off` trước `npm start` (giá trị khác `on`/`off` cũng bị coi là tắt). Khi tắt, `antigravity_delegate` trả lỗi nêu rõ "disabled by the bridge owner" và `antigravity_environment` trả `delegation: {enabled: false, reason}`. Task đang chạy không bị dừng và vẫn xem/hủy được.
 - **Chỉ dẫn cho agent:** skill có mục "When NOT to delegate": agent không giao việc khi bạn bảo tự làm, khi bạn không nhắc Antigravity, hoặc khi công tắc đang tắt. Đây là chỉ dẫn, không phải rào chắn; muốn chắc chắn hãy dùng công tắc. Chạy lại `npm run skill:install` sau khi pull để cập nhật skill.
 - Muốn tắt theo từng client: `enabled=false` trong cấu hình Codex hoặc `/mcp` trong Claude Code (xem mục 3, 4).
 
 ## 6. Vòng đời, giới hạn và dừng an toàn
 
-TaskManager thuộc HTTP server, không thuộc phiên MCP. Server sử dụng handler stateless cho kết nối MCP; mọi request truy cập cùng TaskManager. Disconnect, DELETE session, request cancellation hoặc client thoát không tự hủy task đã tiếp nhận. Nếu mất response giao task, tra `recent_tasks` trước khi thử lại. Một người dùng có cùng token được xem/hủy task từ cả hai client.
+TaskManager thuộc HTTP server, không thuộc phiên MCP. Server sử dụng handler stateless cho kết nối MCP; mọi request truy cập cùng TaskManager. Disconnect, DELETE session, request cancellation hoặc client thoát không tự hủy task đã tiếp nhận. Nếu mất response giao task, tra `recent_tasks` trước khi thử lại. Mọi client kết nối tới cùng bridge đều xem/hủy được task của nhau.
 
-**Hàng đợi:** chỉ một task chạy tại một thời điểm, nhưng khi bridge đang bận, tối đa `max_queued_tasks` task nữa (mặc định 3, cấu hình 0–20 trong `config/workspaces.json`) được nhận với trạng thái `queued` và chạy lần lượt theo thứ tự gửi. `0` trả về hành vi cũ: từ chối ngay với "busy". Task đang chờ chưa có tiến trình, chưa đụng file, có thể hủy; thời hạn (`timeout`) chỉ tính từ lúc bắt đầu chạy. Nếu công tắc giao việc bị tắt trước khi đến lượt thì task bị hủy; server dừng thì hủy hết; crash giữa chừng thì task đang chờ được nạp lại ở trạng thái `failed` ("never started"). Queue không làm thay đổi quy tắc "một task toàn cục": không có chạy song song.
+**Hàng đợi:** task `isolation: "none"` chạy tuần tự toàn cục. Task `isolation: "worktree"` chạy song song tối đa `max_parallel_worktrees` (mặc định 2, cấu hình 1–8 trong `config/workspaces.json`); hai lane không chạy chồng lên nhau (đang có task normal thì worktree xếp hàng và ngược lại). Khi bridge đang bận, tối đa `max_queued_tasks` task nữa (mặc định 3, cấu hình 0–20) được nhận với trạng thái `queued` và chạy theo thứ tự gửi. `0` trả về hành vi cũ: từ chối ngay với "busy". Task đang chờ chưa có tiến trình, chưa đụng file, có thể hủy; thời hạn (`timeout`) chỉ tính từ lúc bắt đầu chạy. Nếu công tắc giao việc bị tắt trước khi đến lượt thì task bị hủy; server dừng thì hủy hết; crash giữa chừng thì task đang chờ được nạp lại ở trạng thái `failed` ("never started").
 
-Mặc định giữ 50 task (tối đa cấu hình 200); task cũ hoàn tất bị loại bỏ. Bản ghi task được lưu tại `.bridge-state/tasks/<task_id>.json` (mode 0600 trên POSIX; nội dung đã qua lọc secret) và nạp lại khi khởi động, nên tra được kết quả sau restart. Task đang chạy lúc server dừng đột ngột được nạp lại với trạng thái `failed` ("Bridge restarted…"): tiến trình `agy` không được khôi phục, hãy kiểm tra diff dở dang. Đây là lịch sử kết quả, không phải durable task recovery. Task vẫn timeout nếu không có client theo dõi. Chỉ một task chạy toàn cục, khóa giữa các process dùng cùng bản cài tại `.bridge-state/execution.lock`; không điều phối editor/agent ngoài hoặc bản cài bridge khác.
+Task worktree tạo branch `bridge/<task_id>` và thư mục `.bridge-state/worktrees/<task_id>` tại HEAD của repo; thay đổi chưa commit trong workspace gốc **không** được copy sang. Sau khi task kết thúc, bridge so diff với `owns`, giữ nguyên worktree và branch để Tech Lead review/merge thủ công. Bridge không tự merge, không tự xóa branch, và không chạy hook của repo khi tạo worktree. Chỉ dùng worktree cho repo đã có ít nhất một commit; workspace là thư mục con của repo vẫn được hỗ trợ.
+
+Mặc định giữ 50 task (tối đa cấu hình 200); task cũ hoàn tất bị loại bỏ. Bản ghi task được lưu tại `.bridge-state/tasks/<task_id>.json` (mode 0600 trên POSIX; nội dung đã qua lọc secret) và nạp lại khi khởi động, nên tra được kết quả sau restart. Task đang chạy lúc server dừng đột ngột được nạp lại với trạng thái `failed` ("Bridge restarted…"): tiến trình agent không được khôi phục, hãy kiểm tra diff dở dang. Đây là lịch sử kết quả, không phải durable task recovery. Task vẫn timeout nếu không có client theo dõi. Lane normal giữ khóa giữa các process dùng cùng bản cài tại `.bridge-state/execution.lock`; lane worktree dựa vào branch riêng và không dùng khóa này.
 
 Nhấn **Ctrl+C một lần** tại terminal server:
 
@@ -273,11 +295,13 @@ Nhấn **Ctrl+C một lần** tại terminal server:
 
 Nếu cleanup thất bại, báo lỗi và giữ execution lock khi process chưa đóng. Khi khởi động hoặc lấy lock, bridge chỉ tự thu hồi nếu đọc được owner hợp lệ, cả `server_pid` lẫn `child_pid` đều đã chết và record khớp lock. Lệnh `agy-mcp-bridge unlock` dùng cùng kiểm tra; PID còn sống, thiếu thông tin hoặc quyền sở hữu không rõ thì giữ lock và in lý do. Bridge không kill process Antigravity khác. PID có thể được tái sử dụng nên trường hợp không rõ cần kiểm tra thủ công. Force kill/OS crash vẫn không bảo đảm cleanup: chưa có Windows Job Object. POSIX gửi SIGTERM cho nhóm process, chờ tối đa 8 giây rồi SIGKILL; Windows giữ taskkill cây PID. Ctrl+C tiếp trong lúc cleanup chỉ báo `cleanup in progress, please wait`.
 
-Giới hạn mặc định: CLI task 300s, tối đa 900s; watchdog của bridge cộng thêm 10s để CLI tự báo timeout trước. Output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON vẫn tối đa 24000 ký tự; HTTP body tối đa 128 KiB. Prompt mặc định đi qua argv với print/json (`prompt_transport: "argv"`, đường đã chạy thật với `agy` 1.4.3). Đặt `prompt_transport: "stdin"` để gửi qua stdin stream-json, không lộ prompt trong danh sách tiến trình; chế độ này chưa được chạy thử với `agy` thật, và stream gồm cả init/progress nên có thể chạm output cap sớm hơn. Snapshot log được cập nhật tối đa mỗi giây và flush khi kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
+Giới hạn mặc định: CLI task 300s, tối đa 900s; watchdog của bridge cộng thêm 10s để CLI tự báo timeout trước. Output mỗi stream 256 KiB (cấu hình 1 KiB–1 MiB), vượt trần sẽ hủy task và trả failed/truncated. Tổng task JSON vẫn tối đa 24000 ký tự; HTTP body tối đa 128 KiB. Prompt mặc định đi qua argv với print/json (`prompt_transport: "argv"`, đường đã chạy thật với `agy` 1.4.3 và 1.4.7). Đặt `prompt_transport: "stdin"` để gửi qua stdin stream-json, không lộ prompt trong danh sách tiến trình; chế độ này chưa được chạy thử với `agy` thật, và stream gồm cả init/progress nên có thể chạm output cap sớm hơn. Snapshot log được cập nhật tối đa mỗi giây và flush khi kết thúc. Không dùng CLI detach/remote-control API chưa được xác minh.
 
 ## 7. Bảo mật và vận hành
 
-Chỉ listen `127.0.0.1`, không có tùy chọn bind LAN trong bản này. Host phải đúng địa chỉ/cổng thực tế; Origin khác bị từ chối; không bật CORS cho website ngoài. Mọi endpoint yêu cầu bearer token, so sánh constant time khi cùng độ dài. Không log HTTP headers/body hoặc token. Không mở HTTP không xác thực.
+Chỉ listen `127.0.0.1`, không có tùy chọn bind LAN trong bản này. Host phải đúng địa chỉ/cổng thực tế; Origin khác bị từ chối; không bật CORS cho website ngoài. **Không có xác thực**: mọi tiến trình cục bộ cùng user đều có thể gọi tool, đọc task, điều khiển agent và tắt server. Đây là mô hình tin cậy cục bộ có chủ đích; không mở cổng, không đặt sau proxy công khai. Không log HTTP headers/body.
+
+Cách ly worktree là ranh giới **quy trình**, không phải sandbox OS: agent vẫn chạy dưới quyền user hiện tại. Bridge tạo worktree trong `.bridge-state/worktrees` với `core.hooksPath` rỗng, so diff sau khi chạy và báo `scope.out_of_scope`; file ngoài `owns` không bao giờ được tự merge. Codex chạy với `--sandbox workspace-write`; các hành động cần approval vẫn thất bại thay vì được bypass. Không dùng `--dangerously-*`, `--yolo` hoặc bất kỳ cờ bỏ qua permission nào. Deploy, publish, xóa dữ liệu, push nhánh bảo vệ, đọc credential và thay đổi hệ thống ngoài workspace là hành động bị cấm tuyệt đối, không phụ thuộc `autonomy`.
 
 Allowlist kiểm tra realpath, boundary, traversal; link/junction trong thành phần đường dẫn đầu vào vẫn bị từ chối. Trong cây, link phải resolve được vào cùng workspace; không theo alias/cycle. Quét bỏ qua nội dung thư mục `node_modules` và `.git`; trần 200000 chỉ tính các entry còn lại. Task từ queue được kiểm tra lại trước launch. **Đây không phải OS sandbox**: đặc biệt nội dung hai thư mục được bỏ qua không được kiểm tra, và tiến trình khác vẫn có thể đổi link sau preflight. Quyền agent/hooks/MCP và file ngoài workspace vẫn cần kiểm soát OS/CLI phù hợp. Lọc output không nhận ra mọi bí mật; không đưa secret vào task.
 
@@ -286,10 +310,12 @@ Allowlist kiểm tra realpath, boundary, traversal; link/junction trong thành p
 Các lỗi thường gặp:
 
 - `Port is already in use`: chọn PORT khác, cập nhật URL cả hai client.
-- 401: token thiếu/sai; nạp lại env rồi khởi động lại client. Không thử OAuth login với bridge này.
 - 403: sai Host/Origin; dùng đúng URL 127.0.0.1 được in ra, không đi qua proxy/alias.
 - Connection refused/fetch failed: server tắt hoặc sai cổng; chạy check, bật lại server và reconnect.
 - CLI unsupported: kiểm tra agy path/version/help; environment vẫn có thể hoạt động dù không giao được task.
+- Agent unavailable: gọi `agents_list`; kiểm tra `codex --version` và `codex exec --help`, hoặc tên/`agents.enabled` trong cấu hình.
+- Worktree bị từ chối: workspace phải là git repo có ít nhất một commit; `owns` phải là đường dẫn tương đối, không chứa `..`.
+- `scope.out_of_scope` khác rỗng: agent sửa file ngoài phạm vi; review worktree, không merge tự động.
 - `denied_actions`: Antigravity chưa cho phép thao tác; xin quyền tối thiểu, không bỏ permission check.
 - Workspace bị từ chối: kiểm tra allowlist, link/junction hoặc số entry vượt trần.
 - Timeout/canceled/output limit: có thể có diff dở dang; review trước khi giao task tiếp theo.
@@ -301,11 +327,11 @@ npm test
 npm run test:live
 ```
 
-`npm test` (cũng chạy trong [CI](.github/workflows/ci.yml) trên Ubuntu và Windows, Node 20/22): unit/integration dùng executable giả, không gọi AI. Bao gồm lifecycle/security cũ và HTTP startup/port conflict/PORT tùy chọn/auth/Host/Origin/body limit/kết nối hai protocol era/client reconnect/task completion/cancel/server shutdown.
+`npm test` (cũng chạy trong [CI](.github/workflows/ci.yml) trên Ubuntu và Windows, Node 20/22): unit/integration dùng executable giả, không gọi AI. Bao gồm lifecycle/security cũ và HTTP startup/port conflict/PORT tùy chọn/Host/Origin/body limit/kết nối hai protocol era/client reconnect/task completion/cancel/server shutdown.
 
 `test:live`: **gọi AI thật**, dùng cached login/quota. Test harness khởi động HTTP server riêng với PORT=0 và scratch workspace, dùng official SDK HTTP client, ngắt/kết nối lại khi task chạy, xác minh `BRIDGE_SMOKE_OK` và sentinel không đổi, hủy task thật, rồi kiểm tra shutdown có task đang chạy. Trên Windows, harness phát event SIGINT vào đúng handler của entry point qua IPC riêng của harness; kiểm tra Ctrl+C terminal được ghi riêng trong báo cáo. Đây không phải yêu cầu client production tự khởi động server. Kết quả ở `test-results/live-report.json`; phần sửa file thật vẫn bị chặn đến khi cấp quyền.
 
-`src/index.ts`: HTTP entry; `src/http.ts`: listener/auth/routing/shutdown; `src/runtime.ts`: CLI và TaskManager dùng chung; `src/tools`: tool; `src/antigravity`: child process; `src/security`: validation/workspace/token/redaction; `src/tasks`: lifecycle/lock/output; `scripts/check.ts`: kiểm tra server đang chạy; `scripts/live.ts`: AI smoke test. Không thay cấu hình Codex/Claude Code/Antigravity trong test.
+`src/index.ts`: HTTP entry; `src/http.ts`: listener/routing/shutdown; `src/runtime.ts`: CLI và TaskManager dùng chung; `src/agents`: adapter Antigravity/Codex, registry và contract; `src/isolation`: tạo worktree và kiểm tra phạm vi `owns`; `src/tools`: tool; `src/antigravity`: child process; `src/security`: validation/workspace/redaction; `src/tasks`: lifecycle/lock/output; `scripts/check.ts`: kiểm tra server đang chạy; `scripts/live.ts`: AI smoke test. Không thay cấu hình Codex/Claude Code/Antigravity trong test.
 
 ## 9. Skill giao tiếp với Antigravity
 
@@ -333,7 +359,7 @@ npm run skill:install -- --client both
 npm run skill:install -- --client both --project 'C:\path\to\your-project'
 ```
 
-Installer chỉ ghi `SKILL.md`, không sửa config MCP, allowlist, token, AGENTS.md/CLAUDE.md hay settings Antigravity. Nội dung giống nhau thì không ghi lại; nếu skill cùng tên đã khác nội dung, lệnh báo lỗi để bạn review/merge thủ công, không tự ghi đè hoặc xóa. Sau khi `git pull` và build bản mới, chạy lại installer để kiểm tra cập nhật; xử lý bản tùy chỉnh thủ công nếu lệnh báo khác biệt. Có thể copy thư mục skill vào đường dẫn discovery do client/môi trường của bạn hỗ trợ nếu không dùng vị trí mặc định.
+Installer chỉ ghi `SKILL.md`, không sửa config MCP, allowlist, AGENTS.md/CLAUDE.md hay settings Antigravity. Nội dung giống nhau thì không ghi lại; nếu skill cùng tên đã khác nội dung, lệnh báo lỗi để bạn review/merge thủ công, không tự ghi đè hoặc xóa. Sau khi `git pull` và build bản mới, chạy lại installer để kiểm tra cập nhật; xử lý bản tùy chỉnh thủ công nếu lệnh báo khác biệt. Có thể copy thư mục skill vào đường dẫn discovery do client/môi trường của bạn hỗ trợ nếu không dùng vị trí mặc định.
 
 Mở lại client nếu skill chưa xuất hiện. Codex có thể chọn qua `/skills` hoặc gọi trong prompt:
 
@@ -357,19 +383,20 @@ Vị trí và cách gọi đã đối chiếu [Codex skills](https://developers.
 
 Khi `npm start` đang chạy, mở `http://127.0.0.1:3000/ui` (đúng cổng đã in ở terminal) trên cùng máy. Giao diện chỉ chạy trong server của bridge, **không đi qua Codex/Claude nên không tốn thêm token của chúng**, và không thêm tool MCP nào.
 
-Đăng nhập bằng bridge token, dán vào ô nhập (`Get-Content .bridge-state/http-token` hoặc `cat .bridge-state/http-token`). Server đổi token lấy một mã phiên ngẫu nhiên, hết hạn sau 8 giờ hoặc khi restart, gửi qua header chứ không dùng cookie; token không bao giờ được hiển thị lại. Sai quá 10 lần trong một phút thì bị khóa tạm.
+Không cần đăng nhập: giao diện mở trực tiếp vì bridge không có xác thực. Trang chỉ dùng được từ loopback và bị chặn nếu `Host`/`Origin` không khớp. Đóng tab chỉ đóng giao diện, không dừng server; dùng nút **Tắt bridge** trong Cài đặt để dừng server và dọn tiến trình.
 
 | Màn hình | Nội dung |
 |---|---|
-| Task | Tổng quan (trạng thái bridge, phiên bản `agy`, công tắc giao việc, số task đang chạy); danh sách task; với mỗi task là cuộc trao đổi **Tech Lead → Antigravity** (yêu cầu, tiêu chí nghiệm thu, ngữ cảnh) và **Antigravity → Tech Lead** (phản hồi cuối, thao tác bị từ chối quyền, lỗi), log stdout/stderr, prompt đầy đủ gửi tới `agy`. Tên client đã giao (từ `clientInfo` của MCP, hoặc User-Agent nếu client dùng giao thức cũ; có thể trống hoặc chỉ là `node`), trạng thái hàng đợi, lọc theo trạng thái và tìm kiếm. Cập nhật từng vùng nên bôi đen log/văn bản vẫn giữ nguyên khi task đang chạy; nút Hủy task cho task đang chạy hoặc đang chờ |
-| Cài đặt | Công tắc giao việc cho Antigravity (cùng cơ chế với `npm run delegation`, bị khóa nếu đặt `BRIDGE_DELEGATION`), endpoint MCP, thông tin CLI, workspace được phép, giới hạn, lưu ý. Workspace và giới hạn chỉ đọc: sửa trong `config/workspaces.json` rồi khởi động lại |
+| Task | Tổng quan (trạng thái bridge, agent sẵn sàng, công tắc giao việc, số task đang chạy, mức song song); danh sách task; với mỗi task là cuộc trao đổi **Tech Lead → agent** (yêu cầu, tiêu chí nghiệm thu, ngữ cảnh, agent/cách ly/quyền tự duyệt) và **agent → Tech Lead** (phản hồi cuối, thao tác bị từ chối quyền, lỗi), log stdout/stderr, prompt đầy đủ, worktree/branch và kết quả kiểm tra `owns`. Tên client đã giao (từ `clientInfo` của MCP, hoặc User-Agent nếu client dùng giao thức cũ; có thể trống hoặc chỉ là `node`), trạng thái hàng đợi, lọc theo trạng thái và tìm kiếm. Cập nhật từng vùng nên bôi đen log/văn bản vẫn giữ nguyên khi task đang chạy; nút Hủy task cho task đang chạy hoặc đang chờ |
+| Cài đặt | Công tắc giao việc (cùng cơ chế với `npm run delegation`, bị khóa nếu đặt `BRIDGE_DELEGATION`), endpoint MCP, thông tin từng agent, workspace được phép, giới hạn song song, lưu ý. Workspace, agent và giới hạn chỉ đọc: sửa trong `config/workspaces.json` rồi khởi động lại. Nút **Tắt bridge** dừng HTTP server, hủy task đang chạy hoặc đang chờ và dọn các tiến trình agent do bridge khởi tạo |
 
 **Thay đổi trong workspace:** mỗi task có mục "Thay đổi trong workspace" (mở ra mới đọc, có nút Làm mới) liệt kê file đã sửa, xóa, file mới chưa theo dõi và số dòng thêm/xóa so với commit HEAD, kể cả thay đổi có từ trước khi task chạy. Chỉ hiện tên file và số dòng, không hiện nội dung, và chỉ cho workspace vẫn còn trong danh sách được phép. Để đọc an toàn, bridge **không bao giờ nạp cấu hình của repo**: `git status`/`git diff` thông thường chạy cả những lệnh do chính repo khai báo (`core.fsmonitor`, `filter.*.clean`, `diff.*.textconv`), mà Antigravity có quyền ghi file nên có thể cài sẵn vào `.git/config`; chỉ tắt trình diff ngoài là chưa đủ (đã thử: lệnh `filter clean` vẫn chạy). Thay vào đó bridge so sánh trong một thư mục git tạm với cấu hình rỗng, chỉ mượn kho đối tượng của repo, tắt cấu hình hệ thống/người dùng, và chỉ sao chép vài thiết lập xuống dòng/quyền file đã kiểm tra giá trị (`core.autocrlf`, `eol`, `filemode`, `symlinks`, `ignorecase`). Có test dựng repo "nhiễm độc" để chứng minh không lệnh nào bị chạy. Giới hạn: cần `git` trong PATH, chỉ tính khác biệt nội dung (file chỉ khác kiểu xuống dòng sau chuyển đổi không tính), tối đa 500 mục mỗi nhóm, không hiện submodule, và không thay thế việc tự xem diff đầy đủ.
 
-Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển thị dạng văn bản thuần, trang dùng CSP không cho script/style nội tuyến hay tải từ nơi khác, nên output của model không thể thực thi. Yêu cầu của Tech Lead được lưu cùng bản ghi task trong `.bridge-state/tasks` (đã qua lọc secret nhận diện được) để xem lại sau khi restart; đừng đưa secret vào task. Giao diện chỉ đọc, ngoại trừ hai thao tác cần phiên đăng nhập: hủy task và bật/tắt giao việc. Mã nguồn giao diện nằm ở `ui/` (HTML/CSS/JS thuần, không cần build), phần máy chủ ở `src/ui/`.
+Lưu ý bảo mật: nội dung yêu cầu và phản hồi được hiển thị dạng văn bản thuần, trang dùng CSP không cho script/style nội tuyến hay tải từ nơi khác, nên output của model không thể thực thi. Yêu cầu của Tech Lead được lưu cùng bản ghi task trong `.bridge-state/tasks` (đã qua lọc secret nhận diện được) để xem lại sau khi restart; đừng đưa secret vào task. Giao diện chỉ đọc, ngoại trừ ba thao tác: hủy task, bật/tắt giao việc và tắt bridge. Mã nguồn giao diện nằm ở `ui/` (HTML/CSS/JS thuần, không cần build), phần máy chủ ở `src/ui/`.
 
 ## 11. Ghi chú thiết kế và việc chưa làm
 
+- **Nhiều agent:** Phase 1 đã có adapter Antigravity + Codex, chọn agent theo `agents.priority`/`agents.enabled`, worktree song song, kiểm tra `owns`, `agents_list` và `autonomy`. Chưa có daemon mission/orchestrator tự chạy dài hạn, adapter OpenCode/Qoder/Zcode, UI auto-approve riêng hay merge tự động. Xem lộ trình và quyết định trong [docs/MULTI-AGENT-PLAN.md](docs/MULTI-AGENT-PLAN.md).
 - **Tiến độ thật của task:** stdin stream-json hiện đã được xác minh ở đường kiểm tra lỗi không gọi AI, và parser lấy terminal `result` theo tài liệu chính thức. Luồng thành công đang được test bằng mock; chưa thực thi AI thật trong đợt hardening. UI hiện hiển thị log snapshot, chưa diễn giải từng `step_update` thành phần trăm tiến độ.
 - **`outputSchema` cho tool MCP:** đã thử và bỏ. Schema đầy đủ làm danh sách tool tăng từ khoảng 3,9 KB lên 12,1 KB; nếu client đưa vào ngữ cảnh của agent thì tốn thêm token ở mỗi lượt, trái với mục tiêu giữ chi phí thấp.
 - **Đánh giá hành vi của skill:** xem [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md): bộ tình huống và tiêu chí chấm để chạy thủ công với Codex/Claude Code; chưa được chạy tự động.

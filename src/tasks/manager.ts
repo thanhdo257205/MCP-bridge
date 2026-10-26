@@ -4,18 +4,22 @@ import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '../config.js';
-import { delegateSchema, promptFor, type DelegateInput } from '../security/input.js';
+import { delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
 import { validateWorkspace } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
-import {invocationFor,finalEnvelope} from '../antigravity/invocation.js';
+import {legacyAntigravityAgent} from '../agents/antigravity.js';
+import type {AgentRuntime, Autonomy, Isolation, PublicAgentStatus} from '../agents/types.js';
+import {createWorktree, inspectScope, removeWorktree, type ScopeReport, type Worktree} from '../isolation/worktree.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
   task_id: string; workspace: string; status: Status; started_at: string; queued_at: string | null; ended_at: string | null;
   duration_ms: number; pid: number | null; process_running: boolean;
+  agent: string; isolation: Isolation; worktree: string | null; branch: string | null; owns: string[]; autonomy: Autonomy;
+  scope: ScopeReport | null;
   exit_code: number | null; signal: string | null; stdout: string; stderr: string;
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
@@ -25,35 +29,89 @@ export interface Task {
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
-export interface TaskRequest { task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null; }
+export interface TaskRequest {
+  task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null;
+  agent?: string; isolation?: Isolation; owns?: string[]; autonomy?: Autonomy; worktree?: string | null; branch?: string | null;
+}
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
+  lane?: 'normal' | 'worktree';
   /** Resolves `done`; set for every task that goes through the CLI. */
   finish?: () => void;
-  /** Validated input kept until the process starts (a queued task waits with it). */
-  pending?: {input: DelegateInput; workspace: string; timeout: number};
+  /** Validated input and the resolved agent kept until the process starts (a queued task waits with it). */
+  pending?: {input: DelegateInput; workspace: string; timeout: number; agent: AgentRuntime; autonomy: Autonomy};
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
+  agents?: AgentRuntime[];
+  defaultAgent?: string | null;
 }
 
 export class TaskManager {
   private entries = new Map<string, Entry>();
   private busy = false;
+  private worktreeRunning = 0;
   private queue: string[] = [];
   private admission: Promise<void> = Promise.resolve();
   private closing = false;
-  constructor(private config: Config, private runtime: Runtime) {}
+  private readonly agents: AgentRuntime[];
+  private readonly defaultAgent: string | null;
+  constructor(private config: Config, private runtime: Runtime) {
+    this.agents = runtime.agents?.length
+      ? runtime.agents
+      : [legacyAntigravityAgent(runtime, config.prompt_transport)];
+    this.defaultAgent = runtime.defaultAgent ?? this.agents.find(agent => agent.enabled && agent.status.available)?.adapter.id ?? null;
+  }
+
+  private get maxParallelWorktrees(): number { return this.config.max_parallel_worktrees ?? 2; }
+  private selectAgent(id?: string): AgentRuntime {
+    if (id !== undefined) {
+      const agent = this.agents.find(item => item.adapter.id === id);
+      if (!agent) throw new Error(`Unknown agent "${id}". Known agents: ${this.agents.map(item => item.adapter.id).join(', ')}`);
+      if (!agent.enabled) throw new Error(`Agent "${id}" is disabled in the bridge config`);
+      if (!agent.status.available) throw new Error(`Agent "${id}" is not available: ${agent.status.warnings[0] ?? 'CLI was not detected'}`);
+      return agent;
+    }
+    const preferred = this.defaultAgent ? this.agents.find(agent => agent.adapter.id === this.defaultAgent) : undefined;
+    if (preferred?.enabled && preferred.status.available) return preferred;
+    const fallback = this.agents.find(agent => agent.enabled && agent.status.available);
+    if (fallback) return fallback;
+    throw new Error('No enabled agent CLI is available. Check the bridge config and install an agent CLI');
+  }
+  private canStart(isolation: Isolation): boolean {
+    return isolation === 'worktree'
+      ? !this.busy && this.worktreeRunning < this.maxParallelWorktrees
+      : !this.busy && this.worktreeRunning === 0;
+  }
+  private occupy(entry: Entry): void {
+    entry.lane = entry.task.isolation === 'worktree' ? 'worktree' : 'normal';
+    if (entry.lane === 'worktree') this.worktreeRunning++; else this.busy = true;
+  }
+  private release(entry: Entry): void {
+    if (entry.lane === 'worktree') this.worktreeRunning = Math.max(0, this.worktreeRunning - 1);
+    else if (entry.lane === 'normal') this.busy = false;
+    entry.lane = undefined;
+  }
+  agentsOverview(): {agents: PublicAgentStatus[]; default_agent: string | null; max_parallel_worktrees: number} {
+    return {
+      agents: this.agents.map(({adapter, status, enabled}) => ({
+        id: adapter.id, label: adapter.label, enabled, available: status.available, version: status.version,
+        executable: status.executable, capabilities: adapter.capabilities, warnings: status.warnings
+      })),
+      default_agent: this.defaultAgent,
+      max_parallel_worktrees: this.maxParallelWorktrees
+    };
+  }
 
   /** Calls are admitted strictly in the order they arrive: workspace validation is asynchronous and must not let a later call overtake an earlier one. */
-  delegate(raw: DelegateInput, meta: {client?: string | null} = {}): Promise<Task> {
+  delegate(raw: DelegateRequest, meta: {client?: string | null} = {}): Promise<Task> {
     const admitted = this.admission.then(() => this.admit(raw, meta));
     this.admission = admitted.then(() => undefined, () => undefined);
     return admitted;
   }
 
-  private async admit(raw: DelegateInput, meta: {client?: string | null}): Promise<Task> {
+  private async admit(raw: DelegateRequest, meta: {client?: string | null}): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
     const delegation = delegationState(this.runtime.stateDirectory);
     if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`agy-mcp-bridge delegation on\` (\`npm run delegation -- on\` in a git checkout)`);
@@ -63,9 +121,15 @@ export class TaskManager {
     const workspace = await validateWorkspace(input.workspace, this.config.allowed_workspaces);
     if (this.closing) throw new Error('Bridge is shutting down');
 
-    // Everything from here to the registration of the entry is synchronous, so concurrent callers cannot both claim the slot.
-    // One task runs globally (also protects overlapping parent/child workspaces); the rest wait in a bounded queue.
-    const queued = this.runtime.supported && this.busy;
+    let agent: AgentRuntime | undefined;
+    if (input.agent !== undefined) agent = this.selectAgent(input.agent);
+    else try { agent = this.selectAgent(); } catch { agent = undefined; }
+    const supported = Boolean(agent?.status.available);
+    const autonomy = input.autonomy ?? this.config.default_autonomy ?? 'auto';
+
+    // Everything from here to the registration of the entry is synchronous, so concurrent callers cannot both claim a slot.
+    // Ordinary tasks are serialized globally; worktree tasks may run in parallel up to max_parallel_worktrees.
+    const queued = supported && !this.canStart(input.isolation);
     if (queued && this.queue.length >= this.config.max_queued_tasks) {
       throw new Error(this.config.max_queued_tasks > 0 ? 'Bridge is busy with another task and the queue is full' : 'Bridge is busy with another task');
     }
@@ -78,32 +142,38 @@ export class TaskManager {
     }
     const now = new Date().toISOString();
     const task: Task = {
-      task_id: randomUUID(), workspace, status: !this.runtime.supported ? 'unsupported' : queued ? 'queued' : 'running',
+      task_id: randomUUID(), workspace, status: !supported ? 'unsupported' : queued ? 'queued' : 'running',
       started_at: now, queued_at: queued ? now : null, ended_at: null, duration_ms: 0,
-      pid: null, process_running: false, exit_code: null, signal: null,
+      pid: null, process_running: false,
+      agent: agent?.adapter.id ?? input.agent ?? this.defaultAgent ?? 'none',
+      isolation: input.isolation, worktree: null, branch: null, owns: input.owns, autonomy, scope: null,
+      exit_code: null, signal: null,
       stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0,
       stdout_truncated: false, stderr_truncated: false,
       final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
     };
     const entry: Entry = {
-      task, done: Promise.resolve(), pending: {input, workspace, timeout},
+      task, done: Promise.resolve(), pending: supported ? {input, workspace, timeout, agent: agent!, autonomy} : undefined,
       request: {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
-        client: meta.client ? redact(meta.client).slice(0, 100) : null
+        client: meta.client ? redact(meta.client).slice(0, 100) : null,
+        agent: task.agent, isolation: input.isolation, owns: input.owns, autonomy
       }
     };
     this.entries.set(task.task_id, entry);
-    if (this.runtime.supported) {
+    if (supported) {
       entry.done = new Promise<void>(resolve => { entry.finish = resolve; });
-      if (queued) this.queue.push(task.task_id); else this.busy = true;
+      if (queued) this.queue.push(task.task_id); else this.occupy(entry);
     }
     await Promise.all(evicted.map(id => this.forget(id)));
     await this.persist(task);
 
-    if (!this.runtime.supported) {
+    if (!supported) {
       task.ended_at = new Date().toISOString();
-      task.error = 'Requires agy 1.4.x and all required print/output/timeout flags';
+      task.error = input.agent !== undefined
+        ? `Agent "${input.agent}" is not available`
+        : 'No enabled agent CLI is available. Check the bridge config and install an agent CLI';
       return this.get(task.task_id);
     }
     if (queued) return this.get(task.task_id);
@@ -112,17 +182,19 @@ export class TaskManager {
       this.entries.delete(task.task_id);
       await this.forget(task.task_id);
       entry.finish?.();
-      this.busy = false;
+      this.release(entry);
       throw error;
     }
     return this.get(task.task_id);
   }
 
-  /** Starts the process for an entry that already owns the global slot (`busy`). Throws only before the process exists. */
+  /** Starts the process for an entry that already owns its lane. Throws only before the process exists. */
   private async launch(entry: Entry): Promise<void> {
     const {task} = entry;
-    const {input, workspace, timeout} = entry.pending!;
+    const {input, workspace, timeout, agent, autonomy} = entry.pending!;
     let ownsLock = false;
+    let worktree: Worktree | null = null;
+    let execWorkspace = workspace;
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
       if (this.closing) throw new Error('Bridge is shutting down');
@@ -131,11 +203,20 @@ export class TaskManager {
         catch (error) { throw new Error(`Queued workspace validation failed before execution: ${error instanceof Error ? error.message : 'invalid workspace'}`); }
       }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
-      try { await mkdir(lock); ownsLock = true; }
-      catch {
-        const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
-        if(!recovery.reclaimed)throw new Error(await this.describeLock(lock));
-        await mkdir(lock);ownsLock=true;
+      if (task.isolation === 'worktree') {
+        worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+        execWorkspace = worktree.workspace;
+        task.worktree = worktree.root;
+        task.branch = worktree.branch;
+        // Keep the regenerated prompt equal to the one the agent received (the worktree workspace, not the original one).
+        if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
+      } else {
+        try { await mkdir(lock); ownsLock = true; }
+        catch {
+          const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
+          if(!recovery.reclaimed)throw new Error(await this.describeLock(lock));
+          await mkdir(lock);ownsLock=true;
+        }
       }
       const checkStarting = () => {
         if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
@@ -146,9 +227,17 @@ export class TaskManager {
       task.started_at = new Date().toISOString();
       await this.persist(task);
       checkStarting();
-      const invocation=invocationFor(promptFor({...input,workspace},entry.request?.client),timeout,this.config.prompt_transport);
-      const options={extraEnvPassthrough:this.config.extra_env_passthrough,stdin:invocation.stdin};
-      const child = this.runtime.launch ? this.runtime.launch(invocation.args, workspace, options) : startProcess(this.runtime.executable, invocation.args, workspace, options);
+      const promptInput = {...input, workspace: execWorkspace, autonomy};
+      const invocation = agent.adapter.buildInvocation({
+        prompt: promptFor(promptInput, entry.request?.client), workspace: execWorkspace, timeoutSeconds: timeout,
+        autonomy, owns: task.owns, taskId: task.task_id, stateDirectory: this.runtime.stateDirectory,
+        model: this.config.agents?.codex_model
+      });
+      if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
+      const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin};
+      const child = agent.launch
+        ? agent.launch(invocation.args, execWorkspace, options)
+        : startProcess(invocation.executable, [...(agent.prefixArgs ?? []), ...invocation.args], execWorkspace, options);
       entry.child = child;
       entry.pending = undefined;
       task.status = 'running';
@@ -192,7 +281,7 @@ export class TaskManager {
       child.stderr!.on('data', (data: Buffer) => capture('stderr', data));
       const timer = setTimeout(() => requestStop('timeout'), (timeout + 10) * 1000);
       const outputTimer=setInterval(()=>flushOutput(),1000);
-      child.once('error', () => { task.error = 'Could not start Antigravity process'; });
+      child.once('error', () => { task.error = `Could not start ${agent.adapter.label} process`; });
       // Not awaited: no await may sit between spawn and the listeners above, or an early 'error' event would go unhandled.
       void writeFile(path.join(this.runtime.stateDirectory, 'owner.json'), JSON.stringify({server_pid: process.pid, child_pid: child.pid ?? null, task_id: task.task_id, started_at: task.started_at})).catch(() => {});
       child.once('close', async (code, signal) => {
@@ -210,58 +299,67 @@ export class TaskManager {
         task.status = entry.stop ?? 'failed';
         if (!entry.stop) {
           try {
-            const result = finalEnvelope(rawStdout,this.config.prompt_transport);
-            task.cli_status = typeof result.status === 'string' ? result.status : null;
-            task.final_response = typeof result.response === 'string' ? redact(result.response) : null;
-            if (Array.isArray(result.denied_actions)) task.denied_actions = result.denied_actions.slice(0,100).map((item: unknown) => {
-              const value = item as Record<string, unknown> | null;
-              return {action: redact(String(value?.action ?? 'unknown')).slice(0,200), display_name: redact(String(value?.display_name ?? '')).slice(0,200)};
+            const result = await agent.adapter.parseResult({
+              stdout: rawStdout, stderr: rawStderr, exitCode: code, signal, resultFile: invocation.resultFile ?? null
             });
-            if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(rawStderr)) {
-              task.status = 'timeout'; task.error = 'CLI reported a print timeout (possibly with exit code 0)';
-            } else if (task.denied_actions.length || /auto-denied|soft.denied|permission.*cannot prompt/i.test(rawStderr)) {
-              task.error = 'Required tool permissions were denied; approve a scoped rule interactively before retrying';
-            } else if (code === 0 && result.status === 'SUCCESS' && typeof result.num_turns === 'number' && result.num_turns > 0 && task.final_response?.trim()) {
+            task.cli_status = result.cliStatus;
+            task.final_response = result.response === null ? null : redact(result.response);
+            task.denied_actions = result.deniedActions.slice(0, 100).map(item => ({
+              action: redact(item.action).slice(0, 200), display_name: redact(item.display_name).slice(0, 200)
+            }));
+            if (result.timeout) {
+              task.status = 'timeout'; task.error = result.error ? redact(result.error) : 'CLI reported a timeout';
+            } else if (result.success) {
               task.status = 'completed';
             } else {
-              task.error = typeof result.error === 'string' ? redact(result.error) : 'CLI did not provide a complete successful response';
+              task.error = result.error ? redact(result.error) : `${agent.adapter.label} did not provide a complete successful response`;
             }
-          } catch {
-            task.error ??= this.config.prompt_transport === 'stdin'
-              ? 'CLI output is not a valid stream-json final result. If this happens with a real agy, set "prompt_transport": "argv" in the bridge config (the previously verified mode) and restart'
-              : 'CLI output is not a valid final JSON envelope';
+          } catch (error) {
+            task.error ??= error instanceof Error ? redact(error.message) : `Could not parse ${agent.adapter.label} output`;
           }
         }
         if (task.status === 'timeout') task.error ??= 'Task exceeded its execution deadline';
         if (task.status === 'canceled') task.error ??= 'Task canceled; partial file changes may remain';
+        if (worktree) {
+          try {
+            task.scope = await inspectScope(worktree, task.owns);
+            if (task.scope.out_of_scope.length) task.error ??= 'Files outside the declared owns scope were modified; review the worktree diff before merging';
+          } catch (error) {
+            task.scope = {checked: false, reason: error instanceof Error ? redact(error.message) : 'Could not inspect the worktree diff', changed: 0, out_of_scope: [], truncated: false};
+          }
+        }
         if (ownsLock) {
           try { await rmdir(lock); } catch { task.error ??= 'Could not release execution lock'; }
         }
         await this.persist(task);
-        this.busy = false;
+        this.release(entry);
         entry.finish?.();
         void this.startNext();
       });
     } catch (error) {
       if (ownsLock) await rmdir(lock).catch(() => {});
+      if (worktree && !entry.child) await removeWorktree(worktree).catch(() => {});
       throw error;
     }
   }
 
-  /** Hands the global slot to the oldest waiting task. A task that cannot start is failed here rather than thrown at a caller that has gone. */
+  /** Hands free lanes to the oldest waiting tasks that fit. A task that cannot start is failed here rather than thrown at a caller that has gone. */
   private async startNext(): Promise<void> {
-    while (!this.busy && !this.closing && this.queue.length) {
-      const entry = this.entries.get(this.queue.shift()!);
-      if (!entry || entry.task.status !== 'queued') continue;
+    while (!this.closing && this.queue.length) {
+      const entry = this.entries.get(this.queue[0]);
+      if (!entry || entry.task.status !== 'queued') { this.queue.shift(); continue; }
+      if (!this.canStart(entry.task.isolation)) break;
       const delegation = delegationState(this.runtime.stateDirectory);
       if (!delegation.enabled) {
+        this.queue.shift();
         await this.endWithoutRunning(entry, 'canceled', `Canceled before it started: delegation was switched off (${delegation.reason}). No files were touched`);
         continue;
       }
-      this.busy = true;
+      this.queue.shift();
+      this.occupy(entry);
       try { await this.launch(entry); }
       catch (error) {
-        this.busy = false;
+        this.release(entry);
         await this.endWithoutRunning(entry, this.closing || entry.stop === 'canceled' ? 'canceled' : 'failed', error instanceof Error ? redact(error.message) : 'Could not start the queued task');
       }
     }
@@ -296,8 +394,11 @@ export class TaskManager {
     const task = this.get(id);
     const request = this.entries.get(id)?.request ?? null;
     const prompt = request ? promptFor({
-      task: request.task, workspace: task.workspace, acceptance_criteria: request.acceptance_criteria,
-      ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds
+      task: request.task, workspace: request.worktree ?? task.workspace, acceptance_criteria: request.acceptance_criteria,
+      ...(request.context === null ? {} : {context: request.context}), timeout_seconds: request.timeout_seconds,
+      ...(request.agent === undefined ? {} : {agent: request.agent}),
+      isolation: request.isolation ?? 'none', owns: request.owns ?? [],
+      ...(request.autonomy === undefined ? {} : {autonomy: request.autonomy})
     },request.client) : null;
     return {task, request, prompt};
   }
@@ -369,6 +470,13 @@ export class TaskManager {
         const parsed = JSON.parse(await readFile(path.join(this.tasksDirectory, name), 'utf8')) as {task?: Task; request?: TaskRequest | null} & Task;
         // Records written before requests were kept hold the bare task.
         const task: Task = parsed.task ?? parsed;
+        task.agent ??= 'antigravity';
+        task.isolation ??= 'none';
+        task.worktree ??= null;
+        task.branch ??= null;
+        task.owns ??= [];
+        task.autonomy ??= 'auto';
+        task.scope ??= null;
         const request = parsed.task ? parsed.request ?? undefined : undefined;
         if (`${task.task_id}.json` !== name || typeof task.started_at !== 'string') continue;
         if (request) requests.set(task.task_id, request);
@@ -413,7 +521,10 @@ export class TaskManager {
     return this.describeLock(lock);
   }
   overview() {
-    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks}, delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
+    return {accepting_tasks: !this.closing, queue: {queued: this.queue.length, max: this.config.max_queued_tasks},
+      concurrency: {normal_running: this.busy ? 1 : 0, worktrees_running: this.worktreeRunning, max_parallel_worktrees: this.maxParallelWorktrees},
+      ...this.agentsOverview(),
+      delegation: delegationState(this.runtime.stateDirectory), recent_tasks: [...this.entries.values()].map(({task}) => ({
       task_id: task.task_id, status: task.status, started_at: task.started_at, ended_at: task.ended_at
     }))};
   }

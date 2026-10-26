@@ -4,18 +4,30 @@ import { openBrowser } from './open.js';
 import { checkForUpdate, knownUpdate, readPackageInfo, setKnownUpdate, updateCheckEnabled } from './update.js';
 import { createRuntime } from './runtime.js';
 import { configuredPort, startHttpBridge } from './http.js';
-import { loadHttpToken } from './security/http-auth.js';
 
 async function main() {
   const port = configuredPort();
-  const {token, source} = await loadHttpToken(paths.stateDirectory);
   const {manager, environment} = await createRuntime();
-  const bridge = await startHttpBridge({manager, environment, token, port});
+  let stopping = false;
+  let closeBridge: (() => Promise<void>) | undefined;
+  const shutdown = async () => {
+    if (stopping) { console.error('[bridge] cleanup in progress, please wait'); return; }
+    stopping = true;
+    console.error('[bridge] Shutting down; no new tasks accepted');
+    try {
+      if (!closeBridge) throw new Error('HTTP bridge is not ready');
+      await closeBridge();
+      console.error('[bridge] Stopped');
+    }
+    catch { console.error('[bridge] Cleanup failed; inspect owned processes and execution lock'); process.exitCode = 1; }
+  };
+  const bridge = await startHttpBridge({manager, environment, port, requestShutdown: shutdown});
+  closeBridge = bridge.close;
   console.error(`[bridge] HTTP server: ${bridge.baseUrl}`);
   console.error(`[bridge] MCP endpoint: ${bridge.mcpUrl}`);
-  console.error(`[bridge] Health check: ${bridge.healthUrl} (bearer authentication required)`);
-  console.error(`[bridge] Token source: ${source} (value never logged)`);
-  console.error(`[bridge] Web UI: ${bridge.baseUrl}/ui  (open in a browser on this machine; sign in with the token from the source above)`);
+  console.error(`[bridge] Health check: ${bridge.healthUrl}`);
+  console.error('[bridge] No authentication: any local process running as this user can control the bridge. Keep it on this machine.');
+  console.error(`[bridge] Web UI: ${bridge.baseUrl}/ui (open in a browser on this machine)`);
   console.error('[bridge] Client disconnected: tasks continue. Ctrl+C: cancel owned tasks and stop server.');
   if (process.env.BRIDGE_OPEN_BROWSER === '1') {
     const url = `${bridge.baseUrl}/ui`;
@@ -34,14 +46,6 @@ async function main() {
     void look();
     setInterval(() => void look(), 6 * 60 * 60 * 1000).unref();
   }
-  let stopping = false;
-  const shutdown = async () => {
-    if (stopping) { console.error('[bridge] cleanup in progress, please wait'); return; }
-    stopping = true;
-    console.error('[bridge] Shutting down; no new tasks accepted');
-    try { await bridge.close(); console.error('[bridge] Stopped'); }
-    catch { console.error('[bridge] Cleanup failed; inspect owned processes and execution lock'); process.exitCode = 1; }
-  };
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
   bridge.server.on('error', () => { console.error('[bridge] Fatal HTTP listener error'); process.exitCode = 1; void shutdown(); });
@@ -49,6 +53,6 @@ async function main() {
 main().catch(error => {
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'EADDRINUSE') console.error('[bridge] Port is already in use. Choose another: agy-mcp-bridge --port 3001 (or in PowerShell: $env:PORT="3001"; npm start)');
-  else console.error('[bridge] Startup failed. Check PORT (0-65535), token configuration and workspace config JSON.');
+  else console.error('[bridge] Startup failed. Check PORT (0-65535) and workspace config JSON.');
   process.exitCode = 1;
 });

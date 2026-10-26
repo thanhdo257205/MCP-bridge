@@ -7,7 +7,7 @@ test('repeated shutdown signals report cleanup in progress and let HTTP cleanup 
   const entry=new URL('../src/index.js',import.meta.url).href;
   const wrapper=`process.on('message',value=>{if(value==='stop')process.emit('SIGINT');else process.disconnect();});await import(${JSON.stringify(entry)});`;
   const child=spawn(process.execPath,['--input-type=module','-e',wrapper],{cwd:fileURLToPath(new URL('../../',import.meta.url)),windowsHide:true,
-    env:{...process.env,BRIDGE_HOME:root,ANTIGRAVITY_BRIDGE_CONFIG:config,BRIDGE_HTTP_TOKEN:'signal_test_token_1234567890123456789012345',PORT:'0',BRIDGE_NO_UPDATE_CHECK:'1'},stdio:['ignore','pipe','pipe','ipc']});
+    env:{...process.env,BRIDGE_HOME:root,ANTIGRAVITY_BRIDGE_CONFIG:config,PORT:'0',BRIDGE_NO_UPDATE_CHECK:'1'},stdio:['ignore','pipe','pipe','ipc']});
   let log='';child.stderr!.on('data',chunk=>log+=chunk);child.stdout!.resume();const exited=once(child,'close');let socket:Socket|undefined;
   const waitFor=async(value:string)=>{const until=Date.now()+10000;while(!log.includes(value)&&Date.now()<until)await new Promise(r=>setTimeout(r,20));assert.ok(log.includes(value),log);};
   try{

@@ -7,5 +7,11 @@
   "default_timeout_seconds": 300,
   "max_output_bytes": 262144,
   "max_retained_tasks": 50,
-  "max_queued_tasks": 3
+  "max_queued_tasks": 3,
+  "max_parallel_worktrees": 2,
+  "default_autonomy": "auto",
+  "agents": {
+    "priority": ["antigravity", "codex"],
+    "enabled": ["antigravity", "codex"]
+  }
 }
