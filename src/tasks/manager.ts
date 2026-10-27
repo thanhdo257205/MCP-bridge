@@ -13,6 +13,7 @@ import { startProcess, terminateOwned, type ProcessOptions } from '../antigravit
 import {legacyAntigravityAgent} from '../agents/antigravity.js';
 import type {AgentRuntime, Autonomy, Isolation, PublicAgentStatus} from '../agents/types.js';
 import {createWorktree, inspectScope, removeWorktree, type ScopeReport, type Worktree} from '../isolation/worktree.js';
+import {reapOwnedTree, type ProcessInfo, type TreeReport, type TreeWatch} from '../isolation/orphans.js';
 import type {PromptTransport} from '../antigravity/invocation.js';
 import {appendUsage,totalTokens,type TaskStats} from '../usage.js';
 import {MAX_RECENT_STEPS,rawStep,readProgress,summarizeStep,type Step} from '../progress.js';
@@ -30,6 +31,8 @@ export interface Task {
   duration_ms: number; pid: number | null; process_running: boolean;
   agent: string; isolation: Isolation; worktree: string | null; branch: string | null; owns: string[]; autonomy: Autonomy;
   scope: ScopeReport | null;
+  /** Processes the agent left holding the worktree directory after it exited (null when nothing was found). */
+  cleanup?: TreeReport | null;
   exit_code: number | null; signal: string | null; stdout: string; stderr: string;
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
@@ -38,6 +41,8 @@ export interface Task {
 }
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
+/** A finished task publishes its status as soon as this budget runs out, even if the process query is wedged. */
+const REAP_BUDGET_MS = 6000;
 /** What the Tech Lead asked for. Kept beside the task (not in it) so MCP responses stay small; shown in the web UI. */
 export interface TaskRequest {
   task: string; acceptance_criteria: string[]; context: string | null; timeout_seconds: number; client?: string | null;
@@ -78,6 +83,9 @@ export interface Runtime {
   deadlineGraceMs?: number; softCheckDelaysMs?: number[]; progressIntervalMs?: number;
   /** Replaces running `agy models` (tests). */
   models?: () => Promise<ModelInfo[]>;
+  /** Replaces the owned-process-tree release (tests, and hosts that forbid process enumeration). */
+  reapTree?: (pid: number, options: {started_at_ms: number; observed: ProcessInfo[]}) => Promise<TreeReport>;
+  watchTree?: (pid: number) => TreeWatch;
 }
 
 export class TaskManager {
@@ -303,6 +311,10 @@ export class TaskManager {
       task.pid = child.pid ?? null;
       task.process_running = Boolean(child.pid);
       const started = Date.now();
+      // Windows keeps a exited process's children addressed by their parent's pid, and that parent is often a shell
+      // that dies before the agent does, so the tree has to be recorded while the agent runs (500–10000 ms polls). The runtime owns the
+      // watcher: a task manager built without one releases only what a final process query can still attribute to it.
+      const watch = this.runtime.watchTree?.(child.pid ?? 0) ?? {stop: () => [] as ProcessInfo[]};
       const buffers = {stdout: [] as Buffer[], stderr: [] as Buffer[]};
       const lengths={stdout:0,stderr:0};
       const dirty={stdout:false,stderr:false};
@@ -448,6 +460,15 @@ export class TaskManager {
         // "completed" while the owns-scope check on the worktree is still outstanding.
         task.status = finalStatus;
         await this.persist(task);
+        // The agent launches its own children (MCP servers, shells, tool helpers) whose working directory is this
+        // worktree, and on Windows they outlive it and pin the directory. Releasing them needs a process query, so
+        // it runs after the status is visible: no client waits on it, and the record is patched when it finishes.
+        const held = {request: entry.request ?? null, stats: entry.stats ?? null};
+        const observed = watch.stop();
+        void this.releaseOwnedTree(child.pid ?? null, started, observed).then(async cleanup => {
+          task.cleanup = cleanup;
+          await this.persist(task, held);
+        }).catch(() => { /* the release is a convenience; the task result stands without it */ });
         await appendUsage(this.runtime.stateDirectory, {
           at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,
           permission: entry.request?.permission ?? null, duration_ms: task.duration_ms, agy_duration_seconds: entry.stats?.agy_duration_seconds ?? null,
@@ -459,9 +480,33 @@ export class TaskManager {
       });
     } catch (error) {
       if (ownsLock) await rmdir(lock).catch(() => {});
-      if (worktree && !entry.child) await removeWorktree(worktree).catch(() => {});
+      if (worktree && !entry.child) {
+        const removal = await removeWorktree(worktree);
+        if (!removal.removed) console.error(`[bridge] Could not remove the worktree of a launch that never started: ${removal.reason}`);
+      }
       throw error;
     }
+  }
+
+  /**
+   * Releases the process tree an agent CLI left behind after the owned process exited, using the descendants that
+   * were recorded while it ran. Bounded by REAP_BUDGET_MS: a wedged process query must never keep a finished task
+   * from publishing its status.
+   */
+  private async releaseOwnedTree(pid: number | null, startedAtMs: number, observed: ProcessInfo[]): Promise<TreeReport> {
+    if (pid === null) return {checked: false, reason: 'No process id was recorded for this task', reaped: [], skipped: []};
+    const failure = (error: unknown): TreeReport =>
+      ({checked: false, reason: error instanceof Error ? redact(error.message) : 'Process tree release failed', reaped: [], skipped: []});
+    const run = Promise.resolve().then(() => (this.runtime.reapTree ?? reapOwnedTree)(pid, {started_at_ms: startedAtMs, observed})).catch(failure);
+    const budget = new Promise<TreeReport>(resolve => {
+      const timer = setTimeout(() => resolve({checked: false, reason: `Process tree release did not finish within ${REAP_BUDGET_MS}ms`, reaped: [], skipped: []}), REAP_BUDGET_MS);
+      timer.unref?.();
+    });
+    const report = await Promise.race([run, budget]);
+    if (report.reaped.length || report.skipped.length || report.reason) {
+      console.error(`[bridge] Task tree release: ${report.reaped.length} process tree(s) reaped, ${report.skipped.length} left running${report.reason ? `; ${report.reason}` : ''}`);
+    }
+    return report;
   }
 
   /** Hands free lanes to the oldest waiting tasks that fit. A task that cannot start is failed here rather than thrown at a caller that has gone. */
@@ -617,14 +662,30 @@ export class TaskManager {
   get stateDirectory() { return this.runtime.stateDirectory; }
   private get tasksDirectory() { return path.join(this.runtime.stateDirectory, 'tasks'); }
   // Best effort: a failed write must never fail or hide a task.
-  private async persist(task: Task) {
+  // `held` carries the request and stats for a write that happens after the entry was released, so patching the
+  // record afterwards cannot blank them.
+  private async persist(task: Task, held?: {request: TaskRequest | null; stats: TaskStats | null}) {
     if (!this.runtime.supported) return;
+    const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
     try {
       await mkdir(this.tasksDirectory, {recursive: true, mode: 0o700});
-      const file = path.join(this.tasksDirectory, `${task.task_id}.json`);
-      await writeFile(`${file}.tmp`, JSON.stringify({task, request: this.entries.get(task.task_id)?.request ?? null, stats: this.entries.get(task.task_id)?.stats ?? null}), {mode: 0o600});
-      await rename(`${file}.tmp`, file);
-    } catch { /* history is a convenience, not a correctness requirement */ }
+      const entry = this.entries.get(task.task_id);
+      const request = held ? held.request : entry?.request ?? null;
+      const stats = held ? held.stats : entry?.stats ?? null;
+      await writeFile(`${file}.tmp`, JSON.stringify({task, request, stats}), {mode: 0o600});
+      // Windows refuses to rename onto a record that another process holds open for reading, and both the web UI and
+      // a polling client do that. Retry the swap instead of dropping the update.
+      for (let attempt = 0; ; attempt++) {
+        try { await rename(`${file}.tmp`, file); break; }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 2 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw error;
+          await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
+        }
+      }
+    } catch {
+      await unlink(`${file}.tmp`).catch(() => {}); // history is a convenience, not a correctness requirement
+    }
   }
   private async forget(id: string) {
     if (this.runtime.supported) await unlink(path.join(this.tasksDirectory, `${id}.json`)).catch(() => {});

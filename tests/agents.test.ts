@@ -222,6 +222,50 @@ test('a worktree task never reports a final status before its owns scope is atta
   }
 });
 
+test('a finished task records the agent process trees it released without delaying its status', async () => {
+  const {root, repo, state} = await repository();
+  const agent = codexAgent({executable: process.execPath, prefixArgs: [fixture, 'write', 'scope', '150'], source: 'fixture'}, codexStatus);
+  const observed: {pid: number; status: string; started_at_ms: number; task_started_ms: number}[] = [];
+  let taskId = '';
+  const manager = new TaskManager(configFor(repo), {
+    executable: process.execPath, supported: true, stateDirectory: state, agents: [agent], defaultAgent: 'codex',
+    reapTree: async (pid, options) => {
+      const seen = manager.summary(taskId);
+      assert.ok(Array.isArray(options.observed), 'the release is handed the tree the watch recorded');
+      observed.push({pid, status: seen.status, started_at_ms: options.started_at_ms, task_started_ms: Date.parse(seen.started_at)});
+      return {checked: true, reaped: [601, 602], skipped: [{pid: 603, name: 'node.exe', guard: 'process existed before this task started'}]};
+    }
+  });
+  try {
+    const started = await manager.delegate({task: 'edit a', workspace: repo, acceptance_criteria: ['ok'], agent: 'codex', isolation: 'worktree', owns: ['a.txt']});
+    taskId = started.task_id;
+    const done = await manager.wait(taskId);
+    assert.equal(done.status, 'completed');
+    assert.equal(done.process_running, false);
+
+    // The process query must run only after the status is visible: a client never waits on it.
+    assert.equal(observed.length, 1, 'the tree of the exited agent is released exactly once');
+    assert.equal(observed[0].status, 'completed', 'the release starts after the terminal status has been published');
+    assert.ok(Number.isInteger(observed[0].pid) && observed[0].pid > 0, 'the real agent pid is handed to the reaper');
+    assert.ok(Math.abs(observed[0].started_at_ms - observed[0].task_started_ms) < 5000, 'the reaper is told when the task started');
+
+    const file = path.join(state, 'tasks', `${taskId}.json`);
+    let persisted: {task?: {cleanup?: {reaped: number[]; checked: boolean}}; request?: {task: string}} = {};
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      persisted = JSON.parse(await readFile(file, 'utf8')) as typeof persisted;
+      if (persisted.task?.cleanup) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(persisted.task?.cleanup?.checked, true, 'the record on disk carries the release report');
+    assert.deepEqual(persisted.task?.cleanup?.reaped, [601, 602]);
+    assert.equal(persisted.request?.task, 'edit a', 'patching the record after the lane was released keeps the request');
+  } finally {
+    await manager.shutdown();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('changes outside the declared owns scope complete but require review', async () => {
   const {root, repo, state} = await repository();
   const agent = codexAgent({executable: process.execPath, prefixArgs: [fixture, 'write', 'stray.txt'], source: 'fixture'}, codexStatus);
