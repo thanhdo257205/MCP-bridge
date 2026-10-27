@@ -223,9 +223,9 @@ dependency, đúng tham số đã ghi, single-flight, dispatch bị từ chối 
 append-only, retention, restart, record lạ, redaction, MCP surface, UI route). Xem `docs/HANDOFF.md`
 mục 5 cho số liệu suite và bảng mutation.
 
-Việc còn mở của Phase 2: chọn bước tự động (router đề xuất bước kế tiếp) vẫn thuộc Phase 4; ngân
-sách token theo mission mới là số liệu tham khảo, chưa phải trần cứng; mission không có dependency
-mang điều kiện (chỉ "bước A xong rồi tới B").
+Việc còn mở của Phase 2: chọn bước tự động (router đề xuất bước kế tiếp) vẫn thuộc Phase 4; **chưa có**
+ngân sách token theo mission — usage vẫn chỉ được ghi và tổng hợp theo task/theo ngày, nên một plan
+12 bước không có trần chi phí; mission không có dependency mang điều kiện (chỉ "bước A xong rồi tới B").
 
 ### Phase 3 — Adapter cho OpenCode, Qoder, Zcode
 
