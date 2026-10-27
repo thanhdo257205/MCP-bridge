@@ -66,8 +66,11 @@ permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệ
    0. Thêm `CommandLine` làm gần gấp đôi chi phí nên bảng không lấy cột đó. Dùng toàn bảng vì một bảng trả được cả
    cây và các cha đã chết. Với nhịp hiện tại, task 300 s ≈ 40 nhịp ≈ 6% chu kỳ làm việc của một `powershell.exe`
    riêng; số đo lấy lúc máy rảnh, chưa đo lúc tải cao hoặc máy chậm, và **chưa có config để tắt watcher hay đổi nhịp**.
-6. **Đường POSIX chỉ được test bằng fake**: `group_alive`/`signal_group` được inject trong unit test; chưa chạy
-   live E2E trên Linux cho phần release (CI matrix chạy unit test trên Ubuntu).
+6. **Nhánh group-kill POSIX chưa bao giờ gặp một process group còn sống**: `group_alive`/`signal_group` vẫn chỉ được
+   inject trong unit test; trên Linux thật (WSL, Node 20.20.2 — xem mục 3) mock child đã thoát nên `inGroup(pid)` trả
+   `false` và release về báo cáo `{checked:true, reaped:[], skipped:[], group_signalled:false}` tức thì — vòng
+   `SIGTERM → grace → SIGKILL` chưa chạy lần nào. Chưa có E2E Linux có CLI thật. CI matrix Ubuntu đã chứng minh một
+   điều khác và quan trọng hơn: nó bắt được lỗi thật mà Windows không lộ (mục 4).
 7. **Báo cáo giải phóng không có ở UI**: `task.cleanup` tồn tại trong `antigravity_task_status` và
    `.bridge-state/tasks/<id>.json`, nhưng `src/ui` không render (grep `cleanup` trong `src/ui` = 0 kết quả). Nếu
    muốn hiển thị, làm chung với gate 6 trong `docs/MULTI-AGENT-PLAN.md` (UI hiển thị worktree/branch).
@@ -94,6 +97,9 @@ Unit (`npm test` = build + `node dist/scripts/run-tests.js`, 210 test):
 - Parallel (`npm test`) trên Windows, chạy liên tiếp 3 lần: `206/1 fail`, `205/2 fail`, `207/0 fail`. Đứng một mình, từng test lỗi đều xanh (progress 9/9 hai lần, bridge.test 27/27).
 - Nhà lỗi luôn là nhóm nhạy cảm timing: `progress` (…signal counts as activity), `http` (startup warns about the local trust model), `soft-timeout` (last activity Ns ago), `hardening-output` (số snapshot). Chúng flake theo tải của runner, không theo code; ba phiên liên tiếp cho ba test khác nhau. Đứng riêng, `progress.test.js` xanh 3/3 lần (9 pass), `bridge.test.js` 27/27. Không nới assertion để né. **Đã chốt ngày 2026-10-27**: `scripts/run-tests.ts` truyền `--test-concurrency=1`, nên từ nay `npm test` — và CI — chạy tuần tự; thời gian trên máy dev Windows là ~158 s thay vì ~47 s. Hai gạch đầu dòng trên là số liệu lịch sử của chế độ song song, không còn tái hiện được bằng `npm test`. Xác nhận sau khi đổi: `npm test` cho **207 pass, 0 fail, 3 skipped** trong 161,7 s (ngày 2026-10-27). Cờ `--test-concurrency` chỉ tồn tại từ Node 20.10 / 18.19 / 21.0 trở đi; CI đặt `node: [20, 22]` nên luôn nhận cờ, còn dev dùng Node 20.0–20.9 sẽ gặp `bad option: --test-concurrency` — cố ý không feature-detect trong script và không nâng `engines.node`, vì đây chỉ là đường chạy test của người phát triển, không phải đường chạy của sản phẩm đã publish.
 - Bộ mới viết xanh tuyệt đối khi chạy riêng: `tests/isolation-orphans.test.js` 9/9, `tests/isolation-worktree.test.js` và `tests/agents.test.js` chạy kèm (`23 pass, 0 fail`).
+- Linux (WSL, Node **20.20.2**, `node --test --test-concurrency=1 dist/tests/*.test.js`) ngày 2026-10-27: **211 test, 210 pass, 0 fail, 1 skipped**, exit 0. Đây là nền mà CI Ubuntu báo đỏ trước đó; chỉ khác Windows ở chỗ nhóm test POSIX signal được chạy thật thay vì bỏ qua.
+- Windows (`npm test`, Node 24.15.0) cùng ngày, sau bản sửa: **211 test, 208 pass, 0 fail, 3 skipped**, 157,8 s. Hai con số lệch nhau đúng 3 = ba test nhóm POSIX signal bỏ qua trên Windows.
+- CI của PR #28 (ubuntu-20/ubuntu-22 **fail**, windows-20/windows-22 pass) hỏng đúng một test `evicted tasks lose their persisted record`, và `publish.yml` trên `main` cũng fail nên **không có bản npm nào được phát hành** (registry vẫn `0.1.19`). Nguyên nhân và cách tái hiện: mục 4; script đo `test-results/diag-evict.mjs`, `test-results/diag-gate.mjs`.
 
 Live, `agy` 1.4.7 thật, MCP client `streamable-http`, scratch trong `%TEMP%` (không đụng repo), hai lần:
 
@@ -134,3 +140,13 @@ lúc reap".
 - Test không được phép gọi `powershell.exe`: `TaskManager` chỉ dùng `runtime.watchTree` khi được nối, mặc định inert.
   `createRuntime` (`src/runtime.ts`) là nơi nối `startTreeWatch`.
 - Không xóa `test-results/` trước khi mục 2.11 có quyết định; các file đó là cách tái hiện lỗi.
+- Bản ghi task swap bằng `<id>.json.tmp` rồi `rename`, nên `readdir(state/tasks)` **có thể** trả cả tên `.tmp` khi một
+  lần ghi đang chạy. Muốn đếm số bản ghi thì lọc `.json` — `restore()` đã làm đúng như vậy. Đây chính là cách
+  `evicted tasks lose their persisted record` hỏng trên Linux mà không hỏng trên Windows.
+- Bản vá muộn sau khi publish status (ghi `task.cleanup`) chỉ được viết khi manager vẫn còn giữ task đó. Retention có
+  thể đuổi bản ghi trong lúc query tiến trình chưa về, và ghi tiếp sẽ **hồi sinh** record đã xóa. Test
+  `a tree report that lands after eviction patches the record it still owns` (`tests/bridge.test.ts`) dựng đúng cửa sổ
+  đó bằng cách cho `reapTree` chờ một gate; đã kiểm chứng là nó đỏ khi bỏ guard, trên cả Windows lẫn Linux.
+- `gh pr merge --auto` merge **ngay lập tức** khi repo không có branch protection: nó đã gộp PR #28 khi 4 job CI còn
+  đang chạy. Muốn "gộp khi CI xanh" thì chờ `gh pr checks --watch` rồi merge thủ công, hoặc bật ruleset yêu cầu
+  `test (ubuntu/windows × 20/22)` — hiện repo chưa có ruleset nào.
