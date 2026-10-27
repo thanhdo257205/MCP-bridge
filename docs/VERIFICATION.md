@@ -23,7 +23,7 @@ Chính sách shutdown: ngừng nhận task mới, hủy task đang chạy, dọn
 ## Máy thực tế
 
 - Windows, PowerShell; Node `v24.15.0`, npm `11.12.1`, Codex CLI `0.163.0`.
-- `Get-Command agy`: `C:\Users\dotha\AppData\Local\agy\bin\agy.exe`.
+- `Get-Command agy`: `%LOCALAPPDATA%\agy\bin\agy.exe` (đường dẫn ứng dụng của user đang chạy lệnh, không phải đường dẫn cố định).
 - `agy --version`: `1.4.3`.
 - `agy --help` có print không tương tác, JSON và stream-json; help của executable được ghi qua stderr, nên probe thu cả hai stream.
 - Tài khoản cached dùng được với prompt chỉ phản hồi; không đọc hoặc xuất credential.
@@ -50,6 +50,7 @@ Bridge chỉ dùng --version/--help và print/json/print-timeout/disable-slash-c
 3. `--print-timeout 1ms`: CLI trả JSON SUCCESS, response rỗng, num_turns 0, exit **0**, stderr báo print timeout. Bridge nhận diện đây là timeout, không thành công.
 4. MCP client → server → agy trong scratch workspace, yêu cầu tạo `bridge-smoke.txt`: CLI trả SUCCESS/exit 0 nhưng `denied_actions` chứa `write_file`, response rỗng. Bridge trả failed. Bằng chứng đầy đủ ở `test-results/write-permission-probe.json` (local, gitignored). Chưa chứng minh khả năng chỉnh sửa code qua bridge vì chưa được cấp quyền.
 5. Smoke chỉ phản hồi và hủy process thật: `npm run test:live` đạt ngày khảo sát. MCP client nhận `BRIDGE_SMOKE_OK` với completed/exit 0 (khoảng 13.5 giây); sentinel không đổi; task tiếp theo được hủy, status canceled/process_running false. Bằng chứng ở `test-results/live-report.json`. Đọc trường `success`, task.status, response_verified, workspace_unchanged và cancellation.status để biết lần chạy mới nhất.
+6. Dọn cây tiến trình và sweep worktree (2026-10-26, `agy` 1.4.7, scratch trong `%TEMP%`, repo git giả): bridge khởi động với một thư mục worktree rỗng còn sót và một thư mục còn file → log báo xóa đúng cái rỗng, giữ đúng cái có file. Task worktree thật trả `completed`, `scope.checked=true`, `changed=1`, `out_of_scope=[]`, `cleanup={checked:true, reaped:[30768,24304], skipped:[], tracked:14}` và log `[bridge] Task tree release: 2 process tree(s) reaped, 0 left running`. Probe đọc cwd của mọi process (PEB) trả `HITS 0`, `rm -rf` toàn bộ scratch thành công không cần force, `note.txt` trong worktree là `REAP_OK`, workspace gốc chỉ còn `[.git, a.txt]`, shutdown confirm trả 202 và server exit 0. Lần chạy **trước** bản sửa cho `HITS 3` với đúng chuỗi `agy → cmd (chết) → npx open-figma-mcp → cmd → node`, `cleanup.reaped` chỉ có 1 PID — đó là bằng chứng vì sao phải ghi cây tiến trình trong lúc task chạy. Bằng chứng: `test-results/reap-report.json` (gitignored), cách chạy lại ở `docs/HANDOFF.md`.
 
 Unit/integration dùng mock nằm ở `tests/bridge.test.ts`, được tách khỏi script live. Bao gồm validation, boundary/traversal/junction, lock, lifecycle, retention, timeout, cancel cây process và giữ process khác, exit 7, JSON lỗi, partial SUCCESS timeout, permission denial, output cap, redaction, unsupported/spawn failure và protocol stdout sạch.
 
@@ -61,7 +62,8 @@ Unit/integration dùng mock nằm ở `tests/bridge.test.ts`, được tách kh�
 - Timeout/error có thể bị CLI biểu diễn là SUCCESS/exit 0. Không dùng exit code đơn lẻ để quyết định.
 - Không bật stream-json trong triển khai hiện tại: tài liệu mô tả cơ chế nhưng chưa cần kiểm thử để phục vụ print/json. Status chỉ có stdout/stderr đang nhận, không có phần trăm tiến độ. JSON cuối thường chỉ tới khi agent kết thúc.
 - --sandbox xuất hiện trong help nhưng chưa xác minh khả năng cách ly Windows cho luồng này, nên không bật hay tuyên bố có OS confinement. Allowlist/preflight không thay thế sandbox.
-- Hủy Windows dựa vào taskkill cây của child còn sống. Không bảo đảm xử lý hậu duệ đã detach, PID reuse cực ngắn giữa kiểm tra và taskkill, hoặc server crash. Nếu cần bảo đảm cleanup khi crash, bước tiếp theo là Windows Job Object hoặc worker trong môi trường OS cách ly.
+- Hủy Windows vẫn dựa vào taskkill cây của child còn sống; khi child tự thoát, bridge giải phóng các nhánh đã được ghi danh trong lúc chạy (mục 6 ở trên). Không bảo đảm: process sinh ra **và** mất cha giữa hai nhịp poll, PID reuse trong cửa sổ rất ngắn giữa bảng tiến trình và `taskkill`, hay server bị giết đột ngột/crash — ba trường hợp này vẫn để lại tree ghim thư mục. Nếu cần bảo đảm cleanup kể cả khi crash, bước tiếp theo là Windows Job Object (`KILL_ON_JOB_CLOSE`) hoặc worker trong môi trường OS cách ly; chưa làm.
+- Nguồn gốc tiến trình giữ cwd nằm ở MCP server mà `agy` tự khởi động (`open-figma-mcp`, `chrome-devtools-mcp`) theo cấu hình **toàn cục** `~/.gemini/config/mcp_config.json`. Bridge dọn sau khi agent thoát, không ngăn chúng khởi động; tắt chúng là thay đổi cấu hình cá nhân của người dùng nên chưa tự làm.
 - Lock bảo vệ các process dùng cùng bản cài bridge; không quản lý editor/agent khác hoặc bản cài khác.
 - Chưa đăng ký vào cấu hình Codex thật; MCP SDK client handshake thành công không tương đương tool đã có trong phiên Codex hiện tại.
 
