@@ -7,6 +7,8 @@ import type { AgentRuntime, AgentStatus, PublicAgentStatus } from './types.js';
 
 export interface AntigravityInspection {
   executable: string; supported: boolean; version: string; warnings: string[];
+  /** The resolved .js entry of a Windows shim; the adapter's args follow it, so the launch needs them too. */
+  prefixArgs?: string[];
 }
 
 export interface AgentRegistry {
@@ -38,7 +40,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
   };
   agents.push({
     adapter: antigravityAdapter(antigravity.executable, config.prompt_transport as PromptTransport),
-    status: antigravityStatus, enabled: antigravityEnabled
+    status: antigravityStatus, enabled: antigravityEnabled, prefixArgs: antigravity.prefixArgs
   });
 
   const codexEnabled = enabled.includes('codex');

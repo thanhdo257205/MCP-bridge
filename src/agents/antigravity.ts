@@ -57,12 +57,12 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
 }
 
 export function legacyAntigravityAgent(runtime: {
-  executable: string; supported: boolean; launch?: AgentRuntime['launch'];
+  executable: string; supported: boolean; prefixArgs?: string[]; launch?: AgentRuntime['launch'];
 }, transport: PromptTransport): AgentRuntime {
   const status: AgentStatus = {
     id: 'antigravity', label: 'Antigravity', available: runtime.supported,
     version: null, executable: runtime.executable || null, capabilities: CAPABILITIES,
     warnings: runtime.supported ? [] : ['Requires agy 1.4.x and all required print/output/timeout flags']
   };
-  return {adapter: antigravityAdapter(runtime.executable, transport), status, enabled: true, launch: runtime.launch};
+  return {adapter: antigravityAdapter(runtime.executable, transport), status, enabled: true, prefixArgs: runtime.prefixArgs, launch: runtime.launch};
 }

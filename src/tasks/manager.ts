@@ -78,6 +78,8 @@ interface Entry {
 }
 export interface Runtime {
   executable: string; supported: boolean; stateDirectory: string;
+  /** Args every Antigravity command needs before its own (the .js entry of a resolved Windows shim). */
+  prefixArgs?: string[];
   launch?: (args: string[], cwd: string, options?:ProcessOptions) => ChildProcess;
   agents?: AgentRuntime[];
   defaultAgent?: string | null;
@@ -574,7 +576,7 @@ export class TaskManager {
   }
   /** Models offered by the installed Antigravity CLI (read on demand, never at startup). */
   availableModels(): Promise<ModelInfo[]> {
-    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, helperDirectory(), this.config.extra_env_passthrough);
+    return this.runtime.models ? this.runtime.models() : listModels(this.runtime.executable, helperDirectory(), this.config.extra_env_passthrough, this.runtime.prefixArgs ?? []);
   }
   currentModel(): Promise<string | null> { return readModel(this.runtime.stateDirectory); }
 

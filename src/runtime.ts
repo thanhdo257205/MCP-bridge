@@ -9,11 +9,11 @@ import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
-  let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
+  let cli = {version: 'unavailable', executable: '', prefixArgs: [] as string[], supported: false, warnings: [] as string[]};
   let antigravity: AntigravityInspection = {version: 'unavailable', executable: '', supported: false, warnings: []};
   try {
     const command = await resolveCommand(config.executable);
-    cli = await inspectCli(command.executable, helperDirectory(), (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
+    cli = await inspectCli(command, helperDirectory(), (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
     antigravity = {...cli, executable: cli.executable || command.source};
   } catch {
     antigravity = {version: 'unavailable', executable: '', supported: false, warnings: ['Antigravity CLI unavailable or inspection failed']};
@@ -33,7 +33,7 @@ export async function createRuntime() {
   const treeWatchEnabled = treeWatch.enabled !== false;
   if (!treeWatchEnabled) console.error('[bridge] WARNING: tree_watch is off; a process tree the agent leaves behind will not be released');
   const manager = new TaskManager(config, {
-    executable: antigravity.executable, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
+    executable: antigravity.executable, prefixArgs: antigravity.prefixArgs, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
     agents: registry.agents, defaultAgent: registry.defaultAgent,
     // Without the watch the release can only name the processes that still hang below the agent at the moment it
     // exits, which is exactly the case that left the worktree pinned in a live run.

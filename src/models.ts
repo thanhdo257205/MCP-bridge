@@ -24,9 +24,9 @@ export function parseModels(text: string): ModelInfo[] {
 }
 
 /** Runs `agy models`; rejects when the command fails, times out or prints nothing recognizable. */
-export function listModels(executable: string, cwd: string, extraEnvPassthrough: string[] = []): Promise<ModelInfo[]> {
+export function listModels(executable: string, cwd: string, extraEnvPassthrough: string[] = [], prefixArgs: string[] = []): Promise<ModelInfo[]> {
   return new Promise((resolve, reject) => {
-    const child = startProcess(executable, ['models'], cwd, {extraEnvPassthrough});
+    const child = startProcess(executable, [...prefixArgs, 'models'], cwd, {extraEnvPassthrough});
     let text = '';
     let errors = '';
     let timedOut = false;

@@ -5,7 +5,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveCommand } from '../src/antigravity/process.js';
+import { inspectCli, resolveCommand } from '../src/antigravity/process.js';
+import { createAgentRegistry } from '../src/agents/registry.js';
 import { codexAdapter, codexAgent } from '../src/agents/codex.js';
 import type { AgentStatus } from '../src/agents/types.js';
 import type { Config } from '../src/config.js';
@@ -77,6 +78,54 @@ test('Windows .cmd shims resolve to a local Node entry without a shell', {skip: 
     await writeFile(escaping, '@"%~dp0\\..\\outside.js" %*\r\n');
     await assert.rejects(resolveCommand(escaping), /Unsupported \.cmd shim/);
     await assert.rejects(resolveCommand(path.join(root, 'missing')), /Command not found/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('a shimmed Antigravity keeps its script from the probe through to the launch', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-agy-shim-'));
+  try {
+    const script = path.join(root, 'agy.js');
+    await writeFile(script,
+      'const flag = process.argv[2];\n' +
+      'if (flag === "--version") console.log("1.4.7");\n' +
+      'else if (flag === "models") console.log("Fetching available models...\\ngemini-test\\tTest model\\n");\n' +
+      'else console.error("--print --output-format --print-timeout --disable-slash-commands");\n');
+    await writeFile(path.join(root, 'agy.cmd'), '@ECHO off\r\n"%~dp0\\agy.js" %*\r\n');
+    const command = process.platform === 'win32'
+      ? await resolveCommand(path.join(root, 'agy.cmd'))
+      : {executable: process.execPath, prefixArgs: [script], source: script};
+    assert.deepEqual(await Promise.all(command.prefixArgs.map(entry => realpath(entry))), [await realpath(script)], 'the command runs the CLI script');
+
+    const cli = await inspectCli(command, root);
+    assert.equal(cli.supported, true, 'the probe asked the CLI through the shim, not the Node binary that runs it');
+
+    const config: Config = {
+      allowed_workspaces: [root], executable: process.execPath,
+      max_timeout_seconds: 15, default_timeout_seconds: 10, max_output_bytes: 262144,
+      max_retained_tasks: 10, max_queued_tasks: 2, max_parallel_worktrees: 1, default_autonomy: 'auto',
+      extra_env_passthrough: [], prompt_transport: 'argv', agents: {enabled: ['antigravity'], priority: ['antigravity']}
+    };
+    const registry = await createAgentRegistry(config, {...cli, executable: cli.executable || command.source});
+    assert.equal(registry.defaultAgent, 'antigravity');
+    const agent = registry.agents.find(item => item.adapter.id === 'antigravity');
+    assert.ok(agent);
+    assert.deepEqual(agent.prefixArgs, command.prefixArgs, 'the launch keeps the script the probe was given');
+    const invocation = agent.adapter.buildInvocation({
+      prompt: 'do it', workspace: root, timeoutSeconds: 10, autonomy: 'auto', owns: [],
+      taskId: '22222222-2222-4222-8222-222222222222', stateDirectory: root
+    });
+    const argv = [...(agent.prefixArgs ?? []), ...invocation.args];
+    assert.deepEqual(argv.slice(0, command.prefixArgs.length), command.prefixArgs);
+    assert.equal(argv[command.prefixArgs.length], '--print', 'the CLI flags follow the script instead of replacing it');
+
+    const manager = new TaskManager(config, {executable: cli.executable, prefixArgs: cli.prefixArgs, supported: true, stateDirectory: root});
+    try {
+      assert.deepEqual(await manager.availableModels(), [{id: 'gemini-test', label: 'Test model'}], '`agy models` is asked through the shim too');
+    } finally {
+      await manager.shutdown();
+    }
   } finally {
     await rm(root, {recursive: true, force: true});
   }
