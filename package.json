@@ -33,6 +33,7 @@
     "ui/",
     "skills/",
     "docs/",
+    "!docs/HANDOFF.md",
     "config/workspaces.example.json",
     "README.md",
     "!**/*.map"

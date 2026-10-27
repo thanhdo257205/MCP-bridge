@@ -40,4 +40,6 @@ test('package: npm pack contains what the CLI needs and nothing else', () => {
     assert.ok(!file.includes('fake-agy'));
     assert.ok(!/(token|\.env)/i.test(path.basename(file)), `suspicious file: ${file}`);
   }
+  assert.ok(!files.includes('docs/HANDOFF.md'), 'the working handoff note is for this repository, not for whoever installs the package');
+  assert.ok(files.includes('docs/HARDENING.md'), 'the published package still carries its security notes');
 });
