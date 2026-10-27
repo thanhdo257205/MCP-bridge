@@ -87,12 +87,12 @@ permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệ
 
 ## 3. Bằng chứng
 
-Unit (`node dist/scripts/run-tests.js`, 210 test):
+Unit (`npm test` = build + `node dist/scripts/run-tests.js`, 210 test):
 
 - Sequential (`node --test --test-concurrency=1 dist/tests/*.test.js`): **207 pass, 0 fail, 3 skipped**, 164,9 s. Đã
   chạy lại lần hai sau bản sửa cuối (nhịp poll thưa hơn) và vẫn 207/0/3 — hai lần độc lập, cùng số.
 - Parallel (`npm test`) trên Windows, chạy liên tiếp 3 lần: `206/1 fail`, `205/2 fail`, `207/0 fail`. Đứng một mình, từng test lỗi đều xanh (progress 9/9 hai lần, bridge.test 27/27).
-- Nhà lỗi luôn là nhóm nhạy cảm timing: `progress` (…signal counts as activity), `http` (startup warns about the local trust model), `soft-timeout` (last activity Ns ago), `hardening-output` (số snapshot). Chúng flake theo tải của runner, không theo code; ba phiên liên tiếp cho ba test khác nhau. Đứng riêng, `progress.test.js` xanh 3/3 lần (9 pass), `bridge.test.js` 27/27. Không nới assertion để né. **Đã chốt ngày 2026-10-27**: `scripts/run-tests.ts` truyền `--test-concurrency=1`, nên từ nay `npm test` — và CI — chạy tuần tự; thời gian trên máy dev Windows là ~158 s thay vì ~47 s. Hai gạch đầu dòng trên là số liệu lịch sử của chế độ song song, không còn tái hiện được bằng `npm test`.
+- Nhà lỗi luôn là nhóm nhạy cảm timing: `progress` (…signal counts as activity), `http` (startup warns about the local trust model), `soft-timeout` (last activity Ns ago), `hardening-output` (số snapshot). Chúng flake theo tải của runner, không theo code; ba phiên liên tiếp cho ba test khác nhau. Đứng riêng, `progress.test.js` xanh 3/3 lần (9 pass), `bridge.test.js` 27/27. Không nới assertion để né. **Đã chốt ngày 2026-10-27**: `scripts/run-tests.ts` truyền `--test-concurrency=1`, nên từ nay `npm test` — và CI — chạy tuần tự; thời gian trên máy dev Windows là ~158 s thay vì ~47 s. Hai gạch đầu dòng trên là số liệu lịch sử của chế độ song song, không còn tái hiện được bằng `npm test`. Xác nhận sau khi đổi: `npm test` cho **207 pass, 0 fail, 3 skipped** trong 161,7 s (ngày 2026-10-27). Cờ `--test-concurrency` chỉ tồn tại từ Node 20.10 / 18.19 / 21.0 trở đi; CI đặt `node: [20, 22]` nên luôn nhận cờ, còn dev dùng Node 20.0–20.9 sẽ gặp `bad option: --test-concurrency` — cố ý không feature-detect trong script và không nâng `engines.node`, vì đây chỉ là đường chạy test của người phát triển, không phải đường chạy của sản phẩm đã publish.
 - Bộ mới viết xanh tuyệt đối khi chạy riêng: `tests/isolation-orphans.test.js` 9/9, `tests/isolation-worktree.test.js` và `tests/agents.test.js` chạy kèm (`23 pass, 0 fail`).
 
 Live, `agy` 1.4.7 thật, MCP client `streamable-http`, scratch trong `%TEMP%` (không đụng repo), hai lần:
