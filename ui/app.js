@@ -56,15 +56,20 @@ function duration(ms) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}p ${s % 60}s`;
 }
 function agoEl(iso, className) { return h('span', {class: className, 'data-ago': iso, title: clock(iso), text: ago(iso)}); }
-/** What Antigravity has shown while the task runs: output, writes to its log file (when the soft deadline is on), and any extension of the deadline. */
+/** Secondary line under the progress bar; the "why" lives in ACTIVITY_HINT, shown as a tooltip. */
+const ACTIVITY_HINT = 'Agy ở chế độ print/json chỉ in khi xong, nên "chưa có output" là bình thường. ' +
+  'Log của agy lớn dần là dấu hiệu tiến trình còn sống; khi còn hoạt động, bridge gia hạn hạn mềm thay vì cắt đúng lúc hết giờ.';
 function activityText(activity) {
   if (!activity) return 'Chưa có thông tin hoạt động.';
   const parts = [];
-  if (activity.log_updated_at) parts.push(`Log của agy cập nhật ${ago(activity.log_updated_at)} (${bytes(activity.log_bytes ?? 0)})`);
-  else if (activity.soft_deadline) parts.push('Log của agy: chưa có dữ liệu');
-  parts.push(activity.last_output_at ? `Output cuối ${ago(activity.last_output_at)}` : 'chưa có output từ agy (bình thường ở chế độ print/json: agy chỉ in khi xong)');
+  if (activity.log_updated_at) parts.push(`log agy: ${ago(activity.log_updated_at)} (${bytes(activity.log_bytes ?? 0)})`);
+  else if (activity.soft_deadline) parts.push('log agy: chưa có dữ liệu');
+  parts.push(activity.last_output_at ? `output cuối ${ago(activity.last_output_at)}` : 'chưa có output');
   const soft = activity.soft_deadline;
-  if (soft) parts.push(soft.extensions ? `đã gia hạn ${soft.extensions} lần vì còn hoạt động; kiểm tra tiếp ${soft.next_check_at ? clock(soft.next_check_at) : '—'}` : `chưa cần gia hạn; kiểm tra lúc ${soft.next_check_at ? clock(soft.next_check_at) : '—'}`);
+  if (soft) {
+    if (soft.extensions) parts.push(`đã gia hạn ${soft.extensions} lần`);
+    else parts.push(soft.next_check_at ? `chưa gia hạn, kiểm tra lại sau ${Math.max(0, Math.round((Date.parse(soft.next_check_at) - Date.now()) / 1000))}s` : 'chưa gia hạn');
+  }
   return parts.join(' · ');
 }
 /** Steps agy reported (step progress setting): newest first, each with the raw event (redacted) one click away. */
@@ -258,6 +263,11 @@ const USAGE_LABELS = {input_tokens: 'Token vào', output_tokens: 'Token ra', tot
 const usageName = key => USAGE_LABELS[key] ? `${USAGE_LABELS[key]} (${key})` : key;
 const number = value => Number(value).toLocaleString('vi-VN', {maximumFractionDigits: 2});
 const usageLine = usage => usage && Object.keys(usage).length ? Object.entries(usage).map(([key, value]) => `${key} ${number(value)}`).join(' · ') : null;
+/** One number in the row, the whole breakdown one hover away. */
+const usageBrief = usage => {
+  if (!usage || !Object.keys(usage).length) return '—';
+  return 'total_tokens' in usage ? `${number(usage.total_tokens)} token` : `${Object.keys(usage).length} trường usage`;
+};
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); notify('Đã sao chép'); } catch { notify('Không thể sao chép tự động'); }
 }
@@ -304,7 +314,7 @@ function taskItems(o) {
     class: 'task-item', role: 'listitem', 'data-task': task.task_id, 'aria-current': String(task.task_id === state.selected), onclick: () => select(task.task_id)
   }, h('div', {class: 'row'}, pill(task.status), agoEl(task.queued_at || task.started_at, 'meta')),
     h('div', {class: 'title', text: task.title || '(không có nội dung yêu cầu)'}),
-    h('div', {class: 'meta mono', text: `${task.agent}${task.isolation === 'worktree' ? ' · worktree' : ''} · ${folder(task.worktree || task.workspace)} · ${task.task_id.slice(0, 8)}`}),
+    h('div', {class: 'meta mono', text: `${task.agent}${task.isolation === 'worktree' ? ' · worktree' : ''} · ${folder(task.workspace)}`, title: task.task_id}),
     h('div', {class: 'meta'}, task.status === 'running' ? elapsedEl(task.started_at, 'Đang chạy ') : task.status === 'queued' ? 'Đang xếp hàng…' : `Mất ${duration(task.duration_ms)}`,
       task.tokens !== null && task.tokens !== undefined ? h('span', {class: overTask(o, task) ? 'over-budget' : '', text: ` · ${number(task.tokens)} token${overTask(o, task) ? ' (vượt mức)' : ''}`}) : null)));
 }
@@ -315,6 +325,13 @@ function details(key, title, ...body) {
   el.addEventListener('toggle', () => { el.open ? state.open.add(key) : state.open.delete(key); });
   return el;
 }
+/** Text that answers "why / what if" instead of "what is happening now" gets collapsed until asked for. */
+function collapsible(key, title, ...body) {
+  const el = details(key, title, ...body);
+  el.classList.add('more');
+  return el;
+}
+function more(key, ...body) { return collapsible(key, 'Xem thêm', ...body); }
 
 const CHANGE_LABEL = {modified: 'Sửa', deleted: 'Xóa', added: 'Thêm', 'type-changed': 'Đổi kiểu'};
 function changesBody(task) {
@@ -383,18 +400,25 @@ function detailView() {
   const running = task.status === 'running';
   const queued = task.status === 'queued';
   const agentName = task.agent || 'agent';
+  const place = task.worktree || task.workspace;
+  const metaBits = [folder(task.workspace), agentName,
+    task.isolation === 'worktree' ? 'worktree' : 'tuần tự',
+    request && 'model' in request && request.model ? request.model : null,
+    running ? elapsedEl(task.started_at, 'đã chạy ') : queued ? 'đang xếp hàng' : `mất ${duration(task.duration_ms)}`,
+    state.detail?.stats?.usage && 'total_tokens' in state.detail.stats.usage ? `${number(state.detail.stats.usage.total_tokens)} token` : null].filter(Boolean);
   const head = h('div', {class: 'detail-head'},
     h('div', {}, h('h2', {}, 'Task ', h('span', {class: 'mono', text: task.task_id.slice(0, 8)}), pill(task.status)),
-      h('div', {class: 'muted mono', text: task.workspace}),
-      task.worktree ? h('div', {class: 'muted mono', text: `worktree: ${task.worktree}`}) : null),
+      h('div', {class: 'meta-line muted mono', title: place},
+        metaBits.reduce((acc, value) => acc.length ? [...acc, ' · ', value] : [value], []))),
     running || queued ? h('button', {class: 'btn danger small', onclick: () => cancel(task.task_id), text: 'Hủy task'}) : null);
   const activity = state.detail?.activity;
   const progress = running ? h('div', {class: 'progress', 'aria-label': 'Tiến độ'},
     h('div', {class: 'bar', 'data-bar-start': task.started_at, 'data-bar-total': String((request?.timeout_seconds ?? 300) * 1000), role: 'presentation'}, h('span', {})),
     h('div', {class: 'muted'}, elapsedEl(task.started_at, 'Đã chạy '), ` / giới hạn ${request?.timeout_seconds ?? '—'}s`),
-    h('div', {class: 'muted', id: 'activity-line'}, activityText(activity))) : null;
+    h('div', {class: 'muted', id: 'activity-line', title: ACTIVITY_HINT}, activityText(activity))) : null;
   const facts = h('dl', {class: 'kv'},
-    ...[['Agent', agentName], ['Cách ly', task.isolation === 'worktree' ? 'worktree (song song)' : 'tuần tự'],
+    ...[['Thư mục làm việc', task.workspace], ['Worktree', task.worktree || '—'],
+      ['Agent', agentName], ['Cách ly', task.isolation === 'worktree' ? 'worktree (song song)' : 'tuần tự'],
       ['Nhánh', task.branch || '—'], ['Quyền tự duyệt', task.autonomy || 'auto'],
       ['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
@@ -434,10 +458,11 @@ function detailView() {
     h('div', {id: 'log-note'}, task[`${state.logTab}_truncated`] ? h('div', {class: 'callout warn', text: 'Log đã bị cắt vì vượt giới hạn.'}) : null),
     h('pre', {class: 'log', id: 'log-pre', text: logText(task)}));
 
-  return h('article', {class: 'card detail'}, head, progress, facts, h('div', {class: 'convo'}, asked, replied),
+  return h('article', {class: 'card detail'}, head, progress, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
     details('steps', `Các bước ${agentName} báo cáo`, h('div', {id: 'steps-body'}, stepsBody(state.detail?.activity))),
     details('logs', `Log của tiến trình ${agentName}`, logs),
+    collapsible('more:fact', 'Xem thêm thông số task', facts),
     prompt ? details('prompt', 'Prompt đầy đủ gửi tới agy (đã lọc secret)', h('pre', {class: 'log', text: prompt})) : null);
 }
 
@@ -468,7 +493,7 @@ function modelCard(o) {
     h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: o.model || 'Mặc định của Antigravity'}),
       h('span', {class: 'muted', text: o.model ? 'Bridge truyền --model này cho mọi task mới.' : 'Bridge không truyền --model; Antigravity tự dùng model đã cấu hình.'})), select),
     loaded?.error ? h('div', {class: 'callout warn', text: `Không lấy được danh sách model: ${loaded.error}`}) : null,
-    h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'}));
+    more('more:model', h('p', {text: 'Áp dụng cho task mới, không cần khởi động lại. Task đang chạy hoặc đang chờ giữ model đã chốt lúc nhận. Danh sách lấy từ `agy models`; model được ghi lại trong từng task.'})));
 }
 function progressCard(o) {
   const enabled = Boolean(o.progress?.enabled);
@@ -476,8 +501,10 @@ function progressCard(o) {
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Hiển thị tiến độ từng bước (stream-json)'}),
     h('label', {class: 'perm-row' + (enabled ? ' on' : '')}, toggle,
       h('span', {}, h('strong', {text: enabled ? 'Đang bật' : 'Đang tắt'}),
-        h('span', {class: 'muted', text: 'Bridge chạy agy với --output-format stream-json: ngoài kết quả cuối, agy báo các sự kiện init và step_update khi đang làm việc (đã thấy bằng probe-stream trên agy 1.4.x). Các bước hiện trong chi tiết task, và là bằng chứng "còn sống" thật cho phần gia hạn. Áp dụng cho task mới, không cần khởi động lại.'}))),
-    h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: nội dung chi tiết bên trong step_update (nên hiển thị là tóm tắt tự động kèm dữ liệu gốc), và việc kết quả cuối ở chế độ này có cùng dạng với chế độ JSON. Nếu task báo lỗi "CLI output is not a valid stream-json final result" hoặc "stream result fields", hãy tắt tùy chọn này để quay về chế độ JSON đã kiểm chứng và gửi tôi thông báo lỗi.'}));
+        h('span', {class: 'muted', text: 'Bridge chạy agy ở --output-format stream-json; các bước hiện trong chi tiết task. Áp dụng cho task mới.'}))),
+    more('more:progress',
+      h('p', {text: 'Ngoài kết quả cuối, agy báo các sự kiện init và step_update khi đang làm việc (đã thấy bằng probe-stream trên agy 1.4.x). Các bước là bằng chứng "còn sống" thật cho phần gia hạn tự động.'}),
+      h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: nội dung chi tiết bên trong step_update (nên hiển thị là tóm tắt tự động kèm dữ liệu gốc), và việc kết quả cuối ở chế độ này có cùng dạng với chế độ JSON. Nếu task báo lỗi "CLI output is not a valid stream-json final result" hoặc "stream result fields", hãy tắt tùy chọn này để quay về chế độ JSON đã kiểm chứng và gửi tôi thông báo lỗi.'})));
 }
 function budgetCard(o) {
   const budget = o.budget || {task_tokens: null, day_tokens: null, today_tokens: 0};
@@ -491,7 +518,7 @@ function budgetCard(o) {
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Mức token (đèn cảnh báo)'}),
     h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Mỗi task'}), h('span', {class: 'muted', text: 'Task nào dùng nhiều hơn mức này sẽ được đánh dấu "vượt mức" trong danh sách.'})), chooser('task_tokens', BUDGET_TASK_PRESETS, 'Mức token mỗi task')),
     h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Mỗi ngày'}), h('span', {class: 'muted', text: `Hôm nay đã dùng ${number(budget.today_tokens)} token qua bridge${budget.over_day ? ' — đã vượt mức.' : '.'}`})), chooser('day_tokens', BUDGET_DAY_PRESETS, 'Mức token mỗi ngày')),
-    h('div', {class: 'callout warn', text: 'Đây chỉ là đèn báo, không phải hạn mức thật và không dừng task: agy không cho bridge đọc hạn mức, và số token của một task chỉ biết khi task kết thúc. Số liệu là tổng token (total_tokens) agy báo cho các task chạy qua bridge, tính theo ngày giờ máy của bạn.'}));
+    more('more:budget', h('div', {class: 'callout warn', text: 'Đây chỉ là đèn báo, không phải hạn mức thật và không dừng task: agy không cho bridge đọc hạn mức, và số token của một task chỉ biết khi task kết thúc. Số liệu là tổng token (total_tokens) agy báo cho các task chạy qua bridge, tính theo ngày giờ máy của bạn.'})));
 }
 function softTimeoutCard(o) {
   const soft = o.soft_timeout || {enabled: false, limit_seconds: 7200};
@@ -504,9 +531,11 @@ function softTimeoutCard(o) {
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Gia hạn khi Antigravity còn hoạt động'}),
     h('label', {class: 'perm-row' + (soft.enabled ? ' on' : '')}, toggle,
       h('span', {}, h('strong', {text: soft.enabled ? 'Đang bật' : 'Đang tắt (task dừng đúng hạn)'}),
-        h('span', {class: 'muted', text: 'Đến hạn của task, bridge không dừng ngay mà kiểm tra xem agy còn hoạt động không (có byte mới ở output, hoặc file log của agy vừa được ghi). Nếu còn thì gia hạn rồi kiểm tra lại sau 1 phút, rồi 5 phút, rồi mỗi 10 phút; nếu không thấy hoạt động trong khoảng đó thì dừng task. Khi bật, bridge yêu cầu agy ghi log vào .bridge-state/agy-logs.'}))),
+        h('span', {class: 'muted', text: 'Đến hạn, bridge kiểm tra agy còn làm việc không và gia hạn thay vì dừng ngay.'}))),
     h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: 'Giới hạn tuyệt đối'}), h('span', {class: 'muted', text: 'Dù còn hoạt động, task vẫn dừng khi tổng thời gian chạy tới mức này.'})), select),
-    h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: tôi chưa biết agy có ghi log trong lúc suy luận ở chế độ --print. Bật rồi giao một task và xem dòng "Log của agy cập nhật…" trong chi tiết task: nếu số KB tăng khi agy đang chạy thì tín hiệu này dùng được. Nếu log không tăng, task sẽ dừng đúng hạn như khi tắt tính năng (không tệ hơn).'}));
+    more('more:soft-timeout',
+      h('p', {text: 'Cụ thể: khi tới hạn của task, bridge không dừng ngay mà kiểm tra xem agy còn hoạt động không (có byte mới ở output, hoặc file log của agy vừa được ghi). Nếu còn thì gia hạn rồi kiểm tra lại sau 1 phút, rồi 5 phút, rồi mỗi 10 phút; nếu không thấy hoạt động trong khoảng đó thì dừng task. Khi bật, bridge yêu cầu agy ghi log vào .bridge-state/agy-logs.'}),
+      h('div', {class: 'callout warn', text: 'Chưa kiểm chứng: tôi chưa biết agy có ghi log trong lúc suy luận ở chế độ --print. Bật rồi giao một task và xem dòng "log agy:" trong chi tiết task: nếu số KB tăng khi agy đang chạy thì tín hiệu này dùng được. Nếu log không tăng, task sẽ dừng đúng hạn như khi tắt tính năng (không tệ hơn).'})));
 }
 function waitCard(o) {
   const wait = o.wait || {seconds: 55, client_tool_timeout_seconds: 115};
@@ -518,9 +547,10 @@ function waitCard(o) {
   const minutes = Math.round(wait.client_tool_timeout_seconds / 60);
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Thời gian chờ mỗi lần Codex / Claude gọi (tiết kiệm token)'}),
     h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: `${wait.seconds} giây`}),
-      h('span', {class: 'muted', text: 'Khi giao task, Codex gọi chờ và bị giữ lại trong một lệnh duy nhất cho đến khi Antigravity xong hoặc hết thời gian này. Trong lúc bị giữ, Codex không tốn token. Càng dài càng ít lần hỏi lại.'})), select),
-    h('div', {class: 'callout warn'}, `Phải đặt thời hạn tool của client LỚN HƠN mức này, nếu không client sẽ cắt lần chờ và báo timeout. Với mức hiện tại: Codex, trong ~/.codex/config.toml mục [mcp_servers.antigravity] đặt `, h('code', {text: `tool_timeout_sec = ${wait.client_tool_timeout_seconds}`}), ` (khoảng ${minutes} phút), rồi mở lại Codex. Claude Code: biến môi trường MCP_TOOL_TIMEOUT (mili giây) lớn hơn ${wait.seconds * 1000}, theo tài liệu của Claude Code (chưa kiểm chứng ở đây). Lệnh \`agy-mcp-bridge setup codex\` in sẵn dòng này theo mức đang chọn.`),
-    h('p', {text: 'Có hiệu lực ngay cho lần chờ sau, không cần khởi động lại bridge. Nếu bạn chưa chắc về thời hạn tool của client, giữ mức 55 giây.'}));
+      h('span', {class: 'muted', text: 'Client bị giữ trong một lệnh duy nhất tối đa mức này; càng dài càng ít lần hỏi lại. Có hiệu lực ngay, không cần khởi động lại.'})), select),
+    more('more:wait',
+      h('div', {class: 'callout warn'}, `Phải đặt thời hạn tool của client LỚN HƠN mức này, nếu không client sẽ cắt lần chờ và báo timeout. Với mức hiện tại: Codex, trong ~/.codex/config.toml mục [mcp_servers.antigravity] đặt `, h('code', {text: `tool_timeout_sec = ${wait.client_tool_timeout_seconds}`}), ` (khoảng ${minutes} phút), rồi mở lại Codex. Claude Code: biến môi trường MCP_TOOL_TIMEOUT (mili giây) lớn hơn ${wait.seconds * 1000}, theo tài liệu của Claude Code (chưa kiểm chứng ở đây). Lệnh \`agy-mcp-bridge setup codex\` in sẵn dòng này theo mức đang chọn.`),
+      h('p', {text: 'Khi giao task, Codex gọi chờ và bị giữ lại trong một lệnh duy nhất cho đến khi Antigravity xong hoặc hết thời gian này. Trong lúc bị giữ, Codex không tốn token. Nếu bạn chưa chắc về thời hạn tool của client, giữ mức 55 giây.'})));
 }
 function effortCard(o) {
   const current = EFFORT_LEVELS.find(level => level.id === (o.effort || 'default')) || EFFORT_LEVELS[0];
@@ -533,14 +563,21 @@ function effortCard(o) {
 }
 function permissionCard(o) {
   const p = o.permission || {level: 'default', controllable: true};
+  const current = PERMISSION_LEVELS.find(level => level.id === p.level) || PERMISSION_LEVELS[0];
+  const sandbox = h('div', {class: 'callout warn', text: 'Danh sách "Workspace được phép" chỉ kiểm tra đường dẫn của task, không phải sandbox. Với mức Tự động hoặc Toàn quyền, Antigravity có thể tác động ra ngoài thư mục đó.'});
+  const risky = p.level === 'auto' || p.level === 'full';
   return h('section', {class: 'card panel wide'}, h('h2', {text: 'Quyền của Antigravity'}),
-    h('p', {text: 'Mức quyền Antigravity có khi làm task. Chỉ bạn đổi được ở đây; Codex / Claude không đổi được. Áp dụng cho task mới, không cần khởi động lại. Hạ mức xuống thì áp dụng cả cho task đang chờ; nâng mức lên thì không.'}),
     h('div', {class: 'perm-list', role: 'radiogroup', 'aria-label': 'Quyền của Antigravity'}, PERMISSION_LEVELS.map(level =>
       h('label', {class: `perm-row${level.id === 'full' ? ' danger' : ''}${p.level === level.id ? ' on' : ''}`},
         h('input', {type: 'radio', name: 'perm', value: level.id, checked: p.level === level.id, disabled: !p.controllable, onchange: () => setPermission(level.id)}),
-        h('span', {}, h('strong', {text: level.title}), h('span', {class: 'muted', text: level.text}))))),
+        h('span', {}, h('strong', {text: level.title}))))),
+    h('p', {text: current.text}),
+    risky ? sandbox : null,
     p.controllable ? null : h('div', {class: 'callout warn', text: `Đang bị khóa bởi biến môi trường BRIDGE_AGY_PERMISSIONS${p.reason && p.reason !== 'BRIDGE_AGY_PERMISSIONS' ? ` (${p.reason})` : ''}. Đổi biến rồi khởi động lại server để mở.`}),
-    h('div', {class: 'callout warn', text: 'Danh sách "Workspace được phép" chỉ kiểm tra đường dẫn của task, không phải sandbox. Với mức Tự động hoặc Toàn quyền, Antigravity có thể tác động ra ngoài thư mục đó.'}));
+    more('more:permission',
+      h('p', {text: 'Mức quyền Antigravity có khi làm task. Chỉ bạn đổi được ở đây; Codex / Claude không đổi được. Áp dụng cho task mới, không cần khởi động lại. Hạ mức xuống thì áp dụng cả cho task đang chờ; nâng mức lên thì không.'}),
+      h('ul', {class: 'list'}, PERMISSION_LEVELS.map(level => h('li', {}, h('strong', {text: `${level.title}: `}), level.text))),
+      risky ? null : sandbox));
 }
 function usageView(u) {
   const head = h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Sử dụng'}), h('p', {text: 'Số liệu bridge ghi lại từ các task đã chạy qua nó.'})),
@@ -557,33 +594,38 @@ function usageView(u) {
   const sums = Object.entries(t.usage);
   const usageCard = h('section', {class: 'card panel wide'}, h('h2', {text: 'Usage do agy báo'}),
     sums.length ? [h('dl', {class: 'rows'}, sums.map(([key, value]) => row(usageName(key), number(value)))),
-        h('p', {class: 'muted', text: `Cộng dồn từ ${number(t.with_usage)} task có trường usage trong kết quả của agy. Tên trường do agy quyết định; bridge cộng mọi giá trị số.`})]
+        more('more:usage-sums', h('p', {class: 'muted', text: `Cộng dồn từ ${number(t.with_usage)} task có trường usage trong kết quả của agy. Tên trường do agy quyết định; bridge cộng mọi giá trị số.`}))]
       : h('p', {class: 'muted', text: 'Chưa có task nào mà kết quả của agy kèm số liệu usage. Với task chạy ở chế độ JSON hoặc stream, nếu agy trả trường usage thì tổng sẽ hiện ở đây.'}));
   const peak = Math.max(1, ...u.by_day.map(d => d.tasks));
-  const bars = h('div', {class: 'bars'}, u.by_day.map(d => {
+  const bar = d => {
     const fill = h('div', {class: 'bar-fill'}); fill.style.width = `${(d.tasks / peak * 100).toFixed(1)}%`;
     return h('div', {class: 'bar-row'}, h('span', {class: 'muted mono', text: `${d.day.slice(8)}/${d.day.slice(5, 7)}`}), h('div', {class: 'bar-track'}, fill),
-      h('span', {class: 'mono', text: d.tasks ? `${d.tasks} · ${duration(d.duration_ms)}` : '0'}));
-  }));
-  const dayCard = h('section', {class: 'card panel wide'}, h('h2', {text: '14 ngày gần nhất'}), bars);
+      h('span', {class: 'mono', text: `${d.tasks} · ${duration(d.duration_ms)}`}));
+  };
+  const active = u.by_day.filter(d => d.tasks);
+  const dayCard = h('section', {class: 'card panel wide'}, h('h2', {text: '14 ngày gần nhất'}),
+    active.length ? h('div', {class: 'bars'}, active.map(bar)) : h('p', {class: 'muted', text: 'Không có task nào trong 14 ngày gần nhất.'}),
+    active.length && active.length < u.by_day.length ? h('p', {class: 'muted', text: `${u.by_day.length - active.length} ngày còn lại không có task.`}) : null);
   const groupTable = (title, groups, firstColumn) => h('section', {class: 'card panel wide'}, h('h2', {text: title}),
     groups.length ? h('table', {class: 'usage-table'}, h('thead', {}, h('tr', {}, ...[firstColumn, 'Task', 'Hoàn tất', 'Thời gian', 'Usage'].map(c => h('th', {text: c})))),
-      h('tbody', {}, groups.map(g => h('tr', {}, h('td', {class: 'mono', text: g.key}), h('td', {text: number(g.tasks)}), h('td', {text: number(g.completed)}), h('td', {text: duration(g.duration_ms)}), h('td', {class: 'muted', text: usageLine(g.usage) ?? '—'})))))
+      h('tbody', {}, groups.map(g => h('tr', {}, h('td', {class: 'mono', text: g.key}), h('td', {text: number(g.tasks)}), h('td', {text: number(g.completed)}), h('td', {text: duration(g.duration_ms)}),
+        h('td', {class: 'muted', title: usageLine(g.usage) ?? '', text: usageBrief(g.usage)})))))
       : h('p', {class: 'muted', text: 'Chưa có dữ liệu.'}));
   const recent = h('section', {class: 'card panel wide'}, h('h2', {text: 'Task gần nhất'}),
     u.recent.length ? h('ul', {class: 'path-list'}, u.recent.map(r => h('li', {}, `${clock(r.at)} · ${STATUS[r.status] || r.status} · ${r.model || 'model mặc định'} · effort ${r.effort || 'mặc định'} · ${duration(r.duration_ms)}`,
-      usageLine(r.usage) ? h('span', {class: 'tag', text: usageLine(r.usage)}) : null))) : h('p', {class: 'muted', text: 'Chưa có task nào.'}));
-  return [head, callout, cards, usageCard, dayCard, groupTable('Theo model', u.by_model, 'Model'), groupTable('Theo mức suy luận', u.by_effort, 'Effort'), recent];
+      r.usage && Object.keys(r.usage).length ? h('span', {class: 'tag', title: usageLine(r.usage), text: usageBrief(r.usage)}) : null))) : h('p', {class: 'muted', text: 'Chưa có task nào.'}));
+  return [head, cards, usageCard, dayCard, groupTable('Theo model', u.by_model, 'Model'), groupTable('Theo mức suy luận', u.by_effort, 'Effort'), recent,
+    more('more:usage', callout)];
 }
 function settingsView(o) {
   const delegation = o.delegation;
-  return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Trạng thái và giới hạn của bridge. Phần lớn chỉ đọc; chỉnh bằng file cấu hình rồi khởi động lại.'}))),
+  return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Mọi thứ đổi được ở đây áp dụng cho task mới, không cần khởi động lại. Giới hạn cứng vẫn nằm trong config/workspaces.json.'}))),
     h('div', {class: 'settings'},
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Giao việc cho agent'}),
         h('div', {class: 'switch-row'}, h('div', {}, h('strong', {text: delegation.enabled ? 'Đang bật' : 'Đã tắt'}),
           h('span', {class: 'muted', text: delegation.enabled ? 'Codex / Claude có thể giao task mới.' : `Task mới bị từ chối. ${delegation.reason || ''}`})),
           switchControl(delegation.enabled, delegation.controllable, 'Cho phép giao việc cho Antigravity')),
-        delegation.controllable ? h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy hoặc đang chờ không bị dừng, nhưng task đang chờ sẽ bị hủy khi đến lượt. Có hiệu lực ngay, không cần khởi động lại.'})
+        delegation.controllable ? more('more:delegation', h('p', {text: 'Tắt để buộc Codex / Claude tự làm. Task đang chạy hoặc đang chờ không bị dừng, nhưng task đang chờ sẽ bị hủy khi đến lượt. Có hiệu lực ngay, không cần khởi động lại.'}))
           : h('div', {class: 'callout warn', text: 'Đang bị khóa bởi biến môi trường BRIDGE_DELEGATION. Đổi biến rồi khởi động lại server để mở.'})),
       modelCard(o),
       effortCard(o),
@@ -594,30 +636,33 @@ function settingsView(o) {
       permissionCard(o),
       h('section', {class: 'card panel'}, h('h2', {text: 'Kết nối'}),
         h('div', {class: 'copy-row'}, h('code', {text: o.server.mcp_endpoint}), h('button', {class: 'btn small', onclick: () => copy(o.server.mcp_endpoint), text: 'Sao chép'})),
-        h('dl', {class: 'rows'}, row('Giao thức', 'MCP Streamable HTTP'), row('Xác thực', 'Không — chỉ 127.0.0.1'), row('Phiên bản bridge', o.server.version),
-          row('Khởi động', clock(o.server.started_at))),
-        h('p', {class: 'callout warn', text: 'Không có xác thực: bất kỳ tiến trình nào chạy trên máy này với cùng user đều có thể điều khiển bridge. Không mở cổng ra ngoài.'})),
+        h('dl', {class: 'rows'}, row('Phiên bản bridge', o.server.version)),
+        h('p', {class: 'callout warn', text: 'Không có xác thực: bất kỳ tiến trình nào chạy trên máy này với cùng user đều có thể điều khiển bridge. Không mở cổng ra ngoài.'}),
+        more('more:connect', h('dl', {class: 'rows'}, row('Giao thức', 'MCP Streamable HTTP'), row('Xác thực', 'Không — chỉ 127.0.0.1'), row('Khởi động', clock(o.server.started_at))))),
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Agent CLI'}),
         h('div', {class: 'agent-list'}, (o.agents || []).length ? (o.agents || []).map(agent => h('div', {class: 'switch-row'},
           h('div', {}, h('strong', {text: `${agent.label} · ${agent.id}`}),
-            h('span', {class: 'muted', text: [agent.enabled ? 'đang bật' : 'đã tắt', agent.version || 'không rõ phiên bản', (agent.capabilities || []).join(', ')].filter(Boolean).join(' · ')})),
+            h('span', {class: 'muted', text: [agent.enabled ? 'đang bật' : 'đã tắt', agent.version || 'không rõ phiên bản'].filter(Boolean).join(' · ')})),
           h('span', {class: `pill ${agent.enabled && agent.available ? 'ok' : agent.enabled ? 'bad' : 'warn'}`, text: !agent.enabled ? 'Tắt' : agent.available ? 'Sẵn sàng' : 'Không có'}))) : h('p', {class: 'muted', text: 'Chưa có agent nào được cấu hình.'})),
         h('p', {class: 'muted', text: `Agent mặc định: ${o.default_agent || 'không có'}. Thứ tự ưu tiên đặt trong config/workspaces.json.`}),
-        (o.agents || []).some(agent => (agent.warnings || []).length) ? h('div', {class: 'callout warn', text: (o.agents || []).flatMap(agent => agent.warnings || []).join(' · ')}) : null),
+        (o.agents || []).some(agent => (agent.warnings || []).length) ? h('div', {class: 'callout warn', text: (o.agents || []).flatMap(agent => agent.warnings || []).join(' · ')}) : null,
+        more('more:agents', h('ul', {class: 'list'}, (o.agents || []).map(agent => h('li', {},
+          h('strong', {text: `${agent.label}: `}), (agent.capabilities || []).join(', ') || 'không có capability nào'))))),
       h('section', {class: 'card panel'}, h('h2', {text: 'Antigravity CLI'}),
-        h('dl', {class: 'rows'}, row('Trạng thái', o.cli.bridge_status), row('Phiên bản', o.cli.version), row('Đường dẫn', o.cli.executable || '—'),
-          row('Cách chạy', o.cli.execution_method || '—')),
-        h('p', {text: o.cli.authentication})),
+        h('dl', {class: 'rows'}, row('Trạng thái', o.cli.bridge_status), row('Phiên bản', o.cli.version)),
+        h('p', {text: o.cli.authentication}),
+        more('more:cli', h('dl', {class: 'rows'}, row('Đường dẫn', o.cli.executable || '—'), row('Cách chạy', o.cli.execution_method || '—')))),
       h('section', {class: 'card panel'}, h('h2', {text: 'Workspace được phép'}),
         o.allowed_workspaces.length ? h('ul', {class: 'path-list'}, o.allowed_workspaces.map(p => h('li', {}, p, (o.session_workspaces || []).includes(p) ? h('span', {class: 'tag', text: 'chỉ lần chạy này'}) : null)))
           : h('div', {class: 'callout warn', text: 'Chưa có workspace nào. Thêm đường dẫn tuyệt đối vào config/workspaces.json rồi khởi động lại.'})),
       h('section', {class: 'card panel'}, h('h2', {text: 'Giới hạn'}),
-        h('dl', {class: 'rows'}, row('Timeout tối đa', `${o.limits.max_timeout_seconds ?? '—'}s`), row('Output mỗi luồng', bytes(o.limits.max_output_bytes_per_stream ?? 0)),
+        h('p', {text: `${o.limits.concurrent_normal_tasks ?? 1} task thường + ${o.limits.max_parallel_worktrees ?? o.concurrency?.max_parallel_worktrees ?? '—'} worktree cùng lúc, hàng đợi tối đa ${o.limits.max_queued_tasks ?? '—'}, timeout tối đa ${o.limits.max_timeout_seconds ?? '—'}s.`}),
+        more('more:limits', h('dl', {class: 'rows'}, row('Timeout tối đa', `${o.limits.max_timeout_seconds ?? '—'}s`), row('Output mỗi luồng', bytes(o.limits.max_output_bytes_per_stream ?? 0)),
           row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task thường chạy cùng lúc', o.limits.concurrent_normal_tasks ?? 1),
           row('Worktree chạy song song', o.limits.max_parallel_worktrees ?? o.concurrency?.max_parallel_worktrees ?? '—'),
           row('Quyền tự duyệt mặc định', o.default_autonomy ?? 'auto'),
-          row('Hàng đợi tối đa', o.limits.max_queued_tasks ?? '—'))),
-      h('section', {class: 'card panel wide'}, h('h2', {text: 'Lưu ý khi dùng'}), h('ul', {class: 'list'}, o.limitations.map(item => h('li', {text: item})))),
+          row('Hàng đợi tối đa', o.limits.max_queued_tasks ?? '—')))),
+      h('section', {class: 'card panel wide'}, collapsible('more:limitations', 'Lưu ý khi dùng', h('ul', {class: 'list'}, o.limitations.map(item => h('li', {text: item}))))),
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Dừng bridge'}),
         h('p', {text: 'Đóng tab không dừng server. Nút này tắt HTTP server, hủy task đang chạy hoặc đang chờ và dọn các tiến trình agent do bridge khởi tạo. Không thể hoàn tác.'}),
         h('button', {class: 'btn danger', onclick: shutdownBridge, text: 'Tắt bridge'})))];

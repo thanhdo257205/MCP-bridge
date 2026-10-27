@@ -59,7 +59,7 @@ button { cursor: pointer; }
 .page-head p { margin: 2px 0 0; color: var(--muted); }
 
 /* Stats */
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 20px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
 .stat { padding: 16px 18px; display: grid; gap: 4px; }
 .stat .label { color: var(--muted); font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
@@ -137,6 +137,14 @@ details > summary::-webkit-details-marker { display: none; }
 details > summary::after { content: "+"; color: var(--muted); font-weight: 400; font-size: 18px; line-height: 1; }
 details[open] > summary::after { content: "–"; }
 details .body { padding: 0 14px 14px; display: grid; gap: 10px; }
+/* Secondary text: quiet until opened, so the decisions on screen stay the loudest thing. */
+details.more { background: var(--surface-2); }
+details.more > summary { padding: 7px 12px; font-size: 12.5px; font-weight: 650; color: var(--muted); }
+details.more:hover > summary { color: var(--text); }
+details.more[open] > summary { border-bottom: 1px solid var(--border); }
+details.more .body { padding: 10px 12px 12px; }
+.meta-line { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.detail-head .meta-line { margin-top: 2px; }
 .change-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .change-list { margin: 0; padding: 0; list-style: none; display: grid; max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 .change-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 13px; }
@@ -198,7 +206,7 @@ pre.log { margin: 0; padding: 12px; border-radius: 10px; background: #0b0e14; co
 .progress { display: grid; gap: 6px; margin: 4px 0 12px; }
 .bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; border: 1px solid var(--border); }
 .bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .9s linear; }
-.perm-list { display: grid; gap: 8px; margin: 12px 0; }
+.perm-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 12px 0; }
 .perm-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .perm-row.on { border-color: var(--accent); background: var(--surface-2); }
 .perm-row.danger.on { border-color: var(--bad); }
