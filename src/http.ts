@@ -4,6 +4,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createServer } from './tools/register.js';
 import type { TaskManager } from './tasks/manager.js';
+import type { MissionManager } from './missions/missions.js';
 import { requestContext } from './request-context.js';
 import { handleUi } from './ui/routes.js';
 
@@ -15,13 +16,13 @@ export function configuredPort(value = process.env.PORT): number {
 }
 
 export async function startHttpBridge(options: {
-  manager: TaskManager; environment: Record<string, unknown>; port: number;
+  manager: TaskManager; missions: MissionManager; environment: Record<string, unknown>; port: number;
   requestShutdown?: () => Promise<void>;
 }) {
   let stopping = false;
   let baseUrl = '';
-  const ui = {manager: options.manager, environment: options.environment, mcpUrl: () => `${baseUrl}/mcp`, startedAt: Date.now(), requestShutdown: options.requestShutdown};
-  const handler = createMcpHandler(() => createServer(options.manager, options.environment), {maxRequestBodySize: 131072, maxSubscriptions: 16});
+  const ui = {manager: options.manager, missions: options.missions, environment: options.environment, mcpUrl: () => `${baseUrl}/mcp`, startedAt: Date.now(), requestShutdown: options.requestShutdown};
+  const handler = createMcpHandler(() => createServer(options.manager, options.environment, options.missions), {maxRequestBodySize: 131072, maxSubscriptions: 16});
   const mcp = toNodeHandler(handler, {maxRequestBodySize: 131072});
   const server = createHttpServer((req, res) => {
     const reply = (code: number, body: Record<string, unknown>) => {
@@ -40,7 +41,24 @@ export async function startHttpBridge(options: {
     }
     if (stopping) { reply(503, {error: 'Bridge is shutting down. Restart it (agy-mcp-bridge, or npm start in a git checkout) before reconnecting.'}); return; }
     if (req.url === '/health' && req.method === 'GET') {
-      reply(200, {status: 'ok', transport: 'streamable-http', mcp_endpoint: `${baseUrl}/mcp`, ...options.manager.overview()}); return;
+      reply(200, {status: 'ok', transport: 'streamable-http', mcp_endpoint: `${baseUrl}/mcp`, ...options.manager.overview(), missions: options.missions.overview()}); return;
+    }
+    if (req.url === '/api/xerj/status' && req.method === 'GET') {
+      const xerj = options.manager.getXerjClient();
+      void xerj.isAvailable().then(async available => {
+        const indices = available ? await xerj.listIndices() : [];
+        reply(200, {available, url: xerj.url, default_index: xerj.defaultIndex, indices});
+      }).catch(() => reply(200, {available: false, url: xerj.url, default_index: xerj.defaultIndex, indices: []}));
+      return;
+    }
+    if (req.url?.startsWith('/api/xerj/search') && req.method === 'GET') {
+      const parsed = new URL(req.url, baseUrl || 'http://127.0.0.1:3000');
+      const q = parsed.searchParams.get('q') ?? '';
+      const limit = parseInt(parsed.searchParams.get('limit') ?? '5', 10);
+      const index = parsed.searchParams.get('index') ?? undefined;
+      const xerj = options.manager.getXerjClient();
+      void xerj.search(q, {limit, index}).then(result => reply(200, result as unknown as Record<string, unknown>)).catch(() => reply(500, {error: 'Search failed'}));
+      return;
     }
     if (req.url !== '/mcp') { reply(404, {error: 'Use /mcp for MCP or GET /health for health checks'}); return; }
     void requestContext.run({userAgent: req.headers['user-agent']}, () => mcp(req, res)).catch(() => {

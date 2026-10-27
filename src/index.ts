@@ -5,7 +5,7 @@ import { createRuntime } from './runtime.js';
 import { configuredPort, startHttpBridge } from './http.js';
 async function main() {
   const port = configuredPort();
-  const {manager, environment} = await createRuntime();
+  const {manager, missions, environment} = await createRuntime();
   let stopping = false;
   let closeBridge: (() => Promise<void>) | undefined;
   const shutdown = async () => {
@@ -19,7 +19,7 @@ async function main() {
     }
     catch { console.error('[bridge] Cleanup failed; inspect owned processes and execution lock'); process.exitCode = 1; }
   };
-  const bridge = await startHttpBridge({manager, environment, port, requestShutdown: shutdown});
+  const bridge = await startHttpBridge({manager, missions, environment, port, requestShutdown: shutdown});
   closeBridge = bridge.close;
   console.error(`[bridge] HTTP server: ${bridge.baseUrl}`);
   console.error(`[bridge] MCP endpoint: ${bridge.mcpUrl}`);

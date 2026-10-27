@@ -68,9 +68,9 @@ export function childEnvironment(parent:NodeJS.ProcessEnv, extra:string[]=[]):No
   return Object.fromEntries(Object.entries(parent).filter(([key,value])=>value!==undefined&&
     (explicit.has(key.toUpperCase())||(base.test(key)&&!/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))));
 }
-export interface ProcessOptions {extraEnvPassthrough?:string[];stdin?:string;}
+export interface ProcessOptions {extraEnvPassthrough?:string[];stdin?:string;customEnv?:Record<string,string>;}
 export function startProcess(executable: string, args: string[], cwd: string, options:ProcessOptions={}): ChildProcess {
-  const env = childEnvironment(process.env,options.extraEnvPassthrough);
+  const env = {...childEnvironment(process.env,options.extraEnvPassthrough),...(options.customEnv??{})};
   const child = spawn(executable, args, {
     cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe']

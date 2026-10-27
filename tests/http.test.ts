@@ -11,7 +11,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { startHttpBridge, configuredPort, DEFAULT_PORT } from '../src/http.js';
 import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
-import { waitUntilDead } from './helpers.js';
+import { waitUntilDead, missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 const project = fileURLToPath(new URL('../../',import.meta.url));
@@ -20,7 +20,7 @@ async function setup(scenario='hang', port=0) {
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(_args,cwd)=>startProcess(process.execPath,[fixture,scenario],cwd)});
   const environment:Record<string,unknown>={cli_version:'mock',allowed_workspaces:[workspace]};
-  const bridge=await startHttpBridge({manager,environment,port});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment,port});
   return {root,workspace,manager,bridge,environment};
 }
 async function connect(url:string, mode:'auto'|'legacy'='auto') {
@@ -52,7 +52,7 @@ test('no authentication, Host/Origin guarded, body bounded and both protocol era
     assert.equal(badHost,403);
     assert.equal((await fetch(bridge.mcpUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(140000)})).status,413);
     assert.equal((await fetch(bridge.healthUrl,{headers:{Authorization:'Bearer anything'}})).status,200);
-    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,mode);try{assert.equal((await client.listTools()).tools.length,7);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');assert.equal((await call(client,'agents_list')).default_agent,'antigravity');}finally{await client.close();}}
+    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,mode);try{assert.equal((await client.listTools()).tools.length,13);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');assert.equal((await call(client,'agents_list')).default_agent,'antigravity');}finally{await client.close();}}
   } finally {await bridge.close();}
 });
 test('client disconnect preserves running task; reconnect can query and cancel it',async()=>{
@@ -172,7 +172,7 @@ test('web UI: the task page is handed the verdict on the trees the agent left be
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),
       launch:(_args,cwd)=>startProcess(process.execPath,[fixture,'ok'],cwd),
       reapTree:async()=>({checked:true,reaped:[601],skipped:[{pid:602,name:'node.exe',guard:'pid was reissued to another process after the tree query'}],tracked:2})});
-  const bridge=await startHttpBridge({manager,environment:{},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{},port:0});
   try {
     const id=String((await manager.delegate({task:'mock',workspace,acceptance_criteria:['ok']})).task_id);
     await manager.wait(id);

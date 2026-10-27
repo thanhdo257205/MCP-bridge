@@ -24,6 +24,8 @@ import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
+import { globalHealthTracker, isHardTask } from '../agents/quota.js';
+import { XerjClient } from '../xerj/client.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
@@ -63,6 +65,10 @@ interface Entry {
   finish?: () => void;
   /** Validated input and the resolved agent kept until the process starts (a queued task waits with it). */
   pending?: {input: DelegateInput; workspace: string; timeout: number; agent: AgentRuntime; autonomy: Autonomy};
+  poolId?: string;
+  poolTried?: Set<string>;
+  worktreeInfo?: Worktree;
+  holdsLock?: boolean;
   /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
   lastOutputAt?: number;
   /** Log file agy was asked to write (only when the soft deadline is on); its modification time is a liveness signal. */
@@ -103,15 +109,35 @@ export class TaskManager {
   private pendingRelease = new Set<Promise<void>>();
   private readonly agents: AgentRuntime[];
   private readonly defaultAgent: string | null;
+  private xerjClient: XerjClient;
   constructor(private config: Config, private runtime: Runtime) {
     this.agents = runtime.agents?.length
       ? runtime.agents
       : [legacyAntigravityAgent(runtime, config.prompt_transport)];
     this.defaultAgent = runtime.defaultAgent ?? this.agents.find(agent => agent.enabled && agent.status.available)?.adapter.id ?? null;
+    this.xerjClient = new XerjClient({ url: config.xerj?.url, defaultIndex: config.xerj?.default_index });
   }
 
+  getXerjClient(): XerjClient { return this.xerjClient; }
+  setXerjClient(client: XerjClient): void { this.xerjClient = client; }
+
   private get maxParallelWorktrees(): number { return this.config.max_parallel_worktrees ?? 2; }
-  private selectAgent(id?: string): AgentRuntime {
+  private selectAgent(id?: string, taskInput?: DelegateInput): AgentRuntime {
+    const pools = this.config.agents?.pools ?? {};
+    const targetPoolId = (id && pools[id]) ? id : (!id && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
+    if (targetPoolId) {
+      const pool = pools[targetPoolId];
+      const isHard = taskInput ? isHardTask(taskInput) : false;
+      const pickedId = globalHealthTracker.selectProfile(
+        pool,
+        isHard,
+        (candId) => this.agents.some(a => a.adapter.id === candId && a.enabled && a.status.available)
+      );
+      if (pickedId) {
+        const found = this.agents.find(a => a.adapter.id === pickedId);
+        if (found) return found;
+      }
+    }
     if (id !== undefined) {
       const agent = this.agents.find(item => item.adapter.id === id);
       if (!agent) throw new Error(`Unknown agent "${id}". Known agents: ${this.agents.map(item => item.adapter.id).join(', ')}`);
@@ -168,8 +194,8 @@ export class TaskManager {
     if (this.closing) throw new Error('Bridge is shutting down');
 
     let agent: AgentRuntime | undefined;
-    if (input.agent !== undefined) agent = this.selectAgent(input.agent);
-    else try { agent = this.selectAgent(); } catch { agent = undefined; }
+    if (input.agent !== undefined) agent = this.selectAgent(input.agent, input);
+    else try { agent = this.selectAgent(undefined, input); } catch { agent = undefined; }
     const supported = Boolean(agent?.status.available);
     const autonomy = input.autonomy ?? this.config.default_autonomy ?? 'auto';
 
@@ -198,7 +224,10 @@ export class TaskManager {
       stdout_truncated: false, stderr_truncated: false,
       final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
     };
+    const pools = this.config.agents?.pools ?? {};
+    const poolId = (input.agent && pools[input.agent]) ? input.agent : (!input.agent && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
     const entry: Entry = {
+      poolId,
       task, done: Promise.resolve(), pending: supported ? {input, workspace, timeout, agent: agent!, autonomy} : undefined,
       request: {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
@@ -241,8 +270,8 @@ export class TaskManager {
   private async launch(entry: Entry): Promise<void> {
     const {task} = entry;
     const {input, workspace, timeout, agent, autonomy} = entry.pending!;
-    let ownsLock = false;
-    let worktree: Worktree | null = null;
+    let ownsLock = Boolean(entry.holdsLock);
+    let worktree: Worktree | null = entry.worktreeInfo ?? null;
     let execWorkspace = workspace;
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
@@ -253,14 +282,21 @@ export class TaskManager {
       }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       if (task.isolation === 'worktree') {
-        worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+        if (!worktree) {
+          worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+          entry.worktreeInfo = worktree;
+          task.worktree = worktree.root;
+          task.branch = worktree.branch;
+          task.worktree_toplevel = worktree.toplevel;
+          if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
+        }
         execWorkspace = worktree.workspace;
         task.worktree = worktree.root;
         task.branch = worktree.branch;
         task.worktree_toplevel = worktree.toplevel;
         // Keep the regenerated prompt equal to the one the agent received (the worktree workspace, not the original one).
         if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
-      } else {
+      } else if (!ownsLock) {
         try { await mkdir(lock); ownsLock = true; }
         catch {
           const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
@@ -268,6 +304,7 @@ export class TaskManager {
           await mkdir(lock);ownsLock=true;
         }
       }
+      entry.holdsLock = ownsLock;
       const checkStarting = () => {
         if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
       };
@@ -278,6 +315,23 @@ export class TaskManager {
       await this.persist(task);
       checkStarting();
       const promptInput = {...input, workspace: execWorkspace, autonomy};
+      if (this.config.xerj?.auto_reference !== false) {
+        try {
+          const searchRes = await this.xerjClient.search(input.task, {
+            limit: this.config.xerj?.max_passages ?? 3
+          });
+          if (searchRes.available && searchRes.hits.length > 0) {
+            const referenceBlock = this.xerjClient.formatPassagesForPrompt(searchRes.hits);
+            if (referenceBlock) {
+              promptInput.context = promptInput.context
+                ? `${promptInput.context}\n\n${referenceBlock}`
+                : referenceBlock;
+            }
+          }
+        } catch {
+          // Best-effort auto-reference
+        }
+      }
       // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
       const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
       if(entry.request)entry.request.permission=permission;
@@ -307,7 +361,7 @@ export class TaskManager {
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
       const streaming = invocation.transport !== undefined && invocation.transport !== 'argv';
-      const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin};
+      const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin, customEnv: invocation.customEnv};
       const child = agent.launch
         ? agent.launch(invocation.args, execWorkspace, options)
         : startProcess(invocation.executable, [...(agent.prefixArgs ?? []), ...invocation.args], execWorkspace, options);
@@ -445,6 +499,32 @@ export class TaskManager {
               finalStatus = 'completed';
             } else {
               task.error = result.error ? redact(result.error) : `${agent.adapter.label} did not provide a complete successful response`;
+              if (result.isQuotaExceeded) {
+                const poolConfig = entry.poolId ? this.config.agents?.pools?.[entry.poolId] : undefined;
+                const cooldown = poolConfig?.quota_cooldown_seconds ?? 900;
+                globalHealthTracker.markCooldown(agent.adapter.id, cooldown);
+                console.error(`[bridge] Agent profile "${agent.adapter.id}" exhausted quota/rate limit. Marked in cooldown (${cooldown}s).`);
+                if (poolConfig) {
+                  const nextId = globalHealthTracker.selectProfile(
+                    poolConfig,
+                    isHardTask(input),
+                    (candidateId) => candidateId !== agent.adapter.id && this.agents.some(a => a.adapter.id === candidateId && a.enabled && a.status.available)
+                  );
+                  if (nextId && nextId !== agent.adapter.id) {
+                    const nextAgent = this.agents.find(a => a.adapter.id === nextId);
+                    if (nextAgent) {
+                      console.error(`[bridge] Task ${task.task_id} auto-failing over from "${agent.adapter.id}" to "${nextId}"...`);
+                      entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
+                      task.agent = nextId;
+                      task.error = null;
+                      task.stdout = '';
+                      task.stderr = '';
+                      if (ownsLock) await rmdir(lock).catch(() => {});
+                      return this.launch(entry);
+                    }
+                  }
+                }
+              }
             }
           } catch (error) {
             task.error ??= error instanceof Error ? redact(error.message) : `Could not parse ${agent.adapter.label} output`;

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isQuotaError } from './quota.js';
 import { startProcess, terminateOwned, type ResolvedCommand } from '../antigravity/process.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
@@ -7,22 +8,30 @@ const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', '
 const REQUIRED_FLAGS = ['--json', '--sandbox', '--cd', '--output-last-message', '--ephemeral', '--skip-git-repo-check'];
 const MAX_RESULT_BYTES = 1024 * 1024;
 
-export interface CodexOptions { model?: string; }
+export interface CodexOptions {
+  id?: string;
+  label?: string;
+  model?: string;
+  sandbox?: 'workspace-write' | 'danger-full-access' | 'read-only' | string;
+  askForApproval?: 'never' | 'auto' | 'always' | string;
+  env?: Record<string, string>;
+}
 
 export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {}): AgentAdapter {
   return {
-    id: 'codex',
-    label: 'Codex',
+    id: options.id ?? 'codex',
+    label: options.label ?? 'Codex',
     capabilities: CAPABILITIES,
     buildInvocation(task) {
       const resultFile = path.join(task.stateDirectory, 'results', `${task.taskId}.txt`);
       const args = [
-        'exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--ephemeral',
+        'exec', '--json', '--sandbox', options.sandbox ?? 'workspace-write', '--skip-git-repo-check', '--ephemeral',
         '--cd', task.workspace, '--color', 'never', '-o', resultFile
       ];
+      if (options.askForApproval) args.push('--ask-for-approval', options.askForApproval);
       if (options.model) args.push('-m', options.model);
       args.push('-');
-      return {executable: command.executable, args, stdin: `${task.prompt}\n`, resultFile};
+      return {executable: command.executable, args, stdin: `${task.prompt}\n`, resultFile, customEnv: options.env};
     },
     async parseResult(raw: RawRun): Promise<AgentResult> {
       const events: Record<string, unknown>[] = [];
@@ -66,7 +75,9 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
       if (raw.exitCode === 0 && response?.trim()) return {...result, success: true, numTurns: turns || 1};
       if (raw.signal) return {...result, error: `Codex was terminated (${raw.signal})`};
       const stderrTail = raw.stderr.trim().split(/\r?\n/).filter(Boolean).at(-1);
-      return {...result, error: errors.at(-1) ?? stderrTail?.slice(0, 500) ?? 'Codex did not provide a final message'};
+      const finalErr = errors.at(-1) ?? stderrTail?.slice(0, 500) ?? 'Codex did not provide a final message';
+      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isQuotaError(raw.stdout);
+      return {...result, error: finalErr, isQuotaExceeded: quotaHit};
     }
   };
 }

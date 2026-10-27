@@ -3,8 +3,8 @@ import { createRuntime } from './runtime.js';
 import { createServer } from './tools/register.js';
 
 async function main() {
-  const {manager, environment} = await createRuntime();
-  const handle = serveStdio(() => createServer(manager, {...environment, transport: 'stdio'}), {onerror: () => console.error('[bridge] MCP transport error')});
+  const {manager, missions, environment} = await createRuntime();
+  const handle = serveStdio(() => createServer(manager, {...environment, transport: 'stdio'}, missions), {onerror: () => console.error('[bridge] MCP transport error')});
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;

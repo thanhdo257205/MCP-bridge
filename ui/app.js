@@ -1,9 +1,12 @@
 'use strict';
 // All dynamic text is inserted with textContent. Model output is untrusted and must never reach innerHTML.
 const STATUS = {queued: 'Đang chờ', running: 'Đang chạy', completed: 'Hoàn tất', failed: 'Thất bại', timeout: 'Quá hạn', canceled: 'Đã hủy', unsupported: 'Không hỗ trợ'};
+// ready/pending/lost come from the bridge itself; every other step state is the state of the task that step was dispatched as.
+const STEP_STATE = {ready: 'Sẵn sàng', pending: 'Chờ bước trước', lost: 'Mất bản ghi'};
 const NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
   tasks: 'M4 6h16M4 12h16M4 18h10',
+  missions: 'M4 5h4v4H4zM4 15h4v4H4zM16 10h4v4h-4zM8 7h3a2 2 0 0 1 2 2v3M8 17h3a2 2 0 0 0 2-2v-3',
   usage: 'M4 20V10M10 20V4M16 20v-8M22 20H2',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   out: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'
@@ -16,6 +19,7 @@ const MATCH = {
 };
 const state = {
   overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
+  missions: null, selectedMission: null, plan: null,
   open: new Set(), changes: null, connected: true, toast: '', q: '', filter: 'all'
 };
 let timer = null;
@@ -41,6 +45,8 @@ function icon(name) {
   return svg;
 }
 function pill(status) { return h('span', {class: `pill ${status}`, text: STATUS[status] || status}); }
+const stepLabel = value => STEP_STATE[value] || STATUS[value] || value;
+function stepPill(value) { return h('span', {class: `pill ${value}`, text: stepLabel(value)}); }
 
 function ago(iso) {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
@@ -170,6 +176,41 @@ function followChanges() {
   if (state.changes?.task_id !== task.task_id || state.changes.loading) return;
   void loadChanges(task.task_id, true);
 }
+/* ---------- Mission page: read the recorded plan, stop it, never start a step ---------- */
+let missionsAt = 0;
+/** A step changes state only when its task does, so the list is read when the page opens and then at most every 8 seconds. */
+async function loadMissions(force) {
+  if (!force && Date.now() - missionsAt < 8000) return;
+  missionsAt = Date.now();
+  try { state.missions = await api('missions'); } catch { /* keep the list already on screen */ }
+  patch();
+}
+/** The recorded task text is the one thing the progress list leaves out, so it is fetched only for the opened plan. */
+async function loadPlan(id) {
+  state.plan = {mission_id: id, loading: true}; patch();
+  try { state.plan = {mission_id: id, data: await api(`missions/${id}`)}; }
+  catch (error) { state.plan = {mission_id: id, error: error.message}; }
+  patch();
+}
+function selectMission(id) {
+  state.selectedMission = state.selectedMission === id ? null : id;
+  if (!state.selectedMission) state.plan = null;
+  patch();
+  if (state.selectedMission) void loadPlan(state.selectedMission);
+}
+// Stopping a plan is the only change this page can make: it forbids further steps and leaves every running agent alone.
+async function cancelMission(id, title) {
+  if (!confirm(`Dừng kế hoạch "${title}"?\n\nKhông bước nào được bắt đầu thêm. Task đang chạy vẫn chạy tới khi xong và vẫn hủy được riêng ở trang Task.`)) return;
+  try {
+    const result = await api(`missions/${id}/cancel`, {method: 'POST', body: {confirm: true}});
+    state.plan = {mission_id: id, data: result};
+    notify(result.running_tasks?.length ? `Đã dừng kế hoạch; ${result.running_tasks.length} task vẫn đang chạy` : 'Đã dừng kế hoạch');
+    await loadMissions(true);
+  } catch (error) { notify(error.message); }
+}
+/** A step row links to its task; the exchange itself stays on the Task page, which already has logs and changes. */
+function openTask(id) { state.selected = id; state.view = 'tasks'; render(); void select(id); }
+
 async function cancel(id) {
   if (!confirm('Hủy task này? Các thay đổi file dở dang sẽ được giữ lại, không tự hoàn tác.')) return;
   try { await api(`tasks/${id}/cancel`, {method: 'POST'}); notify('Đã hủy task'); await refresh(); } catch (error) { notify(error.message); }
@@ -617,6 +658,59 @@ function usageView(u) {
   return [head, cards, usageCard, dayCard, groupTable('Theo model', u.by_model, 'Model'), groupTable('Theo mức suy luận', u.by_effort, 'Effort'), recent,
     more('more:usage', callout)];
 }
+function stepRow(step) {
+  const blocking = step.blocked_by.map(item => `${item.step_id} (${stepLabel(item.state)})`).join(', ');
+  return h('tr', {},
+    h('td', {class: 'mono', text: step.step_id}),
+    h('td', {text: step.title}),
+    h('td', {}, stepPill(step.state)),
+    h('td', {class: 'muted', text: !step.depends_on.length ? '—' : blocking ? `chờ: ${blocking}` : 'đủ phụ thuộc'}),
+    h('td', {class: 'muted', text: `${step.agent || 'mặc định'}${step.isolation === 'worktree' ? ' · worktree' : ''}${step.scope?.out_of_scope ? ` · ngoài phạm vi ${step.scope.out_of_scope}` : ''}`}),
+    h('td', {}, step.task_id ? h('button', {class: 'btn small mono', onclick: () => openTask(step.task_id), text: step.task_id.slice(0, 8), title: step.task_id}) : h('span', {class: 'muted', text: 'chưa chạy'})));
+}
+function planBody(plan, live) {
+  // The recorded request is a snapshot the bridge will not change, but its state must not lag the table above it: the plan was read when the panel opened, the rows keep refreshing.
+  const state = id => live?.find(step => step.step_id === id)?.state;
+  return [h('dl', {class: 'rows'}, row('Mục tiêu', plan.goal), row('Client yêu cầu', plan.client || '—'), row('Workspace', plan.workspace)),
+    h('p', {class: 'muted', text: 'Đây là nội dung bridge đã ghi; mission_dispatch bắt đầu một bước đúng bằng các tham số này, không thể đổi giữa chừng.'}),
+    ...plan.steps.map(step => h('div', {class: 'step-args'},
+      h('div', {class: 'msg-head'}, h('span', {class: 'mono', text: step.step_id}), step.title, stepPill(state(step.step_id) ?? step.state)),
+      h('p', {class: 'text', text: step.delegate.task}),
+      h('div', {}, h('div', {class: 'msg-head', text: 'Tiêu chí nghiệm thu'}), h('ul', {class: 'crit'}, step.delegate.acceptance_criteria.map(item => h('li', {text: item})))),
+      step.delegate.context ? details(`ctx:${plan.mission_id}:${step.step_id}`, 'Ngữ cảnh kèm theo', h('p', {class: 'text', text: step.delegate.context})) : null))];
+}
+function planPanel(mission) {
+  const loaded = state.plan && state.plan.mission_id === mission.mission_id ? state.plan : null;
+  const body = !loaded || loaded.loading ? [h('p', {class: 'muted', text: 'Đang đọc kế hoạch đã ghi…'})]
+    : loaded.error ? [h('div', {class: 'callout bad', text: loaded.error})]
+    : planBody(loaded.data, mission.steps);
+  return details(`plan:${mission.mission_id}`, 'Yêu cầu đã ghi cho từng bước', ...body);
+}
+function missionCard(mission) {
+  const p = mission.progress;
+  const bits = [`${p.completed}/${p.total} hoàn tất`, p.active ? `${p.active} đang chạy` : null, p.ready ? `${p.ready} sẵn sàng` : null,
+    p.pending ? `${p.pending} chờ bước trước` : null, p.unmet ? `${p.unmet} không qua được` : null].filter(Boolean);
+  return h('section', {class: 'card panel mission'},
+    h('div', {class: 'mission-head'},
+      h('div', {}, h('h2', {}, mission.title, h('span', {class: mission.status === 'open' ? 'pill warn' : 'pill', text: mission.status === 'open' ? 'Đang mở' : 'Đã dừng'})),
+        h('div', {class: 'meta-line muted mono', title: mission.workspace}, `${folder(mission.workspace)} · ${bits.join(' · ')}`),
+        h('div', {class: 'meta-line muted'}, agoEl(mission.updated_at, 'meta'), ` · tạo lúc ${clock(mission.created_at)}`,
+          h('button', {class: 'link-btn', onclick: () => selectMission(mission.mission_id), text: state.selectedMission === mission.mission_id ? 'Ẩn yêu cầu đã ghi' : 'Xem yêu cầu đã ghi'}))),
+      mission.status === 'open' ? h('button', {class: 'btn danger small', onclick: () => cancelMission(mission.mission_id, mission.title), text: 'Dừng kế hoạch'}) : null),
+    h('table', {class: 'usage-table'}, h('thead', {}, h('tr', {}, ...['Bước', 'Việc', 'Trạng thái', 'Chưa qua vì', 'Agent', 'Task'].map(label => h('th', {text: label})))),
+      h('tbody', {}, mission.steps.map(stepRow))),
+    state.selectedMission === mission.mission_id ? planPanel(mission) : null);
+}
+function missionsView(o) {
+  const head = h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Nhiệm vụ'}),
+      h('p', {text: 'Kế hoạch nhiều bước mà bridge ghi lại và chặn: một bước chỉ bắt đầu được khi mọi bước nó phụ thuộc đã hoàn tất.'})),
+    o.missions ? h('div', {class: 'muted', text: `${o.missions.open} kế hoạch đang mở · ${o.missions.ready} bước sẵn sàng · ${o.missions.steps} bước đã ghi`}) : null);
+  const note = h('p', {class: 'callout warn', text: 'Bridge không tự bắt đầu bước nào: mỗi bước chạy theo lệnh mission_dispatch của client MCP. Trang này chỉ đọc kế hoạch và dừng nó.'});
+  const list = state.missions?.missions;
+  if (!list) return [head, note, h('div', {class: 'card empty'}, state.connected ? 'Đang tải…' : 'Không đọc được danh sách nhiệm vụ.')];
+  if (!list.length) return [head, note, h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có nhiệm vụ nào'}), 'Khi một client gọi mission_create, kế hoạch và trạng thái từng bước hiện ở đây.')];
+  return [head, note, ...list.map(missionCard)];
+}
 function settingsView(o) {
   const delegation = o.delegation;
   return [h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Cài đặt'}), h('p', {text: 'Mọi thứ đổi được ở đây áp dụng cho task mới, không cần khởi động lại. Giới hạn cứng vẫn nằm trong config/workspaces.json.'}))),
@@ -661,6 +755,7 @@ function settingsView(o) {
           row('Task lưu giữ', o.limits.max_retained_tasks ?? '—'), row('Task thường chạy cùng lúc', o.limits.concurrent_normal_tasks ?? 1),
           row('Worktree chạy song song', o.limits.max_parallel_worktrees ?? o.concurrency?.max_parallel_worktrees ?? '—'),
           row('Quyền tự duyệt mặc định', o.default_autonomy ?? 'auto'),
+          row('Bước mỗi kế hoạch', o.limits.max_mission_steps ?? '—'), row('Kế hoạch lưu giữ', o.limits.max_retained_missions ?? '—'),
           row('Hàng đợi tối đa', o.limits.max_queued_tasks ?? '—')))),
       h('section', {class: 'card panel wide'}, collapsible('more:limitations', 'Lưu ý khi dùng', h('ul', {class: 'list'}, o.limitations.map(item => h('li', {text: item}))))),
       h('section', {class: 'card panel wide'}, h('h2', {text: 'Dừng bridge'}),
@@ -670,10 +765,10 @@ function settingsView(o) {
 
 /* ---------- Shell: built once per view change, then patched region by region ---------- */
 function mount() {
-  const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view === 'tasks' ? 'tasks' : view === 'usage' ? 'usage' : 'settings'), label);
+  const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view), label);
   const live = h('div', {class: 'live', role: 'status'});
   const side = h('aside', {class: 'side'}, h('div', {class: 'brand'}, h('img', {src: '/ui/favicon.svg', alt: ''}), h('span', {text: 'Antigravity Bridge'})),
-    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('usage', 'Sử dụng'), nav('settings', 'Cài đặt')),
+    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('missions', 'Nhiệm vụ'), nav('usage', 'Sử dụng'), nav('settings', 'Cài đặt')),
     h('div', {class: 'side-foot'}, live));
   const banner = h('div', {'aria-live': 'polite'});
   const main = h('main', {class: 'main'}, banner);
@@ -692,6 +787,9 @@ function mount() {
   } else if (state.view === 'usage') {
     regions.usage = h('div', {});
     main.append(regions.usage);
+  } else if (state.view === 'missions') {
+    regions.missions = h('div', {class: 'mission-page'});
+    main.append(regions.missions);
   } else {
     regions.settings = h('div', {});
     main.append(regions.settings);
@@ -732,6 +830,9 @@ function patch() {
   } else if (regions.view === 'usage') {
     loadUsage();
     setRegion('usage', JSON.stringify(state.usage), () => usageView(state.usage));
+  } else if (regions.view === 'missions') {
+    loadMissions();
+    setRegion('missions', JSON.stringify([o.missions, state.missions, state.selectedMission, state.plan]), () => missionsView(o));
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
     setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.budget && [o.budget.task_tokens, o.budget.day_tokens], o.soft_timeout, o.progress, o.cli, o.agents, o.default_agent, o.default_autonomy, o.concurrency, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));

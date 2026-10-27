@@ -1,7 +1,7 @@
 # Kế hoạch: MCP Bridge đa agent (Orchestrator + Agent Router)
 
-Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 là bước tiếp theo.
-Cập nhật: 2026-10-26.
+Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 hoàn tất (2026-10-27), chờ duyệt PR.
+Cập nhật: 2026-10-27.
 
 ## 1. Mục tiêu
 
@@ -167,12 +167,65 @@ Kết quả: `npm test` xanh (125 pass, 3 skip do thiếu môi trường); test 
 đều có test tự động; đã xác minh `resolveCommand` với Codex npm thật
 (`codex-cli 0.163.0`, shim `.cmd`). Chưa chạy lại `test:live` với Codex thật.
 
-### Phase 2 — Mission daemon + Orchestrator skill
+### Phase 2 — Mission daemon + Orchestrator skill (hoàn tất 2026-10-27, chờ duyệt PR)
 
-- Lưu mission/plan có cấu trúc; trạng thái từng bước; resume sau restart.
-- Skill hướng dẫn orchestrator: chọn role, chọn agent, cắt context, ngân sách token.
-- Tool: `mission_create`, `mission_status`, `mission_plan`, `mission_cancel`.
-- Không cho agent tự sửa plan của agent khác; plan là dữ liệu chỉ đọc với worker.
+Bốn quyết định đã chốt với chủ dự án trước khi viết code:
+
+- **Bridge ghi nhận, agent ngoài điều khiển.** Bridge lưu plan + trạng thái từng bước, **từ chối**
+  `mission_dispatch` khi một dependency chưa `completed`, coi plan là append-only, và **không bao giờ
+  tự bắt đầu bước nào**. Restart phục hồi plan nhưng không chạy lại gì.
+- Phạm vi: toàn bộ Phase 2 (mission daemon + UI + skill), không cắt bớt.
+- Hai deliverable song song: trang UI **Nhiệm vụ** và skill thứ hai `mission-orchestrator` — tách
+  khỏi `antigravity-bridge` vì hai hợp đồng khác nhau (một bên là giao việc đơn lẻ + đọc kết quả,
+  một bên là viết plan và điều phối cổng phụ thuộc).
+- Phát hành: nhánh mới từ `main` → PR → chủ dự án tự duyệt; không auto-merge, không release npm.
+
+Đã triển khai:
+
+1. `src/missions/missions.ts` — `MissionManager`: `create` / `extend` / `dispatch` / `cancel` /
+   `view` / `planOf` / `list` / `overview` / `restore`. Chỉ cần `TaskRunner`
+   (`delegate`/`summary`/`cancel`/`stateDirectory`) và `Pick<Config, 'allowed_workspaces' |
+   'max_timeout_seconds'>`, nên mọi cổng chặn test được không cần CLI.
+2. Cổng chặn lúc `dispatch`: mission đã dừng → bước đã bind task → dependency chưa `completed` →
+   bước đang được một call khác dispatch. Sau cổng, việc chạy đi qua **`TaskManager.delegate` y như
+   một task thường**, nên toàn bộ bảo vệ Phase 1 (workspace allowlist, `owns`, worktree, timeout,
+   redaction, reaper) vẫn áp dụng.
+3. Trạng thái bước **không lưu trên đĩa**: suy ra từ bản ghi task mỗi lần đọc; bản ghi task bị
+   retention đuổi thì bước là `lost` — `lost` không bao giờ mở khóa bước kế tiếp.
+4. Sáu tool MCP mới: `mission_create`, `mission_extend`, `mission_dispatch`, `mission_status`,
+   `mission_plan`, `mission_cancel` (tổng 13). Trả lời gọn theo hướng tiết kiệm token:
+   `create`/`extend` trả receipt (id, progress, `ready`, `next_step`) chứ không lặp lại plan;
+   `dispatch` chỉ trả `{mission_id, step_id, task_id, status, duration_ms, next_step}`;
+   `mission_status` bỏ hẳn text của task; chỉ `mission_plan` mang `delegate` đầy đủ.
+5. UI: trang **Nhiệm vụ** (`GET /ui/api/missions`, `GET /ui/api/missions/:uuid`,
+   `POST /ui/api/missions/:uuid/cancel` cần `confirm: true`) + bộ đếm mission trong overview.
+   Trang này **chỉ đọc và dừng kế hoạch**; nút dừng không đi kèm lựa chọn giết agent.
+6. Skill `skills/mission-orchestrator/SKILL.md` + installer đa skill: `packagedSkills()` liệt kê mọi
+   `skills/<name>/SKILL.md`, `--skill <name>` chọn từng cái, `known-versions.json` chuyển sang lịch sử
+   hash **riêng từng skill** để hash của skill này không thể authorize việc ghi đè file của skill kia.
+
+Giới hạn: 12 bước/mission, plan ≤100.000 ký tự, giữ 20 mission (nạn nhân là bản ghi cũ nhất **không**
+có task đang chạy), `step_id` là slug `[a-z0-9][a-z0-9._-]{0,63}`, timeout mỗi bước vẫn chịu
+`max_timeout_seconds` của bridge, một mission chỉ chạy trong **một** workspace.
+
+Sai lệch so với kế hoạch gốc (mục từng nêu bốn tool):
+
+- Thêm `mission_dispatch` và `mission_extend`. `mission_create` không thể bắt đầu bước (điều kiện
+  "bridge không tự chạy"), nên cần tool tách để gọi cổng chặn; và vì plan là append-only, bước sửa
+  sai bắt buộc phải là bước mới → cần `mission_extend`.
+- **Không** có `mission_list`: giữ surface ở 13 tool. Client phải lưu `mission_id` trong bối cảnh;
+  người dùng đọc danh sách ở UI.
+- ý "không cho agent tự sửa plan của agent khác" được hiện thực mạnh hơn dự kiến: plan không đổi
+  được bởi bất kỳ ai (`extend` chỉ append, `dispatch` không sửa `delegate`, `cancel` chỉ đóng).
+
+Bằng chứng: `tests/missions.test.ts` 17 test (rules, schema, allowlist, cổng dependency, failed/lost
+dependency, đúng tham số đã ghi, single-flight, dispatch bị từ chối không bind, cancel hai chiều,
+append-only, retention, restart, record lạ, redaction, MCP surface, UI route). Xem `docs/HANDOFF.md`
+mục 5 cho số liệu suite và bảng mutation.
+
+Việc còn mở của Phase 2: chọn bước tự động (router đề xuất bước kế tiếp) vẫn thuộc Phase 4; ngân
+sách token theo mission mới là số liệu tham khảo, chưa phải trần cứng; mission không có dependency
+mang điều kiện (chỉ "bước A xong rồi tới B").
 
 ### Phase 3 — Adapter cho OpenCode, Qoder, Zcode
 

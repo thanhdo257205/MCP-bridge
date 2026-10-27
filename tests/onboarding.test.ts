@@ -8,6 +8,14 @@ import { skillStatus } from '../scripts/install-skill.js';
 
 const dirs = async () => ({state: await mkdtemp(path.join(tmpdir(), 'bridge-onb-state-')), home: await mkdtemp(path.join(tmpdir(), 'bridge-onb-home-'))});
 const exists = (file: string) => access(file).then(() => true, () => false);
+const status = async (home: string) => await skillStatus({userHome: home});
+/** Write something into a client's copy of one skill (or every packaged skill when not named). */
+async function put(home: string, client: 'codex' | 'claude', text: string, skill?: string) {
+  for (const entry of (await status(home))[client]) {
+    if (skill && entry.skill !== skill) continue;
+    await mkdir(path.dirname(entry.file), {recursive: true}); await writeFile(entry.file, text);
+  }
+}
 function asker(...answers: string[]) {
   const asked: string[] = [];
   return {asked, ask: async (question: string) => { asked.push(question); return answers.shift() ?? ''; }};
@@ -24,16 +32,17 @@ test('onboarding: never asks outside an interactive terminal, in CI, or when opt
   assert.equal((await run(d, a, {env: {BRIDGE_NO_SKILL_PROMPT: '1'}})).result, 'skipped');
   assert.equal(a.asked.length, 0);
   assert.equal(skillPromptDisabled({}), false); assert.equal(skillPromptDisabled({BRIDGE_NO_SKILL_PROMPT: 'yes'}), true);
-  const status = await skillStatus({userHome: d.home});
-  assert.equal(await exists(status.codex.file) || await exists(status.claude.file), false, 'nothing was written');
+  for (const client of ['codex', 'claude'] as const) for (const entry of await status(d.home).then(s => s[client]))
+    assert.equal(await exists(entry.file), false, 'nothing was written');
 });
-test('onboarding: "both" installs for Codex and Claude, shows the paths first, and is never asked again', async () => {
+test('onboarding: "both" installs every packaged skill for Codex and Claude, shows the paths first, and is never asked again', async () => {
   const d = await dirs(); const a = asker('both');
   const first = await run(d, a);
   assert.equal(first.result, 'installed');
   assert.ok(first.logs.some(line => line.includes(path.join(d.home, '.agents'))) && first.logs.some(line => line.includes(path.join(d.home, '.claude'))), 'the destinations are shown before anything is written');
-  const status = await skillStatus({userHome: d.home});
-  assert.equal(status.codex.state, 'installed'); assert.equal(status.claude.state, 'installed');
+  assert.ok(first.logs.some(line => /mission-orchestrator would be written/.test(line)), 'the offer names each skill it is about to write');
+  const after = await status(d.home);
+  assert.ok(after.codex.every(entry => entry.state === 'installed')); assert.ok(after.claude.every(entry => entry.state === 'installed'));
   assert.equal((await run(d, a)).result, 'skipped');
   assert.equal(a.asked.length, 1);
   assert.equal(JSON.parse(await readFile(path.join(d.state, 'onboarding.json'), 'utf8')).skill_offer.choice, 'codex+claude');
@@ -41,8 +50,8 @@ test('onboarding: "both" installs for Codex and Claude, shows the paths first, a
 test('onboarding: a single client can be chosen; the other stays untouched and the question is not repeated', async () => {
   const d = await dirs(); const a = asker('claude');
   assert.equal((await run(d, a)).result, 'installed');
-  const status = await skillStatus({userHome: d.home});
-  assert.equal(status.claude.state, 'installed'); assert.equal(status.codex.state, 'missing');
+  const after = await status(d.home);
+  assert.ok(after.claude.every(entry => entry.state === 'installed')); assert.ok(after.codex.every(entry => entry.state === 'missing'));
   assert.equal((await run(d, a)).result, 'skipped');
 });
 test('onboarding: "no" (or just Enter) is remembered and writes nothing', async () => {
@@ -53,7 +62,7 @@ test('onboarding: "no" (or just Enter) is remembered and writes nothing', async 
     assert.ok(logs.some(line => /agy-mcp-bridge skill install/.test(line)), 'tells how to install later');
     assert.equal((await run(d, a)).result, 'skipped');
     assert.equal(a.asked.length, 1);
-    assert.equal((await skillStatus({userHome: d.home})).codex.state, 'missing');
+    assert.ok((await status(d.home)).codex.every(entry => entry.state === 'missing'));
   }
 });
 test('onboarding: an unclear answer is asked once more, then skipped without being remembered', async () => {
@@ -66,20 +75,31 @@ test('onboarding: an unclear answer is asked once more, then skipped without bei
 });
 test('onboarding: a customized skill is never overwritten and is not offered', async () => {
   const d = await dirs();
-  const status = await skillStatus({userHome: d.home});
-  await mkdir(path.dirname(status.codex.file), {recursive: true}); await writeFile(status.codex.file, 'my own notes');
+  await put(d.home, 'codex', 'my own notes');
   const a = asker('both');
   const {result, logs} = await run(d, a);
   assert.equal(result, 'installed');
-  assert.ok(logs.some(line => /customized skill already exists/.test(line)));
-  assert.equal(await readFile(status.codex.file, 'utf8'), 'my own notes');
-  assert.equal((await skillStatus({userHome: d.home})).claude.state, 'installed');
+  assert.ok(logs.some(line => /customized antigravity-bridge skill already exists/.test(line)));
+  for (const entry of (await status(d.home)).codex) assert.equal(await readFile(entry.file, 'utf8'), 'my own notes');
+  assert.ok((await status(d.home)).claude.every(entry => entry.state === 'installed'));
   assert.ok(!a.asked[0].includes('both'), 'only one client was offered, so "both" is not a choice');
   // Every client already has a file: nothing to offer, nothing asked.
-  const d2 = await dirs(); const s2 = await skillStatus({userHome: d2.home});
-  for (const client of ['codex', 'claude'] as const) { await mkdir(path.dirname(s2[client].file), {recursive: true}); await writeFile(s2[client].file, 'x'); }
+  const d2 = await dirs();
+  for (const client of ['codex', 'claude'] as const) await put(d2.home, client, 'x');
   const a2 = asker('both');
   assert.equal((await run(d2, a2)).result, 'skipped'); assert.equal(a2.asked.length, 0);
+});
+test('onboarding: an edited copy of one skill does not block the other skill from being offered and installed', async () => {
+  const d = await dirs();
+  await put(d.home, 'codex', 'my own notes', 'antigravity-bridge');
+  const a = asker('codex');
+  const {result, logs} = await run(d, a);
+  assert.equal(result, 'installed');
+  assert.ok(logs.some(line => /customized antigravity-bridge skill already exists/.test(line)), 'says which file it is keeping away from');
+  assert.ok(logs.some(line => /mission-orchestrator would be written to/.test(line)));
+  const after = await status(d.home);
+  assert.deepEqual(after.codex.map(entry => [entry.skill, entry.state]), [['antigravity-bridge', 'different'], ['mission-orchestrator', 'installed']]);
+  assert.equal(await readFile(after.codex.find(entry => entry.skill === 'antigravity-bridge')!.file, 'utf8'), 'my own notes');
 });
 test('onboarding: an install failure is reported, does not throw, and the question is asked again next time', async () => {
   const d = await dirs(); const a = asker('both');

@@ -79,6 +79,23 @@ Then call `antigravity_environment` from a fresh session — that is the proof; 
 
 Two switches control delegation itself: `agy-mcp-bridge delegation off` blocks new tasks immediately without a restart, and `BRIDGE_DELEGATION=off` pins it at startup. Tasks still refuse to be delegated by policy the skill describes (security, auth, secrets, data deletion, deploy, CI and public API changes are not delegated).
 
+## Missions
+
+A mission is a plan the bridge **records and gates but never runs**: up to 12 steps in one workspace, each carrying its own `delegate` arguments and a list of `depends_on`. An MCP client writes the plan and dispatches it one step at a time; the bridge refuses to start a step whose dependencies did not all complete, so no agent is sent at a step whose inputs do not exist yet. Nothing ever starts by itself — a restart restores every plan and re-dispatches nothing.
+
+| Tool | What it does |
+|---|---|
+| `mission_create` | record the plan and return `mission_id`, progress and the `ready` step ids (the receipt does not echo the plan back) |
+| `mission_extend` | append correction or follow-up steps: the plan is append-only, so a retry is always a new step |
+| `mission_dispatch` | start one ready step as a normal supervised task; refused while a dependency is not `completed`, if the step already ran, or once the mission is canceled |
+| `mission_status` | cheap poll: per-step state, `blocked_by`, `ready` — no task text |
+| `mission_plan` | the whole recorded plan with each step's exact `delegate` arguments, for a client that lost its own copy |
+| `mission_cancel` | close the plan so nothing further can be dispatched; running agents are left alone unless `cancel_running_tasks: true` |
+
+A dispatched step **is** an ordinary task, so everything in [Delegate](#delegate) still applies to it: worktree isolation, `owns`, timeouts, redaction, process-tree release, `review_required`, and no auto-merge. Step state is derived from the task records on every read rather than cached, so a record that retention dropped shows as `lost` — which never unlocks the step waiting for it. Replies are deliberately small (`dispatch` returns five fields plus a `next_step` hint) because an orchestrator polls them; the **Nhiệm vụ** page is the human view. There is no `mission_list` — keep the `mission_id` you were given, or read it from that page.
+
+The bundled `mission-orchestrator` skill teaches a client how to write such a plan (and when not to).
+
 ## Lifecycle and limits
 
 Task state belongs to the HTTP server, not to the MCP session, and all clients share one TaskManager. `none`-lane tasks take a cross-process lock (`.bridge-state/execution.lock`); `worktree`-lane tasks rely on their own branch. Results persist to `.bridge-state/tasks/<task_id>.json` (0600, secret-redacted) and reload at startup, so you can recover an answer after a reconnect — this is history, not durable task recovery. Ctrl+C once: stop listening, cancel running tasks and reap their process trees, drain sockets for up to 3 s, print `[bridge] Stopped`. It does not revert files.
@@ -99,7 +116,7 @@ Redaction recognises common secret shapes; it does not catch everything. Keep se
 
 ## Web UI
 
-`http://127.0.0.1:3000/ui` on the same machine, no login (there is no auth to log into). It reads the same task store as the tools, so it costs your other agents no tokens. Pages: **Tasks** (bridge state, ready agents, delegation switch, per-task request/criteria/response, `denied_actions`, stdout/stderr, full prompt, worktree/branch and `owns` verdict, workspace changes with per-file line counts) and **Settings** (delegation, MCP endpoint, per-agent probe results, allowed workspaces, permission level, model, effort, wait cadence, soft deadline, step progress, usage, shutdown button). Regions patch in place, so selecting log text survives an update.
+`http://127.0.0.1:3000/ui` on the same machine, no login (there is no auth to log into). It reads the same task store as the tools, so it costs your other agents no tokens. Pages: **Tasks** (bridge state, ready agents, delegation switch, per-task request/criteria/response, `denied_actions`, stdout/stderr, full prompt, worktree/branch and `owns` verdict, workspace changes with per-file line counts), **Nhiệm vụ** (every recorded plan: steps, states, which dependency blocks which step, the exact `delegate` arguments per step, and a **Dừng kế hoạch** button that closes the plan and never touches a running agent — the page reads and stops missions, it cannot dispatch one), and **Settings** (delegation, MCP endpoint, per-agent probe results, allowed workspaces, permission level, model, effort, wait cadence, soft deadline, step progress, usage, shutdown button). Regions patch in place, so selecting log text survives an update.
 
 Long explanations, unverified notes and rarely-changed numbers live behind **More** blocks; decisions-worthy state stays visible. The no-auth warning is always visible, and the "allowlist is not a sandbox" warning is always visible at `auto`/`full`.
 
@@ -114,7 +131,7 @@ npm test          # build + unit/integration with fake executables; no AI calls
 npm run test:live # REAL agent calls, scratch workspace, disconnect/reconnect, cancel, shutdown
 ```
 
-`npm test` runs serially (`--test-concurrency=1`, ~158 s): most cases start a real loopback server and time its output, so a parallel failure reflects machine load, not code. CI runs Windows and Linux on Node 20/22. Source map: `src/index.ts` entry, `src/http.ts` routing/shutdown, `src/runtime.ts` shared CLI + TaskManager, `src/agents` adapters and registry, `src/isolation` worktrees and `owns`, `src/tasks` lifecycle/lock/output, `src/security` validation and redaction, `src/tools` tool definitions, `src/antigravity` child process, `ui/` plain HTML/CSS/JS with `src/ui/` behind it.
+`npm test` runs serially (`--test-concurrency=1`, ~158 s): most cases start a real loopback server and time its output, so a parallel failure reflects machine load, not code. CI runs Windows and Linux on Node 20/22. Source map: `src/index.ts` entry, `src/http.ts` routing/shutdown, `src/runtime.ts` shared CLI + TaskManager, `src/agents` adapters and registry, `src/missions` the plan store and its dispatch gates, `src/isolation` worktrees and `owns`, `src/tasks` lifecycle/lock/output, `src/security` validation and redaction, `src/tools` tool definitions, `src/antigravity` child process, `ui/` plain HTML/CSS/JS with `src/ui/` behind it.
 
 Pushing or merging to `main` runs CI and, when it passes, publishes to npm automatically: the [publish workflow](.github/workflows/publish.yml) bumps the patch version, tags, pushes and publishes through OIDC Trusted Publishing — no npm token in secrets, no manual version bump, nothing published if CI fails. PRs run [CI](.github/workflows/ci.yml) only. Set up once under the package's **Trusted Publisher** settings: user `thanhdo257205`, repository `MCP-bridge`, workflow `publish.yml`, empty environment, allow direct npm publish.
 
@@ -125,8 +142,8 @@ Pushing or merging to `main` runs CI and, when it passes, publishes to npm autom
 - [docs/MULTI-AGENT-PLAN.md](docs/MULTI-AGENT-PLAN.md) — the multi-agent roadmap and per-phase status.
 - [docs/HANDOFF.md](docs/HANDOFF.md) — open work (Job Object, POSIX E2E, worktree TTL) with mutation-test evidence.
 - [docs/PROMPTS.md](docs/PROMPTS.md) — review and follow-up task prompts.
-- [skills/antigravity-bridge/SKILL.md](skills/antigravity-bridge/SKILL.md) and [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) — the client-side contract and manual evaluation cases.
+- [skills/antigravity-bridge/SKILL.md](skills/antigravity-bridge/SKILL.md), [skills/mission-orchestrator/SKILL.md](skills/mission-orchestrator/SKILL.md) and [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) — the client-side contract and manual evaluation cases.
 
-The bundled `antigravity-bridge` skill teaches a client the real tool schemas, task-id recovery, timeouts, permission denials and diff review. First interactive run offers to install it (`agy-mcp-bridge skill install --client codex|claude|both` writes `~/.agents/skills/…` or `~/.claude/skills/…`); a SKILL.md you edited yourself is never overwritten. Installing the skill does not connect the server or grant any permission.
+Two skills ship with the bridge: `antigravity-bridge` teaches a client the real tool schemas, task-id recovery, timeouts, permission denials and diff review; `mission-orchestrator` teaches it how to write and drive a plan — when a mission is the right shape, how to keep it cheap, and what must never be put in one. First interactive run offers to install them (`agy-mcp-bridge skill install --client codex|claude|both [--skill <name>] [--update]` writes `~/.agents/skills/…` or `~/.claude/skills/…`); a `SKILL.md` you edited yourself is never overwritten, and one customized skill never blocks the other. Installing a skill does not connect the server or grant any permission.
 
 MIT licensed; see `LICENSE`.

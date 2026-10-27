@@ -12,7 +12,42 @@
   "default_autonomy": "auto",
   "agents": {
     "priority": ["antigravity", "codex"],
-    "enabled": ["antigravity", "codex"]
+    "enabled": ["antigravity", "codex"],
+    "codex_sandbox": "workspace-write",
+    "codex_ask_for_approval": "auto",
+    "profiles": {
+      "codex-work": {
+        "adapter": "codex",
+        "label": "Codex (Work Account)",
+        "env": {
+          "CODEX_HOME": "C:/Users/name/.codex-work"
+        },
+        "codex_sandbox": "danger-full-access",
+        "codex_ask_for_approval": "never"
+      },
+      "codex-backup": {
+        "adapter": "codex",
+        "label": "Codex (Backup Account)",
+        "env": {
+          "CODEX_HOME": "C:/Users/name/.codex-backup"
+        }
+      }
+    },
+    "pools": {
+      "codex-smart-pool": {
+        "strategy": "quota-adaptive",
+        "members": ["codex-work", "codex-backup"],
+        "hard_task_profile": "codex-work",
+        "quota_cooldown_seconds": 900
+      }
+    }
+  },
+  "xerj": {
+    "enabled": true,
+    "url": "http://127.0.0.1:9200",
+    "default_index": "mcp-bridge-docs",
+    "auto_reference": true,
+    "max_passages": 3
   },
   "tree_watch": {
     "enabled": true,
