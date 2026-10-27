@@ -29,7 +29,8 @@ test('package: npm pack contains what the CLI needs and nothing else', () => {
   assert.equal(result.status, 0, result.stderr);
   const files = (JSON.parse(result.stdout) as {files: {path: string}[]}[])[0].files.map(file => file.path.replace(/\\/g, '/'));
   for (const needed of ['dist/src/cli.js', 'dist/src/index.js', 'dist/src/paths.js', 'dist/src/update.js', 'dist/scripts/check.js', 'dist/scripts/delegation.js',
-    'dist/scripts/install-skill.js', 'ui/index.html', 'ui/app.js', 'ui/app.css', 'ui/favicon.svg', 'skills/antigravity-bridge/SKILL.md', 'README.md', 'LICENSE', 'package.json']) {
+    'dist/scripts/install-skill.js', 'ui/index.html', 'ui/app.js', 'ui/app.css', 'ui/favicon.svg', 'skills/antigravity-bridge/SKILL.md',
+    'skills/mission-orchestrator/SKILL.md', 'README.md', 'LICENSE', 'package.json']) {
     assert.ok(files.includes(needed), `missing ${needed}`);
   }
   for (const file of files) {
