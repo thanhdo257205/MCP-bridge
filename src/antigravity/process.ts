@@ -115,9 +115,11 @@ async function terminate(child: ChildProcess): Promise<void> {
   }
 }
 
-export async function inspectCli(executable: string, cwd: string, run: typeof startProcess = startProcess, requireStdin=false) {
+/** Probes a resolved command. The whole command goes in, not just its executable: a Windows shim runs as
+ * `node <script>` and asking `node --version` would report Node's version instead of the CLI's. */
+export async function inspectCli(command: ResolvedCommand, cwd: string, run: typeof startProcess = startProcess, requireStdin=false) {
   const capture = (args: string[]) => new Promise<{code: number | null; text: string}>((resolve, reject) => {
-    const child = run(executable, args, cwd);
+    const child = run(command.executable, [...command.prefixArgs, ...args], cwd);
     let text = '';
     let exceeded = false;
     const timer = setTimeout(() => { exceeded = true; void terminateOwned(child).catch(reject); }, 10000);
@@ -135,5 +137,5 @@ export async function inspectCli(executable: string, cwd: string, run: typeof st
     ['--print', '--output-format', '--print-timeout', '--disable-slash-commands',...(requireStdin?['--input-format']:[])].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
   const verified = (VERIFIED_AGY_VERSIONS as readonly string[]).includes(actual);
   const warnings=supported&&!verified?[`agy ${actual} is compatible by 1.4.x version/help checks, but only ${VERIFIED_AGY_VERSIONS.join(' and ')} have been verified with real agent execution`]:[];
-  return { version: actual, supported, executable, warnings };
+  return { version: actual, supported, executable: command.executable, prefixArgs: command.prefixArgs, warnings };
 }

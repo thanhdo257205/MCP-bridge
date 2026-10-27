@@ -13,5 +13,9 @@
   "agents": {
     "priority": ["antigravity", "codex"],
     "enabled": ["antigravity", "codex"]
+  },
+  "tree_watch": {
+    "enabled": true,
+    "delays_ms": [500, 1000, 2000, 4000, 10000]
   }
 }

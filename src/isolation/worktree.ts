@@ -82,6 +82,8 @@ export interface SweepReport {
   scanned: number;
   removed: string[];
   retained: {path: string; reason: string}[];
+  /** Repositories whose worktree directory was deleted without git, so their admin record may still list it. */
+  prunable: string[];
 }
 
 /**
@@ -111,6 +113,16 @@ const exists = async (target: string): Promise<boolean> => {
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 const TASK_ID = /^[0-9a-f]{8}-[0-9a-f-]+$/;
+const TASK_RECORD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
+
+/** What a sweep needs from a task record: whether it is still live, and the two paths that tie it to a repository. */
+export interface TaskRecord {
+  status: string | null;
+  /** Repository root the worktree was added to. */
+  repo: string | null;
+  /** Worktree directory the task was given. */
+  worktree: string | null;
+}
 
 /**
  * Drops worktree directories that a previous run could not remove because a process the bridge no longer owned
@@ -118,46 +130,111 @@ const TASK_ID = /^[0-9a-f]{8}-[0-9a-f-]+$/;
  * be reviewing, and stale locks on real work are left for a human.
  */
 export async function sweepStaleWorktrees(stateDirectory: string, options: {
-  readStatus?: (taskId: string) => Promise<string | null>;
-  remove?: (directory: string) => Promise<void>;
+  readRecord?: (taskId: string) => Promise<TaskRecord>;
+  remove?: (directory: string, repo: string | null) => Promise<'git' | 'rmdir'>;
   retryDelayMs?: number[];
 } = {}): Promise<SweepReport> {
   const directory = path.join(stateDirectory, 'worktrees');
-  const report: SweepReport = {scanned: 0, removed: [], retained: []};
+  const report: SweepReport = {scanned: 0, removed: [], retained: [], prunable: []};
   let names: string[];
   try { names = await readdir(directory); }
   catch { return report; }
-  const readStatus = options.readStatus ?? (async (taskId: string) => {
+  const readRecord = options.readRecord ?? (async (taskId: string) => {
     try {
-      const parsed = JSON.parse(await readFile(path.join(stateDirectory, 'tasks', `${taskId}.json`), 'utf8')) as {status?: string; task?: {status?: string}};
-      return parsed.task?.status ?? parsed.status ?? null;
-    } catch { return null; }
+      const parsed = JSON.parse(await readFile(path.join(stateDirectory, 'tasks', `${taskId}.json`), 'utf8')) as
+        {status?: string; task?: {status?: string; worktree?: string | null; worktree_toplevel?: string | null}};
+      return {status: parsed.task?.status ?? parsed.status ?? null, repo: parsed.task?.worktree_toplevel ?? null, worktree: parsed.task?.worktree ?? null};
+    } catch { return {status: null, repo: null, worktree: null}; }
   });
-  const remove = options.remove ?? ((target: string) => rmdir(target));
+  const queuePrune = (repo: string): void => { if (!report.prunable.includes(repo)) report.prunable.push(repo); };
+  // Removing through git also drops the admin record under <repo>/.git/worktrees, which a plain rmdir leaves behind as
+  // a stale entry that then makes every later `git worktree` command in that repository complain.
+  const remove = options.remove ?? (async (target: string, repo: string | null) => {
+    if (repo) {
+      try { await git(repo, ['worktree', 'remove', '--force', target]); return 'git'; } catch { /* the directory may be gone already */ }
+    }
+    await rmdir(target);
+    return 'rmdir';
+  });
   for (const name of names) {
     const candidate = path.join(directory, name);
     report.scanned += 1;
     if (!TASK_ID.test(name)) { report.retained.push({path: candidate, reason: 'not a task worktree directory'}); continue; }
-    let status: string | null;
-    try { status = await readStatus(name); }
+    let record: TaskRecord;
+    try { record = await readRecord(name); }
     catch { report.retained.push({path: candidate, reason: 'its task record could not be read'}); continue; }
-    if (status === 'queued' || status === 'running') { report.retained.push({path: candidate, reason: `task is ${status}`}); continue; }
+    if (record.status === 'queued' || record.status === 'running') { report.retained.push({path: candidate, reason: `task is ${record.status}`}); continue; }
     let entries: string[];
     try { entries = await readdir(candidate); }
-    catch (error) { report.retained.push({path: candidate, reason: error instanceof Error ? error.message : 'directory could not be read'}); continue; }
+    catch (error) {
+      // The directory is already gone — deleted without git, which is exactly what leaves a stale admin record behind.
+      if ((error as {code?: string}).code === 'ENOENT') { if (record.repo) queuePrune(record.repo); continue; }
+      report.retained.push({path: candidate, reason: error instanceof Error ? error.message : 'directory could not be read'});
+      continue;
+    }
     if (entries.length) { report.retained.push({path: candidate, reason: 'it still holds files for review'}); continue; }
     let reason = '';
+    let how: 'git' | 'rmdir' = 'rmdir';
     for (const delay of options.retryDelayMs ?? [0, 200, 600]) {
       if (delay) await sleep(delay);
-      try { await remove(candidate); reason = ''; break; }
+      try { how = await remove(candidate, record.repo); reason = ''; break; }
       catch (error) { reason = error instanceof Error ? error.message : 'directory could not be removed'; }
     }
     if (reason) report.retained.push({path: candidate, reason});
-    else report.removed.push(candidate);
+    else {
+      report.removed.push(candidate);
+      // A git removal took the admin record with it; anything else that cleared the directory left the record behind.
+      if (how === 'rmdir' && record.repo) queuePrune(record.repo);
+    }
+  }
+  // A directory deleted by hand never shows up in the listing above, so the task records are read as well: a finished
+  // task naming a worktree that is no longer on disk is the other way a repository ends up holding a dead entry.
+  let records: string[];
+  try { records = await readdir(path.join(stateDirectory, 'tasks')); }
+  catch { return report; }
+  for (const file of records) {
+    if (!TASK_RECORD.test(file)) continue;
+    let record: TaskRecord;
+    try { record = await readRecord(file.slice(0, -'.json'.length)); }
+    catch { continue; }
+    if (record.status === 'queued' || record.status === 'running') continue;
+    if (!record.repo || !record.worktree || await exists(record.worktree)) continue;
+    queuePrune(record.repo);
   }
   return report;
 }
 
+
+/** Worktree paths the repository still has a record for, including the ones whose directory is already gone. */
+async function listedWorktrees(repo: string): Promise<string[]> {
+  const text = await git(repo, ['worktree', 'list', '--porcelain']);
+  return text.split('\n').filter(line => line.startsWith('worktree ')).map(line => line.slice('worktree '.length).trim()).filter(Boolean);
+}
+
+/**
+ * Clears the `<repo>/.git/worktrees/<name>` entries left behind when a worktree directory went away without git.
+ * Git only prunes records whose directory is already missing, so this is called for the repositories whose
+ * directories the sweep itself deleted — a worktree someone is still using is never in scope. `--expire=now` is
+ * required because the default grace is three months, which would leave a record the bridge just orphaned in place.
+ * Any other missing-directory record in that repository goes with it; that costs an admin entry, not files, and a
+ * checkout that is merely unmounted is restored with `git worktree repair`.
+ */
+export async function pruneWorktrees(repo: string): Promise<{pruned: number; reason: string}> {
+  try {
+    const missing: string[] = [];
+    for (const target of await listedWorktrees(repo)) {
+      if (!await exists(target)) missing.push(target);
+    }
+    if (!missing.length) return {pruned: 0, reason: ''};
+    // The count comes from the record list, not from what `prune -v` prints: that goes to stderr, and a report of
+    // "0 pruned" after a record was in fact cleared would be the worse kind of wrong.
+    await git(repo, ['worktree', 'prune', '-v', '--expire=now']);
+    const remaining = new Set(await listedWorktrees(repo));
+    return {pruned: missing.filter(target => !remaining.has(target)).length, reason: ''};
+  } catch (error) {
+    return {pruned: 0, reason: error instanceof Error ? error.message : 'git worktree prune failed'};
+  }
+}
 
 function normalizeOwn(own: string): string {
   return path.posix.normalize(own.replace(/\\/g, '/')).replace(/^\.\//, '').replace(/\/+$/, '');

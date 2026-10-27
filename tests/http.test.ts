@@ -163,6 +163,27 @@ test('web UI: overview and task detail expose the request/response exchange',asy
     assert.ok(!('request' in await call(client,'antigravity_task_output',{task_id:id})));
   } finally {await client.close();await bridge.close();}
 });
+test('web UI: the task page is handed the verdict on the trees the agent left behind',async()=>{
+  // The release runs after the status publish, so the page has to pick it up on a later refresh. Without this the
+  // only way to see what was reaped, or which branch was deliberately left running, is the JSON file on disk.
+  const root=await mkdtemp(path.join(tmpdir(),'agy-http-cleanup-'));
+  const workspace=path.join(root,'work');await mkdir(workspace);
+  const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
+    {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),
+      launch:(_args,cwd)=>startProcess(process.execPath,[fixture,'ok'],cwd),
+      reapTree:async()=>({checked:true,reaped:[601],skipped:[{pid:602,name:'node.exe',guard:'pid was reissued to another process after the tree query'}],tracked:2})});
+  const bridge=await startHttpBridge({manager,environment:{},port:0});
+  try {
+    const id=String((await manager.delegate({task:'mock',workspace,acceptance_criteria:['ok']})).task_id);
+    await manager.wait(id);
+    let detail=await (await ui(bridge,`tasks/${id}`)).json() as Record<string,any>;
+    for(let tries=0;tries<60 && !detail.task?.cleanup;tries++){await new Promise(resolve=>setTimeout(resolve,50));detail=await (await ui(bridge,`tasks/${id}`)).json() as Record<string,any>;}
+    assert.equal(detail.task.cleanup.checked,true,'the report lands on the page a moment later');
+    assert.deepEqual(detail.task.cleanup.reaped,[601]);
+    assert.match(detail.task.cleanup.skipped[0].guard,/reissued/,'the reason a branch was left running reaches the page too');
+    assert.equal(detail.task.cleanup.tracked,2);
+  } finally {await bridge.close();}
+});
 test('web UI: cancel and delegation switch work and the env lock is respected',async()=>{
   const {bridge,workspace,manager}=await setup('hang');const client=await connect(bridge.mcpUrl);
   const saved=process.env.BRIDGE_DELEGATION;delete process.env.BRIDGE_DELEGATION;

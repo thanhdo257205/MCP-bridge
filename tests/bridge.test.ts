@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, symlink, writeFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,24 @@ test('a tree report that lands after eviction patches the record it still owns',
     assert.ok(!files.includes(`${first.task_id}.json`));
     for(const id of kept) assert.equal(manager.get(id).cleanup?.checked,true,'a task still retained does get its report patched');
   } finally { await manager.shutdown(); }
+});
+test('shutdown waits for a tree release still in flight so its verdict is not lost',async()=>{
+  // Stopping the bridge is how an operator leaves the last task's process verdict behind: the release query is
+  // detached from the status publish, so a shutdown that ignored it could end with no record of what still ran.
+  const {root,config,input}=await setup();
+  const state=path.join(root,'state');
+  let finished=false;
+  const manager=new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:state,
+    launch:(_args,cwd)=>startProcess(process.execPath,[fixture,'ok'],cwd),
+    reapTree:async()=>{await new Promise(resolve=>setTimeout(resolve,300));finished=true;return {checked:true,reaped:[707],skipped:[{pid:708,name:'node.exe',guard:'protected'}]};}});
+  const task=await manager.delegate(input);
+  const done=await manager.wait(task.task_id);
+  assert.equal(done.cleanup,undefined,'the release has not landed when the terminal status is published');
+  await manager.shutdown();
+  assert.equal(finished,true,'shutdown ran the release out instead of dropping it');
+  const record=JSON.parse(await readFile(path.join(state,'tasks',`${task.task_id}.json`),'utf8'));
+  assert.deepEqual(record.task.cleanup.reaped,[707]);
+  assert.match(record.task.cleanup.skipped[0].guard,/protected/);
 });
 test('stale execution lock is diagnosed but never removed',async()=>{
   const {manager,input,root}=await setup();

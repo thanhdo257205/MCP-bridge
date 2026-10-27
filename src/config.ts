@@ -21,6 +21,15 @@ const schema = z.object({
   max_parallel_worktrees: z.number().int().min(1).max(8).optional(),
   default_autonomy: z.enum(['suggest', 'auto', 'full']).optional(),
   agents: agentsSchema.optional(),
+  /**
+   * The process-tree watcher that runs while a task is live. One poll costs a full process-table query (about half a
+   * second on the reference machine), so the cadence is owner-tunable and the whole watch can be turned off; without
+   * it, a subtree whose intermediate shell exited before the agent did becomes invisible to the release.
+   */
+  tree_watch: z.object({
+    enabled: z.boolean().optional(),
+    delays_ms: z.array(z.number().int().min(100).max(60000)).min(1).max(20).optional()
+  }).strict().optional(),
   extra_env_passthrough: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100).default([]),
   prompt_transport:z.enum(['stdin','argv']).default('argv'),
   /** Longest single antigravity_task_wait call (default 55). Keep it below the MCP client's tool timeout. */

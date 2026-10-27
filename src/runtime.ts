@@ -3,17 +3,17 @@ import { helperDirectory, paths } from './paths.js';
 import { inspectCli, resolveCommand, startProcess, VERIFIED_AGY_VERSIONS } from './antigravity/process.js';
 import { createAgentRegistry, publicAgents, type AntigravityInspection } from './agents/registry.js';
 import { TaskManager } from './tasks/manager.js';
-import {sweepStaleWorktrees} from './isolation/worktree.js';
+import {sweepStaleWorktrees, pruneWorktrees} from './isolation/worktree.js';
 import {startTreeWatch} from './isolation/orphans.js';
 import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
   const config = await loadConfig();
-  let cli = {version: 'unavailable', executable: '', supported: false, warnings: [] as string[]};
+  let cli = {version: 'unavailable', executable: '', prefixArgs: [] as string[], supported: false, warnings: [] as string[]};
   let antigravity: AntigravityInspection = {version: 'unavailable', executable: '', supported: false, warnings: []};
   try {
     const command = await resolveCommand(config.executable);
-    cli = await inspectCli(command.executable, helperDirectory(), (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
+    cli = await inspectCli(command, helperDirectory(), (executable,args,cwd)=>startProcess(executable,args,cwd,{extraEnvPassthrough:config.extra_env_passthrough}), config.prompt_transport==='stdin');
     antigravity = {...cli, executable: cli.executable || command.source};
   } catch {
     antigravity = {version: 'unavailable', executable: '', supported: false, warnings: ['Antigravity CLI unavailable or inspection failed']};
@@ -29,17 +29,25 @@ export async function createRuntime() {
   }
 
   const maxParallelWorktrees = config.max_parallel_worktrees ?? 2;
+  const treeWatch = config.tree_watch ?? {};
+  const treeWatchEnabled = treeWatch.enabled !== false;
+  if (!treeWatchEnabled) console.error('[bridge] WARNING: tree_watch is off; a process tree the agent leaves behind will not be released');
   const manager = new TaskManager(config, {
-    executable: antigravity.executable, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
+    executable: antigravity.executable, prefixArgs: antigravity.prefixArgs, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
     agents: registry.agents, defaultAgent: registry.defaultAgent,
     // Without the watch the release can only name the processes that still hang below the agent at the moment it
     // exits, which is exactly the case that left the worktree pinned in a live run.
-    watchTree: startTreeWatch
+    watchTree: treeWatchEnabled ? pid => startTreeWatch(pid, {delays: treeWatch.delays_ms}) : undefined
   });
   await recoverExecutionLock(paths.stateDirectory);
   const sweep = await sweepStaleWorktrees(paths.stateDirectory);
   for (const removed of sweep.removed) console.error(`[bridge] Removed a stale empty worktree directory: ${removed}`);
   for (const kept of sweep.retained) console.error(`[bridge] Kept worktree directory ${kept.path}: ${kept.reason}`);
+  for (const repo of sweep.prunable) {
+    const prune = await pruneWorktrees(repo);
+    if (prune.pruned) console.error(`[bridge] Pruned ${prune.pruned} stale worktree record(s) in ${repo}`);
+    else if (prune.reason) console.error(`[bridge] WARNING: stale worktree records in ${repo} could not be pruned: ${prune.reason}`);
+  }
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const lockWarning = await manager.lockDiagnostic();
@@ -71,8 +79,8 @@ export async function createRuntime() {
       'Existing agent permissions, hooks, MCP and credential access remain governed by each CLI configuration.',
       'Antigravity permission flags are off unless the bridge owner raises the level in the web UI (a client cannot change it). At the default level, actions that need approval are denied (see denied_actions).',
       'No permission bypass flags. Dangerous actions require separate interactive approval.',
-      'After an agent process exits, the bridge releases the process trees it left behind (Windows: taskkill on every subtree still hanging below the agent or below a process recorded while it ran; POSIX: the exited process group). A bridge killed abruptly can still orphan processes.',
-      'Worktree directories of finished tasks are kept for review. Only empty leftovers are removed at startup, and a directory a live process still holds is reported instead of forced.',
+      `After an agent process exits, the bridge releases the process trees it left behind (Windows: taskkill on every subtree still hanging below the agent or below a process recorded while it ran, after re-checking that each pid still names the same process; POSIX: the exited process group). The outcome is published as the task's cleanup field, and a graceful shutdown waits for it. A bridge killed abruptly, or tree_watch disabled in config, can still orphan processes.`,
+      'Worktree directories of finished tasks are kept for review. Only empty leftovers are removed at startup, a directory a live process still holds is reported instead of forced, and a repository left holding a record whose directory is gone is pruned.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'
     ]
   };
