@@ -342,7 +342,7 @@ npm test
 npm run test:live
 ```
 
-`npm test` (cũng chạy trong [CI](.github/workflows/ci.yml) trên Ubuntu và Windows, Node 20/22): unit/integration dùng executable giả, không gọi AI. Bao gồm lifecycle/security cũ và HTTP startup/port conflict/PORT tùy chọn/Host/Origin/body limit/kết nối hai protocol era/client reconnect/task completion/cancel/server shutdown.
+`npm test` (cũng chạy trong [CI](.github/workflows/ci.yml) trên Ubuntu và Windows, Node 20/22): unit/integration dùng executable giả, không gọi AI. Bao gồm lifecycle/security cũ và HTTP startup/port conflict/PORT tùy chọn/Host/Origin/body limit/kết nối hai protocol era/client reconnect/task completion/cancel/server shutdown. Suite chạy **tuần tự** (`--test-concurrency=1`, khoảng 158 s trên máy dev Windows): phần lớn test khởi động server thật trên cổng loopback rồi đo output theo thời gian, nên khi chạy song song chúng lỗi vì tải của máy chứ không vì code — một fail ở chế độ song song không phải bằng chứng.
 
 `test:live`: **gọi AI thật**, dùng cached login/quota. Test harness khởi động HTTP server riêng với PORT=0 và scratch workspace, dùng official SDK HTTP client, ngắt/kết nối lại khi task chạy, xác minh `BRIDGE_SMOKE_OK` và sentinel không đổi, hủy task thật, rồi kiểm tra shutdown có task đang chạy. Trên Windows, harness phát event SIGINT vào đúng handler của entry point qua IPC riêng của harness; kiểm tra Ctrl+C terminal được ghi riêng trong báo cáo. Đây không phải yêu cầu client production tự khởi động server. Kết quả ở `test-results/live-report.json`; phần sửa file thật vẫn bị chặn đến khi cấp quyền.
 
