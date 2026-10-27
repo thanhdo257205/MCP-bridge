@@ -9,6 +9,7 @@ import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { BUDGET_FILE, budgetState, isBudgetTokens, readBudget, tokensToday, writeBudget } from '../src/budget.js';
 import { USAGE_FILE, totalTokens, type UsageRecord } from '../src/usage.js';
+import { missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 const record=(over:Partial<UsageRecord>={}):UsageRecord=>({at:'2026-10-22T05:00:00.000Z',status:'completed',model:null,effort:null,permission:'default',duration_ms:1000,agy_duration_seconds:null,num_turns:1,steps:null,usage:null,...over});
@@ -39,7 +40,7 @@ async function setup(){
   const root=await mkdtemp(path.join(tmpdir(),'agy-budget-run-'));const workspace=path.join(root,'work');await mkdir(workspace);const state=path.join(root,'state');await mkdir(state,{recursive:true});
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:4096,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:state,launch:(_args,cwd)=>startProcess(process.execPath,[fixture,'usage'],cwd)});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
   return {manager,bridge,workspace,state};
 }
 

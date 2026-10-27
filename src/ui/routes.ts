@@ -4,6 +4,7 @@ import path from 'node:path';
 import { delegationControllable, delegationState, setDelegationSwitch } from '../delegation.js';
 import { redact } from '../security/redact.js';
 import type { TaskManager } from '../tasks/manager.js';
+import type { MissionManager } from '../missions/missions.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
@@ -18,7 +19,7 @@ import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionS
 import { inside } from '../security/workspace.js';
 
 export interface UiContext {
-  manager: TaskManager; environment: Record<string, unknown>;
+  manager: TaskManager; missions: MissionManager; environment: Record<string, unknown>;
   mcpUrl: () => string; startedAt: number;
   requestShutdown?: () => Promise<void>;
 }
@@ -80,6 +81,7 @@ async function overview(ctx: UiContext, tzOffsetMinutes = 0) {
     progress: readProgress(ctx.manager.stateDirectory),
     wait: {seconds: ctx.manager.maxWaitSeconds, client_tool_timeout_seconds: clientToolTimeoutSeconds(ctx.manager.maxWaitSeconds)},
     queue: ctx.manager.overview().queue,
+    missions: ctx.missions.overview(),
     warnings: [await ctx.manager.lockDiagnostic()].filter(Boolean),
     update: knownUpdate() && {...knownUpdate(), package: readPackageInfo().name, command: 'agy-mcp-bridge update'},
     tasks: ctx.manager.list()
@@ -153,6 +155,18 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     if (changes && method === 'GET') { json(res, 200, await changesFor(ctx, changes[1])); return true; }
     const cancel = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/cancel$`));
     if (cancel && method === 'POST') { await ctx.manager.cancel(cancel[1]); json(res, 200, ctx.manager.detail(cancel[1])); return true; }
+    if (pathname === '/ui/api/missions' && method === 'GET') { json(res, 200, {missions: ctx.missions.list(), ...ctx.missions.overview()}); return true; }
+    const mission = pathname.match(new RegExp(`^/ui/api/missions/(${UUID})$`));
+    if (mission && method === 'GET') { json(res, 200, ctx.missions.planOf(mission[1])); return true; }
+    // Stopping a plan is a decision a person in front of the page may make, but it never touches a running agent:
+    // cancelling one of its tasks stays on that task's own page.
+    const stopMission = pathname.match(new RegExp(`^/ui/api/missions/(${UUID})/cancel$`));
+    if (stopMission && method === 'POST') {
+      const body = await readJson(req);
+      if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
+      const {mission: stopped, running} = await ctx.missions.cancel(stopMission[1]);
+      json(res, 200, {...ctx.missions.planOf(stopped.mission_id), running_tasks: running}); return true;
+    }
     if (pathname === '/ui/api/delegation' && method === 'POST') {
       const body = await readJson(req);
       if (typeof body.enabled !== 'boolean') { json(res, 400, {error: 'enabled must be true or false'}); return true; }

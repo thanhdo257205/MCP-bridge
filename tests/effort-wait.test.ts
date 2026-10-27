@@ -10,6 +10,7 @@ import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { EFFORT_FILE, EFFORT_LEVELS, effortFlags, readEffort, writeEffort } from '../src/effort.js';
 import { DEFAULT_MAX_WAIT_SECONDS } from '../src/security/input.js';
+import { missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 
@@ -29,7 +30,7 @@ async function setup(scenario:string,maxWait?:number){
   const launched:string[][]=[];
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv',...(maxWait===undefined?{}:{max_wait_seconds:maxWait})},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),launch:(args,cwd)=>{launched.push(args);return startProcess(process.execPath,[fixture,scenario],cwd);}});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
   const api=(p:string,init:RequestInit={})=>fetch(`${bridge.baseUrl}/ui/api/${p}`,{...init,headers:{...(init.body?{'Content-Type':'application/json'}:{})}});
   return {manager,bridge,api,workspace,launched};
 }

@@ -10,6 +10,7 @@ import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { SOFT_TIMEOUT_FILE, isAbsoluteLimit, rampedWaitSeconds, readSoftTimeout, writeSoftTimeout } from '../src/soft-timeout.js';
 import { writeWait } from '../src/wait-setting.js';
+import { missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 
@@ -41,7 +42,7 @@ async function setup(options:{soft?:{enabled:boolean;limit_seconds:number}|null;
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:4096,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:state,deadlineGraceMs:0,softCheckDelaysMs:[options.window??400,options.window??400,options.window??400],
       launch:(args,cwd)=>{launched.push(args);const log=args[args.indexOf('--log-file')+1];return startProcess(process.execPath,[fixture,scenario,args.includes('--log-file')?log:'',duration],cwd);}});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
   return {manager,bridge,workspace,state,launched,use:(name:string,ms='2200')=>{scenario=name;duration=ms;}};
 }
 const arg=(args:string[],flag:string)=>args[args.indexOf(flag)+1];

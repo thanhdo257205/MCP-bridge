@@ -9,6 +9,7 @@ import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { invocationFor } from '../src/antigravity/invocation.js';
 import { MODEL_FILE, parseModels, readModel, validModelId, writeModel } from '../src/models.js';
+import { missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 // Real output of `agy models` (agy 1.4.x on Windows).
@@ -57,7 +58,7 @@ async function setup(models:()=>Promise<{id:string;label:string}[]>){
   const launched:string[][]=[];
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:1024,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:path.join(root,'state'),models,launch:(args,cwd)=>{launched.push(args);return startProcess(process.execPath,[fixture,'ok'],cwd);}});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
   const api=(p:string,init:RequestInit={})=>fetch(`${bridge.baseUrl}/ui/api/${p}`,{...init,headers:{...(init.body?{'Content-Type':'application/json'}:{})}});
   return {manager,bridge,api,workspace,launched};
 }

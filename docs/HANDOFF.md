@@ -279,3 +279,158 @@ Bối cảnh release: `main` đã nhận PR #28 và #29, `publish.yml` chạy xo
 - WSL Ubuntu có Node 20.20.2 và chạy được thẳng `dist/` build từ Windows qua `/mnt/c`; output của `wsl.exe` lẫn byte
   rỗng nên lọc `tr -d '\000'` trước khi đọc. Đó là đường lấy verdict Linux **trước** khi push, không phải bản thay
   thế CI (CI vẫn chạy matrix 20/22 trên cả hai OS).
+
+## 5. Đợt 4 — 2026-10-27: Phase 2 "mission" — bridge ghi nhận và chặn, agent ngoài điều khiển
+
+Bốn quyết định chủ máy chốt **trước** khi viết code (không phải suy ra từ tài liệu):
+
+| Câu hỏi | Đã chốt |
+|---|---|
+| Phạm vi | Phase 2 của `docs/MULTI-AGENT-PLAN.md`: mission daemon + skill orchestrator |
+| Ngữ nghĩa | Bridge **ghi nhận và chặn, không tự chạy**: lưu plan + trạng thái từng bước, từ chối dispatch bước có phụ thuộc chưa `completed`, plan chỉ đọc và chỉ được nối thêm, **không bao giờ** tự khởi động một bước. Khởi động lại khôi phục plan nhưng không chạy lại gì |
+| Sản phẩm | Cả hai: trang **Nhiệm vụ** trong UI **và** skill thứ hai riêng `mission-orchestrator` (không gộp vào `antigravity-bridge`) |
+| Đường giao | Nhánh mới từ `main` → push → PR → **chờ chủ máy duyệt**; không merge, không kích bản phát hành npm |
+
+### 5.1 Đã làm
+
+| # | File | Nội dung |
+|---|------|----------|
+| 17 | `src/missions/missions.ts` (mới, 427 dòng) | `MissionManager` + schema. Plan tối đa `MAX_STEPS_PER_MISSION = 12` bước, cả plan dưới `MAX_MISSION_CHARACTERS = 100000` ký tự, giữ tối đa `MAX_RETAINED_MISSIONS = 20` bản ghi; `step_id` là slug `[a-z0-9][a-z0-9._-]{0,63}`; mọi schema `.strict()` nên field lạ bị từ chối ngay ở cửa. Chu trình sống: `create` (validate graph: trùng id, tự tham chiếu, phụ thuộc lạ, chu trình, workspace ngoài allowlist, timeout vượt trần) → `extend` (nối bước khi còn `open`) → `dispatch` (bốn lớp chặn, rồi mới tới `TaskRunner.delegate`) → `view`/`planOf` (trạng thái **suy ra từ task record tại lúc đọc**) → `cancel`. Bản ghi swap `<id>.json.tmp` + `rename`; `restore()` chỉ nhận file có tên khớp `MISSION_FILE` **và** id bên trong trùng tên; text dạng secret bị `redact` trước khi chạm đĩa |
+| 18 | `src/runtime.ts`, `src/index.ts`, `src/http.ts`, `src/stdio.ts` | Nối `MissionManager` vào cả ba transport (HTTP MCP, stdio, UI) và `createRuntime`; lúc khởi động chỉ log `Restored N mission plan(s) … (no step is dispatched by itself)`; `environment` thêm `supported.missions` + `limits.max_mission_steps` / `max_retained_missions` + caveat "restart không tự dispatch"; `/health` thêm `missions` overview |
+| 19 | `src/tools/register.ts` | Sáu tool mới: `mission_create`, `mission_extend`, `mission_dispatch`, `mission_status`, `mission_plan`, `mission_cancel`. Hợp đồng tiết kiệm token: create/extend trả **receipt** không echo plan; dispatch khi bước còn chạy trả đúng 6 trường + `next_step: wait`; `mission_status` không có text task; chỉ `mission_plan` mang `delegate` (và tool description nói rõ khi nào gọi nó); `next_step` do `missionNote(view)` tính từ chính plan chứ không chép từ mô tả; `client` của plan lấy từ `clientInfo`/User-Agent lúc gọi |
+| 20 | `src/ui/routes.ts`, `ui/app.js`, `ui/app.css` | `GET /ui/api/missions`, `GET /ui/api/missions/:uuid`, `POST /ui/api/missions/:uuid/cancel` (bắt buộc `confirm: true` và **cố ý không** truyền `cancelRunningTasks`). Trang "Nhiệm vụ": header đếm plan đang mở / bước sẵn sàng / bước đã ghi, callout "bridge không tự bắt đầu bước nào", mỗi plan một card với pill trạng thái, bảng bước (trạng thái, "Chưa qua vì", agent + worktree + cảnh báo ngoài phạm vi, nút id task nhảy sang trang Task), và khối "Yêu cầu đã ghi cho từng bước" đọc `mission_plan` khi được bấm. Nút "Dừng kế hoạch" hỏi confirm một lần rồi mới gọi API |
+| 21 | `skills/mission-orchestrator/SKILL.md` (mới, 82 dòng), `scripts/install-skill.ts`, `src/cli.ts`, `src/onboarding.ts`, `skills/known-versions.json` | Skill thứ hai **riêng**, không nhét thêm vào skill cũ. Installer giờ liệt kê mọi thư mục dưới `skills/` (`packagedSkills()`), nhận `--skill <name>` lặp lại, và `known-versions.json` đổi thành **lịch sử sha256 theo từng skill** để `--update` chỉ thay bản do package viết ra; onboarding đề nghị cả hai skill và log nêu tên từng cái |
+| 22 | `tests/missions.test.ts` (mới, 17 test), `tests/helpers.ts`, 15 file test cũ đổi chữ ký, `tests/package.test.ts` | `helpers.missionsFor(manager, workspace, maxTimeout)` để mọi test HTTP/stdio không liên quan mission vẫn dựng được bridge. `TaskRunner` giả cho phép dựng từng kịch bản gate mà không cần CLI: graph, gate phụ thuộc, single-flight, rebound/append-only, `lost` khi retention đuổi record, đuổi bản ghi im lặng, restart không tự dispatch, file lạ bị bỏ, redact trước khi ghi, surface MCP, và route UI. Hai test `tools/list` đổi 7 → **13**. `package.test.ts` thêm đúng một dòng: tarball phải chứa **cả hai** skill |
+| 23 | `scripts/live.ts` | Thêm nguyên một pha mission chạy trên `agy` thật: `expectRefused()` assert lời từ chối là `isError` **và** đúng nguyên văn lý do; ba bước phụ thuộc chạy thật rồi so `final_response` với đúng chữ plan đã ghi; sau đó là các cửa rebound / append-only / cancel / extend-sau-cancel |
+
+Hành vi không đổi, cố ý giữ: bind `127.0.0.1`, kiểm tra Host/Origin, **không** xác thực token, không cờ bypass
+permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệu/push nhánh bảo vệ/đọc credential/thay đổi hệ
+thống ngoài workspace — và vì mọi bước mission đi qua `TaskManager.delegate` nên toàn bộ các lớp đó áp dụng y nguyên.
+
+### 5.2 Bằng chứng — đơn vị trên **đúng nhánh PR**, tách khỏi cây dev
+
+Nhánh `qoder/phase2-mission` được checkout bằng `git worktree` ở thư mục tạm, chỉ gồm `main` + các file của đợt này,
+nên số liệu nghiệm thu không lẫn với work chưa commit của agent khác đang dùng chung thư mục làm việc.
+
+| Nền | Lệnh | Kết quả |
+|---|---|---|
+| Windows, Node 24.15.0 | `npm run build` rồi `node dist/scripts/run-tests.js` (`--test-concurrency=1`) | **240 test · 234 pass · 0 fail · 6 skipped**, 320,7 s, exit 0 |
+| Linux (WSL Ubuntu, Node 20.20.2, `dist/` build từ Windows chạy thẳng qua `/mnt/c`) | `node dist/scripts/run-tests.js` | **240 test · 239 pass · 0 fail · 1 skipped**, 257,3 s, exit 0 |
+
+Cả hai nền đều chạy **sau** ba bản sửa cuối của đợt này (bỏ escape trong `scripts/live.ts`, hai lỗi render ở
+`ui/app.js`, một dòng mới trong `tests/package.test.ts`), nên số liệu là của đúng đầu commit sẽ được push.
+
+Sáu dòng `# SKIP` trên Windows là năm test POSIX-only + `cli: --open …`; một dòng skip trên Linux đúng là
+`Windows .cmd shims resolve to a local Node entry without a shell`. Mười bảy test mission
+(`tests/missions.test.ts`, số 138–154 trên Linux) **xanh trên cả hai nền**.
+
+### 5.3 Bằng chứng — mười guard, cái nào cũng được chứng minh "bỏ ra là đỏ"
+
+Môi trường thử là **bản sao cô lập** của repo (junction `node_modules`, snapshot `.pristine`, restore + build lại sau
+mỗi phép thử) — không bao giờ build đè `dist/` của cây đang dùng chung. Mỗi phép thử chỉ sửa **một** dòng, build lại,
+rồi chạy **đúng test được nêu tên** (`--test-name-pattern`, `--test-timeout=15000`, limit cứng cho tiến trình con;
+treo = đỏ). Kết quả: **10/10 đỏ**.
+
+| # | Guard bị bỏ (hoặc bị nới) | Test được chỉ định | Cách đỏ |
+|---|---|---|---|
+| M1 | `if (unmet.length) throw` — chặn phụ thuộc chưa `completed` | `a step starts only after every dependency its plan names has completed` | fail 132 ms |
+| M2 | `if (this.inFlight.has(key)) throw` — single-flight | `two concurrent dispatches of one step cannot both reach the runner` | **treo** tới timeout 15 006 ms: không có guard thì lời gọi thứ hai kẹt thật, không phải chỉ "trả lời sai" |
+| M3 | `if (step.task_id) throw` — bước đã bind là vĩnh viễn | `the plan is append-only: a retry is a new step and the old one stays bound` | fail 239 ms |
+| M4 | `if (options.cancelRunningTasks)` → `?? true` | `cancel closes the plan without touching a running agent, unless it is asked to` | fail 474 ms |
+| M5 | thêm auto-dispatch vào `restore()` (đúng cái "daemon" mà quyết định đã loại) | `a restart restores plans with task-derived states and dispatches nothing by itself` | fail 325 ms |
+| M6 | kiểm tra "tên file phải khớp id bên trong" | `a mission record this project did not write is skipped, never loaded or deleted` | fail 55 ms |
+| M7 | `validateWorkspace` truyền `[...allowed, input.workspace]` (tự nới allowlist) | `create canonicalizes an allowed workspace and refuses one outside the allowlist` | fail 51 ms |
+| M8 | `isQuiet` luôn đúng (`states.size >= 0`) | `retention drops the oldest plan with nothing in flight and keeps one that is running` | fail 1 026 ms |
+| M9 | route UI cancel truyền `cancelRunningTasks: true` | `the UI reads a plan and its cancel closes the plan without stopping the agent it names` | fail 2 390 ms |
+| M10 | early-return khi plan đã canceled (làm mất tác dụng `cancel_running_tasks` ở lần cancel thứ hai) | `cancel closes the plan without touching a running agent, unless it is asked to` | fail 424 ms |
+
+Hai ghi chú kỹ thuật của chính phép thử (không phải của sản phẩm): `false && step.task_id` và
+`step.task_id && false` đều làm tsc mất narrowing (`TS18048`), còn `mission.status === 'canceled'` chèn sớm thì
+`TS2367` vì nó so hẹp hơn union — phải viết `(mission.status as string) === 'canceled'`. Và M2 chứng minh luôn vì sao
+refusal cần tồn tại: không có nó thì client **chết đói**, không phải nhận lỗi.
+
+Một guard thứ mười một của đợt này nằm ở bao bì, không ở mission: `tests/package.test.ts` giờ liệt kê
+`skills/mission-orchestrator/SKILL.md` vào danh sách tarball bắt buộc. Đã thử bằng cách thu `files` trong
+`package.json` thành `skills/antigravity-bridge/` → test đỏ đúng `AssertionError: missing
+skills/mission-orchestrator/SKILL.md`, rồi khôi phục `package.json` (md5 xác nhận trùng bản gốc).
+
+### 5.4 Bằng chứng — `agy` thật, transport streamable-http
+
+`node dist/scripts/live.js` chạy trên đúng nhánh (bridge thật + `agy` 1.4.7, scratch trong `%TEMP%`): **exit 0**,
+`success: true`, `workspace_unchanged: true` cho cả phần task đơn lẫn phần mission. Những gì phần mission chứng minh
+được mà unit test không tự xưng được:
+
+- Ba bước `a → b → c` chạy bằng agent thật, mỗi bước trả đúng `BRIDGE_MISSION_<id>` mà plan đã ghi; task id thật
+  `d176b699…`, `091df081…`, `37782405…`. `progress` cuối `{total:3, completed:3, active:0, ready:0, pending:0, unmet:0}`.
+- Sáu lời từ chối là hành vi production, nguyên văn: `step "b" is not ready: "a" is ready`,
+  `step "c" is not ready: "b" is pending`, `step "a" is already bound to task … (completed); the plan is append-only,
+  so dispatch a new step to try again` (cả hai cửa rebound và retry),
+  `mission … is canceled: no step can be dispatched`, `mission … is canceled; its plan can no longer change`.
+- Receipt không echo plan: assert chuỗi trả về không chứa `BRIDGE_MISSION_a`.
+- `mission_extend` vào plan đã xong vẫn mở đúng bước mới (`ready: ['d']`), rồi cancel đóng cửa cả extend lẫn dispatch.
+- Live test restart bridge giữa chừng và log nói đúng điều đã chốt:
+  `Restored 1 mission plan(s) from .bridge-state/missions (no step is dispatched by itself)`.
+
+Lần chạy live **đầu tiên đỏ vì chính harness**, không vì sản phẩm: `expectRefused` so regex vào chuỗi JSON nên dấu
+trích dẫn trong lý do lỗi bị escape (`\"a\"`) và không khớp. Đó là bằng chứng gate hoạt động (thông báo in ra đúng
+`step "b" is not ready: "a" is ready`), và bản sửa là bỏ escape trước khi assert.
+
+### 5.5 Bằng chứng — trang Nhiệm vụ xem bằng Chrome
+
+`test-results/ui-mission-check.mjs` (gitignored) dựng bridge scratch với plan ba bước: `write-note`
+(`isolation: worktree`, `owns: ['note.txt']`) → `report-back` → `final-summary`, rồi giữ bridge sống để mở trình duyệt.
+Đã bấm thật trên `http://127.0.0.1:<port>/ui/`:
+
+- Bảng bước hiện đúng `Hoàn tất / Đang chạy / Sẵn sàng`; cột "Chưa qua vì" là `—` cho bước gốc và `đủ phụ thuộc` khi đã
+  mở; cột agent thành `mặc định · worktree`; nút id task **nhảy thật** sang trang Task và trang Task chọn đúng task đó.
+- Bước worktree có `scope {checked: true, changed: 1, out_of_scope: 0}` → không có cảnh báo phạm vi, đúng chủ đích.
+- "Dừng kế hoạch" hỏi confirm bằng nguyên văn *"Task đang chạy vẫn chạy tới khi xong và vẫn hủy được riêng ở trang
+  Task"*; sau khi xác nhận: pill `Đã dừng`, nút dừng biến mất, **bước đang chạy vẫn `Đang chạy` rồi tự hoàn tất**
+  (đếm thành `3/3 hoàn tất`) — đúng quyết định "UI không giết agent".
+- Hai lỗi **chỉ lộ ra khi xem bằng trình duyệt**, đã sửa trong đợt này: (1) khối "Yêu cầu đã ghi cho từng bước" in ra
+  `[object HTMLLIElement],[object HTMLParagraphElement],…` vì mảng node truyền vào `details()` mà không spread như quy
+  ước ở `changesBody`; (2) pill trong khối đó đóng băng theo snapshot lúc mở panel (hàng bảng đã `Đang chạy` nhưng panel
+  còn `Sẵn sàng`) — panel giờ lấy trạng thái từ danh sách tươi, văn bản đã ghi vẫn là snapshot vì plan không đổi được.
+- Console chỉ còn một issue a11y có từ trước (hai input thiếu `id`/`name` ở trang Cài đặt); diff này không thêm input nào.
+
+Hai bản sửa UI đó **không có test tự động**: repo không có hạ tầng DOM test và test 17 dừng ở HTTP route. Đường kiểm
+chứng là Chrome, và người sau sửa trang này phải xem lại bằng Chrome — đừng giả định suite xanh nghĩa là trang đúng.
+
+### 5.6 Việc còn mở của Phase 2
+
+1. **Cố ý không có `mission_list`**: mất `mission_id` thì đọc trên trang Nhiệm vụ, không tạo plan mới để "đoán lại".
+   Đã ghi cả trong skill, README và tool description.
+2. Plan không có role/priority: role (Tech Lead, Reviewer, Tester…) chỉ là chữ trong `task`, bridge không hiểu ngữ
+   nghĩa. Bảng role của kế hoạch thuộc Phase 4.
+3. `fallback: true` (chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+4. Ngân sách theo **mission** chưa có; usage vẫn chỉ theo task và theo ngày, nên một plan 12 bước không có trần chi phí.
+5. Trang UI chỉ đọc + dừng, **không có nút dispatch** — có chủ đích: khởi động bước là quyết định của client MCP.
+6. Chưa live-test plan có bước chạy bằng `codex` vì CLI đó trên máy này hết auth (401 `token_revoked` / 402
+   `deactivated_workspace`); mọi bước live đều là `agy`. Cần `codex login` rồi chạy lại `scripts/live.ts`.
+7. Retention mission (20) đuổi bản ghi **kẻ trước, không hỏi**: plan cũ bị đuổi thì bước của nó thành `lost` mãi mãi.
+   Chưa có cảnh báo chủ máy, chưa có cách "ghim" một plan.
+
+### 5.7 Quy tắc cho người tiếp theo (mission)
+
+- **Không thêm bất kỳ chỗ nào để bridge tự dispatch.** `restore()` chỉ nạp bản ghi; mọi đường khởi động phải đi qua
+  `dispatch()` với bốn lớp chặn theo đúng thứ tự: canceled → đã bind task → phụ thuộc chưa `completed` → single-flight.
+  Thứ tự này có nghĩa: lý do lỗi phải là lý do *đầu tiên* đúng, vì client ra quyết định theo chuỗi đó. M1–M3, M5, M10
+  đều đỏ khi bỏ một lớp.
+- `mission_cancel` **không phải** nút dừng tiến trình. Mặc định `cancelRunningTasks` là false; MCP tool chỉ truyền cờ
+  này khi client nói rõ `cancel_running_tasks: true`, còn `src/ui/routes.ts` thì **không bao giờ** (M9). Muốn dừng hẳn
+  thì gọi `antigravity_cancel_task` cho từng task — đó là một quyết định phá hủy riêng.
+- Plan chỉ đọc với worker và **chỉ nối thêm** với orchestrator: `step_id` đã bind là vĩnh viễn, không có "dispatch lại
+  bước cũ cho đỡ tốn". Đó là cửa để hai agent giẫm nhau, và cũng là lý do `lost` không bao giờ mở khoá bước sau nó.
+- Trạng thái bước luôn tính tại lúc đọc từ task record, không lưu sẵn. `lost` nghĩa là *bridge đã đuổi record*, không
+  phải *agent báo lỗi* — đừng suy ra gì về nội dung workspace từ một bước `lost`.
+- Bản ghi mission swap bằng `.json.tmp` + `rename` giống hệt task record (cùng cái bẫy đã ghi ở mục 4): muốn đếm bản
+  ghi phải lọc theo `MISSION_FILE`, và `restore()` phải bỏ file có id bên trong không khớp tên — đó chính là M6.
+- Retention chỉ đuổi bản ghi **im lặng** (không còn `queued`/`running`) và giữ plan đang chạy: M8 đỏ nếu `isQuiet` bỏ
+  qua điều đó.
+- Giữ hợp đồng token của surface MCP: receipt không echo plan, dispatch khi chạy chỉ 6 trường, `mission_status` không
+  có text task, chỉ `mission_plan` mang `delegate`. Test `MCP surface: receipts omit the plan, the gate reads as a tool
+  error, a running step says wait` giữ cả bốn, và `tools/list` nay là **13** tool (test stdio + test HTTP đã đổi theo).
+- Skill thứ hai là `skills/mission-orchestrator/SKILL.md`: đổi nó thì **phải** nối sha256 vào `skills/known-versions.json`
+  (test `skill-update` enforce), và `tests/package.test.ts` giờ đòi cả hai skill có mặt trong tarball — thiếu một là
+  `agy-mcp-bridge skill install --skill mission-orchestrator` hỏng trên máy cài bằng npm.
+

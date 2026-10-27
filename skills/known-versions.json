@@ -1,69 +1,77 @@
 {
-  "comment": "sha256 of every SKILL.md this project has shipped, line endings normalized to LF. A file matching one of these is an old packaged copy that `skill install --update` may replace; anything else is treated as the owner's edit. Append the hash of the new SKILL.md here whenever you change it (a test enforces this).",
-  "versions": [
-    {
-      "sha256": "d6776cbecbbbd190df6ba83c16b821140aa7bcc855f8768677a00f210bc9de88",
-      "note": "first packaged skill (installer bundled)"
-    },
-    {
-      "sha256": "4fbf0722123c099625fd70986b5fa314c4210c56d8bf27d00eff926023b3a60b",
-      "note": "added task wait / log-free status"
-    },
-    {
-      "sha256": "3f0169d4f33c76e41521ade852d648e370c7333fbaf42a7e1aec6738b64adf6f",
-      "note": "added \"when not to delegate\" and the delegation switch"
-    },
-    {
-      "sha256": "055f773072ea93535ef09d0d2309074a32165a8f96491b2cc35b751176001415",
-      "note": "documented the queue and queued status"
-    },
-    {
-      "sha256": "9a3cfaf9adb21a637084f19c53ebe2e5d5b43fa673f7c58c04e9b0f0ef7b3087",
-      "note": "npm install commands and agy-mcp-bridge CLI"
-    },
-    {
-      "sha256": "afc8d8e76f977e0623b73bbb1e90f3e485cfdaf55036c36db6234328c111660b",
-      "note": "clarified cancel timing, restart of queued tasks, unlock, environment limitations"
-    },
-    {
-      "sha256": "451fe5791b1753f1550275a709c561442e62d1e8b86d3fe8c4525998d8d85659",
-      "note": "model choice is the owner's setting; no step progress in the tools"
-    },
-    {
-      "sha256": "65c0a72bb016ee8d891bfea17ea5d972dc79dc7c12c57edb17c1e6e8bbd37078",
-      "note": "Antigravity permission level is the owner's setting (agy_permissions)"
-    },
-    {
-      "sha256": "066f499ccd7341c7f77c2a409b3632e4cefe16e45ed2c77e75c8154028e951f9",
-      "note": "long waits (limits.max_wait_seconds), fewer polling calls"
-    },
-    {
-      "sha256": "bf96a492847e59fcdbd4eb7685a316a606699af2d217ea35a8e27dad85ccb2aa",
-      "note": "timeout guidance: split tasks, narrower follow-up after a timeout, limits.max_timeout_seconds"
-    },
-    {
-      "sha256": "83a5d812553cc79e8eec690cef825ced49b82b13e0991d4c632de5b6675b19f1",
-      "note": "opt-in auto-split mode (easy parts to Antigravity, hard parts by the Tech Lead)"
-    },
-    {
-      "sha256": "978deb00a9eb68780297eaf538da9272ac11e94c2942141b1d5e999fee218354",
-      "note": "auto-split mode follows the token-saving workflow (delegate whole, check just enough, short reports)"
-    },
-    {
-      "sha256": "117fa45228f421cf266f45c1a112e37ba2c164fb31c8fd64392495efa025828c",
-      "note": "while a task runs only wait: no reads or messages between waits, next_step note, no custom client"
-    },
-    {
-      "sha256": "d4246abf59e2aea3ad08c7b858cd6404ee79f5656e580142d019f6f6c443f8df",
-      "note": "activity line, slow is not stuck, soft deadline extension"
-    },
-    {
-      "sha256": "243a279ff026ed30ad91eaeb7376a4556bc9a1c4a9f4c206f64301c63d8853c4",
-      "note": "steps are for the user's web UI; do not fetch them"
-    },
-    {
-      "sha256": "fbd0fdebe8fcb95416f89dff95f8b4922e86d243d1139e613a88bde8cc54b034",
-      "note": "multi-agent delegation (agents_list, agent/isolation/owns/autonomy) with no bridge authentication"
-    }
-  ]
+  "comment": "sha256 of the SKILL.md versions of each skill this project has shipped, line endings normalized to LF. A file matching one of these is an old packaged copy that `skill install --update` may replace; anything else is treated as the owner's edit. Append the hash of the new SKILL.md here whenever you change it (a test enforces this).",
+  "skills": {
+    "antigravity-bridge": [
+      {
+        "sha256": "d6776cbecbbbd190df6ba83c16b821140aa7bcc855f8768677a00f210bc9de88",
+        "note": "first packaged skill (installer bundled)"
+      },
+      {
+        "sha256": "4fbf0722123c099625fd70986b5fa314c4210c56d8bf27d00eff926023b3a60b",
+        "note": "added task wait / log-free status"
+      },
+      {
+        "sha256": "3f0169d4f33c76e41521ade852d648e370c7333fbaf42a7e1aec6738b64adf6f",
+        "note": "added \"when not to delegate\" and the delegation switch"
+      },
+      {
+        "sha256": "055f773072ea93535ef09d0d2309074a32165a8f96491b2cc35b751176001415",
+        "note": "documented the queue and queued status"
+      },
+      {
+        "sha256": "9a3cfaf9adb21a637084f19c53ebe2e5d5b43fa673f7c58c04e9b0f0ef7b3087",
+        "note": "npm install commands and agy-mcp-bridge CLI"
+      },
+      {
+        "sha256": "afc8d8e76f977e0623b73bbb1e90f3e485cfdaf55036c36db6234328c111660b",
+        "note": "clarified cancel timing, restart of queued tasks, unlock, environment limitations"
+      },
+      {
+        "sha256": "451fe5791b1753f1550275a709c561442e62d1e8b86d3fe8c4525998d8d85659",
+        "note": "model choice is the owner's setting; no step progress in the tools"
+      },
+      {
+        "sha256": "65c0a72bb016ee8d891bfea17ea5d972dc79dc7c12c57edb17c1e6e8bbd37078",
+        "note": "Antigravity permission level is the owner's setting (agy_permissions)"
+      },
+      {
+        "sha256": "066f499ccd7341c7f77c2a409b3632e4cefe16e45ed2c77e75c8154028e951f9",
+        "note": "long waits (limits.max_wait_seconds), fewer polling calls"
+      },
+      {
+        "sha256": "bf96a492847e59fcdbd4eb7685a316a606699af2d217ea35a8e27dad85ccb2aa",
+        "note": "timeout guidance: split tasks, narrower follow-up after a timeout, limits.max_timeout_seconds"
+      },
+      {
+        "sha256": "83a5d812553cc79e8eec690cef825ced49b82b13e0991d4c632de5b6675b19f1",
+        "note": "opt-in auto-split mode (easy parts to Antigravity, hard parts by the Tech Lead)"
+      },
+      {
+        "sha256": "978deb00a9eb68780297eaf538da9272ac11e94c2942141b1d5e999fee218354",
+        "note": "auto-split mode follows the token-saving workflow (delegate whole, check just enough, short reports)"
+      },
+      {
+        "sha256": "117fa45228f421cf266f45c1a112e37ba2c164fb31c8fd64392495efa025828c",
+        "note": "while a task runs only wait: no reads or messages between waits, next_step note, no custom client"
+      },
+      {
+        "sha256": "d4246abf59e2aea3ad08c7b858cd6404ee79f5656e580142d019f6f6c443f8df",
+        "note": "activity line, slow is not stuck, soft deadline extension"
+      },
+      {
+        "sha256": "243a279ff026ed30ad91eaeb7376a4556bc9a1c4a9f4c206f64301c63d8853c4",
+        "note": "steps are for the user's web UI; do not fetch them"
+      },
+      {
+        "sha256": "fbd0fdebe8fcb95416f89dff95f8b4922e86d243d1139e613a88bde8cc54b034",
+        "note": "multi-agent delegation (agents_list, agent/isolation/owns/autonomy) with no bridge authentication"
+      }
+    ],
+    "mission-orchestrator": [
+      {
+        "sha256": "828f9d44c0edf38a0dbbb39c469f47968b4be37512b224eb12b985b8b15e4624",
+        "note": "first packaged mission skill (Phase 2)"
+      }
+    ]
+  }
 }

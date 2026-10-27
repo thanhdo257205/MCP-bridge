@@ -35,9 +35,9 @@ Usage: ${BIN} [command] [options]
                           Manage the directories agents may edit (restart the server afterwards)
   delegation on|off|status
                           Switch delegation to Antigravity on or off immediately (no restart)
-  skill install --client codex|claude|both [--project <dir>] [--update]
-                          Install the antigravity-bridge skill (first run also offers it once). --update replaces an older
-                          packaged copy; a file you edited yourself is never overwritten
+  skill install --client codex|claude|both [--skill <name>] [--project <dir>] [--update]
+                          Install the skills this bridge ships (first run also offers them once). Repeat --skill for one of
+                          them; --update replaces an older packaged copy, and a file you edited yourself is never overwritten
   setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
                           Print the exact client configuration (changes nothing)
   setup codex|both --apply [--yes] [--tool-timeout N] [--port N]
