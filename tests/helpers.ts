@@ -1,4 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { MissionManager } from '../src/missions/missions.js';
+import type { TaskManager } from '../src/tasks/manager.js';
+
+// Tests that are not about missions still have to hand the HTTP bridge a plan store; it only needs to accept the
+// workspace the task manager was given, and the same timeout ceiling the manager enforces.
+export function missionsFor(manager: TaskManager, workspace = '', maxTimeoutSeconds = 30): MissionManager {
+  return new MissionManager(manager, {allowed_workspaces: workspace ? [workspace] : [], max_timeout_seconds: maxTimeoutSeconds});
+}
 
 // A killed child whose parent never reaped it (common in containers without an init process) still answers kill(pid, 0).
 export function isAlive(pid: number): boolean {

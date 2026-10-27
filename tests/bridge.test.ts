@@ -112,7 +112,7 @@ test('real stdio entry emits only JSON-RPC on stdout and diagnostics on stderr',
   try {
     send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}}});await waitFor(1);
     send({jsonrpc:'2.0',method:'notifications/initialized'});
-    send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});const list=await waitFor(2);assert.equal((list.result as {tools:unknown[]}).tools.length,7);
+    send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});const list=await waitFor(2);assert.equal((list.result as {tools:unknown[]}).tools.length,13);
     send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'antigravity_environment',arguments:{}}});const env=await waitFor(3);
     assert.match(JSON.stringify(env),/unsupported/);
     assert.equal(invalid,false);assert.ok(messages.every(m=>m.jsonrpc==='2.0'));assert.match(stderr,/stdio ready/);

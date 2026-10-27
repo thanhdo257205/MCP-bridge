@@ -9,6 +9,7 @@ import { TaskManager } from '../src/tasks/manager.js';
 import { startProcess } from '../src/antigravity/process.js';
 import { invocationFor } from '../src/antigravity/invocation.js';
 import { PROGRESS_FILE, rawStep, readProgress, summarizeStep, writeProgress } from '../src/progress.js';
+import { missionsFor } from './helpers.js';
 
 const fixture = fileURLToPath(new URL('../../tests/fixtures/fake-agy.mjs',import.meta.url));
 
@@ -43,7 +44,7 @@ async function setup(){
   const launched:string[][]=[];let scenario='ok';
   const manager=new TaskManager({allowed_workspaces:[workspace],executable:process.execPath,max_timeout_seconds:30,default_timeout_seconds:20,max_output_bytes:4096,max_retained_tasks:10,max_queued_tasks:0,extra_env_passthrough:[],prompt_transport:'argv'},
     {executable:process.execPath,supported:true,stateDirectory:state,launch:(args,cwd)=>{launched.push(args);return startProcess(process.execPath,[fixture,scenario],cwd);}});
-  const bridge=await startHttpBridge({manager,environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
+  const bridge=await startHttpBridge({manager,missions:missionsFor(manager,workspace),environment:{cli_version:'mock',allowed_workspaces:[workspace]},port:0});
   return {manager,bridge,workspace,state,launched,use:(name:string)=>{scenario=name;}};
 }
 const run=async(manager:TaskManager,workspace:string)=>{const task=await manager.delegate({task:'t',workspace,acceptance_criteria:['x']});await manager.waitFor(task.task_id,15);return task.task_id;};
