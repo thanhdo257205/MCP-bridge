@@ -30,6 +30,8 @@ export interface Task {
   task_id: string; workspace: string; status: Status; started_at: string; queued_at: string | null; ended_at: string | null;
   duration_ms: number; pid: number | null; process_running: boolean;
   agent: string; isolation: Isolation; worktree: string | null; branch: string | null; owns: string[]; autonomy: Autonomy;
+  /** Repository root the worktree was added to; a startup sweep needs it to drop the git admin record too. */
+  worktree_toplevel?: string | null;
   scope: ScopeReport | null;
   /** Processes the agent left holding the worktree directory after it exited (null when nothing was found). */
   cleanup?: TreeReport | null;
@@ -95,6 +97,8 @@ export class TaskManager {
   private queue: string[] = [];
   private admission: Promise<void> = Promise.resolve();
   private closing = false;
+  /** Tree releases still running after their task published its status; shutdown waits for these. */
+  private pendingRelease = new Set<Promise<void>>();
   private readonly agents: AgentRuntime[];
   private readonly defaultAgent: string | null;
   constructor(private config: Config, private runtime: Runtime) {
@@ -251,6 +255,7 @@ export class TaskManager {
         execWorkspace = worktree.workspace;
         task.worktree = worktree.root;
         task.branch = worktree.branch;
+        task.worktree_toplevel = worktree.toplevel;
         // Keep the regenerated prompt equal to the one the agent received (the worktree workspace, not the original one).
         if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
       } else {
@@ -464,8 +469,11 @@ export class TaskManager {
         // worktree, and on Windows they outlive it and pin the directory. Releasing them needs a process query, so
         // it runs after the status is visible: no client waits on it, and the record is patched when it finishes.
         const held = {request: entry.request ?? null, stats: entry.stats ?? null};
-        const observed = watch.stop();
-        void this.releaseOwnedTree(child.pid ?? null, started, observed).then(async cleanup => {
+        // The last watch reading is part of the release, not of the publish chain: a wedged process query must not
+        // hold the lane that the next queued task is waiting on.
+        const release = Promise.resolve().then(() => watch.stop()).then(observed =>
+          this.releaseOwnedTree(child.pid ?? null, started, observed)
+        ).then(async cleanup => {
           task.cleanup = cleanup;
           // A report that reaped nothing and failed for no reason says nothing worth a second write: this one runs
           // detached from the status publish, so a reader of the tasks directory can catch its swap mid-flight.
@@ -474,6 +482,10 @@ export class TaskManager {
           // back from the dead; only a task the manager still keeps has a record to patch.
           if (this.entries.has(task.task_id)) await this.persist(task, held);
         }).catch(() => { /* the release is a convenience; the task result stands without it */ });
+        // Shutdown waits for whatever is still in flight here, so stopping the bridge right after the last agent
+        // exits cannot drop the only record of which processes were left running.
+        this.pendingRelease.add(release);
+        void release.finally(() => { this.pendingRelease.delete(release); });
         await appendUsage(this.runtime.stateDirectory, {
           at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,
           permission: entry.request?.permission ?? null, duration_ms: task.duration_ms, agy_duration_seconds: entry.stats?.agy_duration_seconds ?? null,
@@ -661,6 +673,14 @@ export class TaskManager {
   async shutdown(): Promise<void> {
     this.stopAccepting();
     await Promise.all([...this.entries.keys()].map(id => this.cancel(id)));
+    const pending = [...this.pendingRelease];
+    if (!pending.length) return;
+    // Bounded by the same budget the release answers with, plus the record write: a wedged process query must turn
+    // into a lost report, never into a shutdown that hangs.
+    await Promise.race([
+      Promise.all(pending),
+      new Promise<void>(resolve => { const timer = setTimeout(resolve, REAP_BUDGET_MS + 2000); timer.unref?.(); })
+    ]);
   }
   stopAccepting(): void { this.closing = true; }
 

@@ -361,6 +361,21 @@ function scopeBody(task) {
   return h('div', {class: 'callout', text: `${scope.changed} file thay đổi, tất cả nằm trong owns.`});
 }
 
+/**
+ * What the bridge did with the processes the agent left behind. Absent while the task runs and while the release
+ * query is still open, so a missing line is not a failure to clean up.
+ */
+function cleanupBody(task) {
+  const c = task.cleanup;
+  if (!c) return null;
+  if (!c.checked) return h('div', {class: 'callout warn', text: `Không kiểm tra được cây tiến trình agent: ${c.reason || 'lỗi không xác định'}`});
+  const parts = [c.reaped.length ? `đã giải phóng ${c.reaped.length} cây tiến trình (${c.reaped.join(', ')})` : 'không còn cây tiến trình nào cần dọn'];
+  if (c.skipped.length) parts.push(`${c.skipped.length} nhánh vẫn chạy: ${c.skipped.map(s => `${s.pid} — ${s.guard}`).join('; ')}`);
+  if (typeof c.tracked === 'number') parts.push(`đã ghi danh ${c.tracked} tiến trình trong lúc agent chạy`);
+  if (c.group_signalled === true) parts.push('đã gửi tín hiệu tới cả nhóm tiến trình');
+  return h('div', {class: c.skipped.length ? 'callout warn' : 'callout', text: `Tiến trình agent để lại: ${parts.join(' · ')}`});
+}
+
 function detailView() {
   const d = state.detail;
   if (!d) return h('div', {class: 'card empty'}, state.selected ? 'Đang tải…' : 'Chọn một task để xem nội dung trao đổi.');
@@ -407,6 +422,7 @@ function detailView() {
       task.denied_actions.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Thao tác bị từ chối quyền'}),
         h('div', {class: 'chips'}, task.denied_actions.map(a => h('span', {class: 'chip', text: a.display_name || a.action})))) : null,
       scopeBody(task),
+      cleanupBody(task),
       task.error ? h('div', {class: 'callout bad', text: task.error}) : null,
       task.status === 'completed' ? h('div', {class: 'callout warn', text: 'CLI báo hoàn tất nhưng chưa được xác minh. Tech Lead cần xem diff thực tế và chạy test.'}) : null
     ];

@@ -101,6 +101,17 @@ export async function listProcesses(): Promise<ProcessInfo[]> {
   return parseTable(await powershell(tableQuery()));
 }
 
+/**
+ * The same rows, but only for the pids about to be killed. Every id is validated first because it is spliced into a
+ * WQL filter string.
+ */
+export async function listProcessesById(pids: number[]): Promise<ProcessInfo[]> {
+  if (!pids.length) return [];
+  if (!pids.every(pid => Number.isInteger(pid) && pid > 1)) throw new Error('A process id to verify must be a positive integer');
+  const filter = pids.map(pid => `ProcessId=${pid}`).join(' OR ');
+  return parseTable(await powershell(tableQuery().replace('Win32_Process -Property', `Win32_Process -Filter '${filter}' -Property`)));
+}
+
 /** Every row below `root`, nearest first, without the root itself. */
 export function descendants(table: ProcessInfo[], root: number): ProcessInfo[] {
   const childrenOf = new Map<number, ProcessInfo[]>();
@@ -127,8 +138,11 @@ export function descendants(table: ProcessInfo[], root: number): ProcessInfo[] {
 }
 
 export interface TreeWatch {
-  /** Stops polling and returns every descendant seen since the task started. */
-  stop(): ProcessInfo[];
+  /**
+   * Stops polling and returns every descendant seen since the task started. The last enumeration is awaited because a
+   * shell that is still alive at this moment names children the earlier ticks had not seen yet.
+   */
+  stop(): ProcessInfo[] | Promise<ProcessInfo[]>;
 }
 
 /**
@@ -167,9 +181,12 @@ export function startTreeWatch(pid: number, options: {
   };
   wait(0);
   return {
-    stop(): ProcessInfo[] {
+    async stop(): Promise<ProcessInfo[]> {
       stopped = true;
       cancel?.();
+      try {
+        for (const info of descendants(await list(), pid)) observed.set(info.pid, info);
+      } catch { /* the release still has everything the polls recorded */ }
       return [...observed.values()];
     }
   };
@@ -198,6 +215,8 @@ export interface ReapOptions {
   list?: () => Promise<ProcessInfo[]>;
   /** Descendants recorded by startTreeWatch while the task was running. */
   observed?: ProcessInfo[];
+  /** Re-reads exactly the pids about to be killed, so a number reissued after the tree query is never killed. */
+  verify?: (pids: number[]) => Promise<ProcessInfo[]>;
   kill?: (pid: number) => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   /** POSIX only: whether any member of the exited child's process group is still alive. */
@@ -255,7 +274,22 @@ export async function reapOwnedTree(pid: number, options: ReapOptions): Promise<
   const reaped: number[] = [];
   const skipped: TreeReport['skipped'] = [];
   const kill = options.kill ?? killTree;
-  for (const child of tops) {
+  // Enumeration and termination are not one atomic act: every kill is awaited, so a pid can be reissued while the
+  // loop runs. Re-reading just the targets costs one filtered query instead of a second full table.
+  let targets = tops;
+  if (tops.length) {
+    try {
+      const fresh = new Map((await (options.verify ?? listProcessesById)(tops.map(row => row.pid))).map(row => [row.pid, row]));
+      targets = [];
+      for (const candidate of tops) {
+        const now = fresh.get(candidate.pid);
+        if (!now) continue;
+        if (recycled(candidate, now)) skipped.push({pid: candidate.pid, name: candidate.name, guard: 'pid was reissued to another process after the tree query'});
+        else targets.push(now);
+      }
+    } catch { /* the second read is an extra guard; the checks already made against the tree query still stand */ }
+  }
+  for (const child of targets) {
     const info = observed.get(child.pid);
     if (info && recycled(info, child)) {
       skipped.push({pid: child.pid, name: child.name, guard: 'pid was recycled for an unrelated process after the task ended'});
