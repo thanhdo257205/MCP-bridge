@@ -59,6 +59,14 @@ tới khi bị giết. `taskkill /T` từ gốc 29124 giết cả ba và `rm -rf
 | 12 | `tests/isolation-orphans.test.ts`, `tests/isolation-worktree.test.ts`, `tests/config.test.ts`, `tests/bridge.test.ts`, `tests/http.test.ts`, `tests/package.test.ts` | pid cấp lại giữa query và kill không bao giờ bị signal (kèm: verify trả `[]` → không giết; verify ném lỗi → vẫn giết theo quyết định cũ); sweep xóa bản ghi admin cùng thư mục; repo có thư mục bay không qua git được xếp hàng prune; cadence mặc định là của mã, giá trị sai bị **từ chối** chứ không âm thầm tắt reaper, file example phải parse được; shutdown không bỏ mất verdict đang chạy; `/ui/api/tasks/<id>` trả đúng bản `cleanup` cho UI; `docs/HANDOFF.md` không nằm trong package đã publish |
 | 13 | `package.json`, `README.md` | `files` loại `docs/HANDOFF.md` (ghi chú nội bộ, không phải tài liệu cho người cài package); §6 README viết lại ba đoạn: reaper + trường `cleanup` + dòng UI, kiểm tra lại pid trước khi giết, `tree_watch` (nhịp/tắt), và sweep + `git worktree prune --expire=now` kèm blast radius và đường thoát `git worktree repair` |
 
+### Đợt 3 — 2026-10-27: giao diện gọn theo "Xem thêm" + sửa `prefixArgs` bị rơi
+
+| # | File | Nội dung |
+|---|------|----------|
+| 14 | `ui/app.js`, `ui/app.css` | Mật độ: helper `collapsible()`/`more()` dựng `<details class="more">` cho mọi văn bản trả lời "vì sao / nếu như" thay vì "bây giờ đang sao". Đầu trang chi tiết task còn **một** dòng meta (uuid và branch tụt xuống khối thông số), lưới 17 ô vào "Xem thêm thông số task"; các card Cài đặt đưa giải thích dài + callout "chưa kiểm chứng" ra sau nút Xem thêm — riêng cảnh báo *không xác thực* và cảnh báo *sandbox không phải giới hạn đường dẫn* ở mức Tự động/Toàn quyền vẫn luôn hiện; dòng hoạt động rút ngắn, phần giải thích thành tooltip; trang Sử dụng ẩn những ngày không có task và rút cột Usage về tổng token (breakdown trong tooltip). Đã xem bằng Chrome với bridge thật trong `%TEMP%` (4 task `agy`: hoàn tất / hết hạn / thất bại / đang chạy) |
+| 15 | `src/antigravity/process.ts`, `src/runtime.ts`, `src/agents/registry.ts`, `src/agents/antigravity.ts`, `src/models.ts`, `src/tasks/manager.ts` | `resolveCommand()` trả `{executable, prefixArgs}` — với `.cmd` shim thì `executable` là `node.exe` và `prefixArgs` là script của CLI. Cả ba chỗ dùng lệnh Antigravity giờ đều nối `prefixArgs` trước args của mình: probe (`inspectCli` nhận nguyên `ResolvedCommand` thay vì mỗi `executable`), launch (`AntigravityInspection.prefixArgs` → `AgentRuntime.prefixArgs`, kèm đường `legacyAntigravityAgent`), và `agy models` (`listModels(..., prefixArgs)` qua `Runtime.prefixArgs`). Trước đó cả ba hỏi/bắt `node.exe` mà thiếu script: `agy` cài bằng npm shim bị báo `unsupported`, và vì `DEFAULT_ENABLED = ['antigravity','codex']` nên **Codex thật âm thầm thành default agent**; `availableModels()` thì luôn fail ở trang Cài đặt trên máy đó |
+| 16 | `tests/agents.test.ts`, `tests/hardening-inspection.test.ts` | `agy.cmd` + `agy.js` thật trong `%TEMP%` đi hết đường resolve → probe → registry → invocation → `availableModels()`; test thứ hai so **argv chính xác** của hai lần probe. Trên nền không-Windows (không có shim) dựng `ResolvedCommand` thủ công để phần nối args vẫn được phủ |
+
 Hành vi không đổi, cố ý giữ: bind `127.0.0.1`, kiểm tra Host/Origin, **không** xác thực token, không cờ bypass
 permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệu/push nhánh bảo vệ/đọc credential/thay
 đổi hệ thống ngoài workspace, và **trạng thái cuối chỉ xuất bản sau khi `inspectScope` xong**.
@@ -155,6 +163,17 @@ Bằng chứng hồi quy (mỗi fix được chứng minh bằng cách **tháo f
 | Bỏ nhịp đọc cuối trong `TreeWatch.stop()` | watch poll/accumulate/stop | **Đỏ**: `observed` thiếu pid `9911` sinh ra sau nhịp poll cuối |
 | Thêm record-driven pass cho sweep | `a repository whose directory went without git is queued for pruning` | Đỏ **một cách tự nhiên** ở lần chạy đầu (`prunable: []`) vì thư mục xóa tay không còn trong `readdir` cha — đó là lý do có lượt đọc record |
 | `pruneWorktrees` đếm từ `-v` | `the sweep drops the git admin record with the directory it removes` | Đỏ: `pruned: 0` hai lần — thứ nhất vì git mặc định chỉ prune bản ghi cũ hơn 3 tháng (phải `--expire=now`), thứ hai vì `prune -v` in ra **stderr** còn helper `git()` chỉ nhận stdout |
+| Probe gọi `run(command.executable, args, cwd)` (bỏ `prefixArgs`) | 3 test: `CLI accepts the 1.4 patch family…`, `CLI inspection asks the command that was resolved…`, `a shimmed Antigravity keeps its script…` | **Đỏ**, và diff argv nói thẳng: actual `['…node.exe','--version']` thay vì `['…node.exe','…inspect-agy.mjs','1.4.7','','--version']` — đúng lỗi production |
+| Registry không truyền `prefixArgs` cho agent Antigravity | `a shimmed Antigravity keeps its script from the probe through to the launch` | **Đỏ** riêng phần launch: `agent.prefixArgs` → `actual: undefined, expected: ['…agy.js']` |
+| `availableModels()` bỏ tham số `prefixArgs` cuối | cùng test trên | **Đỏ** riêng phần models: `agy models` không trả về danh sách |
+
+Unit Windows đợt 3, ngày 2026-10-27, sau khi sửa xong cả ba chỗ: **222 test, 216 pass, 0 fail, 6 skipped**, 245,0 s,
+exit 0. So với đợt 2 đúng hai test mới (mục 16), số skipped không đổi. Ba mutation trên được tháo **từng chỗ một**,
+mỗi lần chỉ đỏ đúng test tương ứng, rồi khôi phục và chạy lại cả suite.
+Smoke live với `agy` thật trên máy phát triển (CLI ở đó là **native exe chứ không phải shim**, scratch config +
+`BRIDGE_HOME` trong `%TEMP%`, `PORT=0`, chỉ probe chứ không giao task):
+`[bridge] Agent antigravity: ready 1.4.7` — nên đường của người dùng cũ không đổi hành vi; bản sửa này mở đường
+cho cách cài `agy` qua npm `.cmd`, chưa có máy shim thật để đo.
 
 Live với **code đợt 2**, `agy` 1.4.7 thật, MCP client `streamable-http`, scratch trong `%TEMP%` (không đụng repo),
 ngày 2026-10-27 (báo cáo `test-results/reap-report.json`, gitignored):
