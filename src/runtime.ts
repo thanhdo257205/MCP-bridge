@@ -3,6 +3,8 @@ import { helperDirectory, paths } from './paths.js';
 import { inspectCli, resolveCommand, startProcess, VERIFIED_AGY_VERSIONS } from './antigravity/process.js';
 import { createAgentRegistry, publicAgents, type AntigravityInspection } from './agents/registry.js';
 import { TaskManager } from './tasks/manager.js';
+import {sweepStaleWorktrees} from './isolation/worktree.js';
+import {startTreeWatch} from './isolation/orphans.js';
 import {recoverExecutionLock} from './tasks/execution-lock.js';
 
 export async function createRuntime() {
@@ -29,9 +31,15 @@ export async function createRuntime() {
   const maxParallelWorktrees = config.max_parallel_worktrees ?? 2;
   const manager = new TaskManager(config, {
     executable: antigravity.executable, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
-    agents: registry.agents, defaultAgent: registry.defaultAgent
+    agents: registry.agents, defaultAgent: registry.defaultAgent,
+    // Without the watch the release can only name the processes that still hang below the agent at the moment it
+    // exits, which is exactly the case that left the worktree pinned in a live run.
+    watchTree: startTreeWatch
   });
   await recoverExecutionLock(paths.stateDirectory);
+  const sweep = await sweepStaleWorktrees(paths.stateDirectory);
+  for (const removed of sweep.removed) console.error(`[bridge] Removed a stale empty worktree directory: ${removed}`);
+  for (const kept of sweep.retained) console.error(`[bridge] Kept worktree directory ${kept.path}: ${kept.reason}`);
   const restored = await manager.restore();
   if (restored) console.error(`[bridge] Restored ${restored} finished task record(s) from .bridge-state/tasks`);
   const lockWarning = await manager.lockDiagnostic();
@@ -63,7 +71,8 @@ export async function createRuntime() {
       'Existing agent permissions, hooks, MCP and credential access remain governed by each CLI configuration.',
       'Antigravity permission flags are off unless the bridge owner raises the level in the web UI (a client cannot change it). At the default level, actions that need approval are denied (see denied_actions).',
       'No permission bypass flags. Dangerous actions require separate interactive approval.',
-      'Windows uses taskkill on the live owned child tree; abrupt server termination may orphan processes.',
+      'After an agent process exits, the bridge releases the process trees it left behind (Windows: taskkill on every subtree still hanging below the agent or below a process recorded while it ran; POSIX: the exited process group). A bridge killed abruptly can still orphan processes.',
+      'Worktree directories of finished tasks are kept for review. Only empty leftovers are removed at startup, and a directory a live process still holds is reported instead of forced.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'
     ]
   };

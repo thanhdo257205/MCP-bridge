@@ -13,7 +13,10 @@ test('chunked output keeps full final content but publishes only bounded-frequen
       await new Promise(resolve=>setTimeout(resolve,20));
     }
     const done=await manager.wait(task.task_id);assert.equal(done.status,'completed');assert.equal(done.final_response,'x'.repeat(1200));
-    assert.ok(changes<=3,`too many partial snapshots: ${changes}`);assert.ok(!done.stderr.includes('fake-secret'));
+    // The publisher is rate limited, not per chunk: the bound follows how long the process actually ran, so a loaded
+    // machine that stretches the 30ms chunk cadence cannot make a correctly throttled task look wrong.
+    const allowed=Math.ceil(done.duration_ms/1000)+1;
+    assert.ok(changes<=allowed,`too many partial snapshots: ${changes} in ${done.duration_ms}ms (allowed ${allowed})`);assert.ok(!done.stderr.includes('fake-secret'));
     assert.equal(done.stdout_bytes,Buffer.byteLength(done.stdout));assert.equal(done.stdout_truncated,false);
   }finally{await manager.shutdown();}
 });

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { workspaceChanges } from '../changes.js';
 import { inside } from '../security/workspace.js';
@@ -72,11 +72,92 @@ export async function createWorktree(options: { workspace: string; stateDirector
   return {root: realRoot, workspace: realWorkspace, toplevel, branch, prefix, base};
 }
 
-/** Best effort and only for a launch that never started a process: no files were touched by the agent. */
-export async function removeWorktree(worktree: Worktree): Promise<void> {
-  await git(worktree.toplevel, ['worktree', 'remove', '--force', worktree.root]).catch(() => {});
-  await git(worktree.toplevel, ['branch', '-D', worktree.branch]).catch(() => {});
+/** Result of a removal attempt: a busy worktree directory must be reported, never silently kept. */
+export interface RemovalResult {
+  removed: boolean;
+  reason?: string;
 }
+
+export interface SweepReport {
+  scanned: number;
+  removed: string[];
+  retained: {path: string; reason: string}[];
+}
+
+/**
+ * Best effort and only for a launch that never started a process: no files were touched by the agent.
+ * A Windows process that still holds the directory makes `git worktree remove` fail, so the attempt is retried
+ * briefly and the outcome is returned instead of dropped.
+ */
+export async function removeWorktree(worktree: Worktree, options: {retryDelayMs?: number[]} = {}): Promise<RemovalResult> {
+  const delays = options.retryDelayMs ?? [0, 200, 600];
+  let reason = '';
+  for (const delay of delays) {
+    if (delay) await sleep(delay);
+    try { await git(worktree.toplevel, ['worktree', 'remove', '--force', worktree.root]); }
+    catch (error) { reason = error instanceof Error ? error.message : 'git worktree remove failed'; }
+    if (!await exists(worktree.root)) {
+      await git(worktree.toplevel, ['branch', '-D', worktree.branch]).catch(() => {});
+      return {removed: true};
+    }
+    reason = `The worktree directory is still held by a running process${reason ? ` (last error: ${reason})` : ''}`;
+  }
+  return {removed: false, reason};
+}
+
+const exists = async (target: string): Promise<boolean> => {
+  try { await stat(target); return true; } catch { return false; }
+};
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+const TASK_ID = /^[0-9a-f]{8}-[0-9a-f-]+$/;
+
+/**
+ * Drops worktree directories that a previous run could not remove because a process the bridge no longer owned
+ * was holding them open. Only genuinely empty directories go: anything with content is a diff someone may still
+ * be reviewing, and stale locks on real work are left for a human.
+ */
+export async function sweepStaleWorktrees(stateDirectory: string, options: {
+  readStatus?: (taskId: string) => Promise<string | null>;
+  remove?: (directory: string) => Promise<void>;
+  retryDelayMs?: number[];
+} = {}): Promise<SweepReport> {
+  const directory = path.join(stateDirectory, 'worktrees');
+  const report: SweepReport = {scanned: 0, removed: [], retained: []};
+  let names: string[];
+  try { names = await readdir(directory); }
+  catch { return report; }
+  const readStatus = options.readStatus ?? (async (taskId: string) => {
+    try {
+      const parsed = JSON.parse(await readFile(path.join(stateDirectory, 'tasks', `${taskId}.json`), 'utf8')) as {status?: string; task?: {status?: string}};
+      return parsed.task?.status ?? parsed.status ?? null;
+    } catch { return null; }
+  });
+  const remove = options.remove ?? ((target: string) => rmdir(target));
+  for (const name of names) {
+    const candidate = path.join(directory, name);
+    report.scanned += 1;
+    if (!TASK_ID.test(name)) { report.retained.push({path: candidate, reason: 'not a task worktree directory'}); continue; }
+    let status: string | null;
+    try { status = await readStatus(name); }
+    catch { report.retained.push({path: candidate, reason: 'its task record could not be read'}); continue; }
+    if (status === 'queued' || status === 'running') { report.retained.push({path: candidate, reason: `task is ${status}`}); continue; }
+    let entries: string[];
+    try { entries = await readdir(candidate); }
+    catch (error) { report.retained.push({path: candidate, reason: error instanceof Error ? error.message : 'directory could not be read'}); continue; }
+    if (entries.length) { report.retained.push({path: candidate, reason: 'it still holds files for review'}); continue; }
+    let reason = '';
+    for (const delay of options.retryDelayMs ?? [0, 200, 600]) {
+      if (delay) await sleep(delay);
+      try { await remove(candidate); reason = ''; break; }
+      catch (error) { reason = error instanceof Error ? error.message : 'directory could not be removed'; }
+    }
+    if (reason) report.retained.push({path: candidate, reason});
+    else report.removed.push(candidate);
+  }
+  return report;
+}
+
 
 function normalizeOwn(own: string): string {
   return path.posix.normalize(own.replace(/\\/g, '/')).replace(/^\.\//, '').replace(/\/+$/, '');
