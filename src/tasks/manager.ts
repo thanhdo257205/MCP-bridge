@@ -467,7 +467,12 @@ export class TaskManager {
         const observed = watch.stop();
         void this.releaseOwnedTree(child.pid ?? null, started, observed).then(async cleanup => {
           task.cleanup = cleanup;
-          await this.persist(task, held);
+          // A report that reaped nothing and failed for no reason says nothing worth a second write: this one runs
+          // detached from the status publish, so a reader of the tasks directory can catch its swap mid-flight.
+          if (!cleanup.reaped.length && !cleanup.skipped.length && !cleanup.reason) return;
+          // Retention can evict this task while the query is still running, and writing then would bring the record
+          // back from the dead; only a task the manager still keeps has a record to patch.
+          if (this.entries.has(task.task_id)) await this.persist(task, held);
         }).catch(() => { /* the release is a convenience; the task result stands without it */ });
         await appendUsage(this.runtime.stateDirectory, {
           at: task.ended_at ?? new Date().toISOString(), status: task.status, model: entry.request?.model ?? null, effort: entry.request?.effort ?? null,

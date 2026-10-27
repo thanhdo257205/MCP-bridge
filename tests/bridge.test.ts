@@ -145,8 +145,32 @@ test('evicted tasks lose their persisted record',async()=>{
   const {manager,input,root}=await setup();
   const ids:string[]=[];
   for(let i=0;i<4;i++) ids.push((await manager.wait((await manager.delegate(input)).task_id)).task_id);
-  const files=await readdir(path.join(root,'state','tasks'));
+  // Records swap through a `.tmp` name, so a listing taken while a write is in flight is not a count of records.
+  const files=(await readdir(path.join(root,'state','tasks'))).filter(name=>name.endsWith('.json'));
   assert.equal(files.length,3);assert.ok(!files.includes(`${ids[0]}.json`));
+});
+test('a tree report that lands after eviction patches the record it still owns',async()=>{
+  // The process query runs after the status is published, so retention can evict the task while it is still
+  // running. On Linux that window is wide enough to have been hit: the late patch used to write the file back.
+  const {root,config,input}=await setup();
+  const state=path.join(root,'state');
+  let release:()=>void=()=>{};
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const manager=new TaskManager(config,{executable:process.execPath,supported:true,stateDirectory:state,
+    launch:(_args,cwd)=>startProcess(process.execPath,[fixture,'ok'],cwd),
+    reapTree:async()=>{await gate;return {checked:true,reaped:[601],skipped:[]};}});
+  try {
+    const first=await manager.wait((await manager.delegate(input)).task_id);
+    const kept:string[]=[];
+    for(let i=0;i<3;i++) kept.push((await manager.wait((await manager.delegate(input)).task_id)).task_id);
+    assert.ok(!(await readdir(path.join(state,'tasks'))).includes(`${first.task_id}.json`),'retention removed the record while its report was still open');
+    release();
+    await new Promise(resolve=>setTimeout(resolve,100));
+    const files=(await readdir(path.join(state,'tasks'))).filter(name=>name.endsWith('.json'));
+    assert.equal(files.length,3,'the late report does not bring an evicted record back');
+    assert.ok(!files.includes(`${first.task_id}.json`));
+    for(const id of kept) assert.equal(manager.get(id).cleanup?.checked,true,'a task still retained does get its report patched');
+  } finally { await manager.shutdown(); }
 });
 test('stale execution lock is diagnosed but never removed',async()=>{
   const {manager,input,root}=await setup();
