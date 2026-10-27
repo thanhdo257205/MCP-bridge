@@ -199,11 +199,15 @@ export class MissionManager {
     assertPlan(input.steps, [], input.workspace, this.config.max_timeout_seconds);
     // Fail at the plan rather than at the first dispatch: a workspace outside the allowlist can never run a step.
     const workspace = await validateWorkspace(input.workspace, this.config.allowed_workspaces);
+    // One spelling for the whole record. `assertPlan` proved every step names the mission's workspace, so rewriting
+    // it to the canonical directory loses nothing — and keeping the raw string would make `mission_plan` print two
+    // spellings of one directory, which `extend` would then refuse the client for using.
+    const steps = input.steps.map(step => ({...step, delegate: {...step.delegate, workspace}}));
     const now = new Date().toISOString();
     const mission: Mission = {
       mission_id: randomUUID(), title: redact(input.title), goal: redact(input.goal), workspace,
       status: 'open', client: meta.client ? redact(meta.client).slice(0, 100) : null,
-      created_at: now, updated_at: now, canceled_at: null, steps: toSteps(input.steps)
+      created_at: now, updated_at: now, canceled_at: null, steps: toSteps(steps)
     };
     this.missions.set(mission.mission_id, mission);
     for (const evicted of this.makeRoom()) await this.forget(evicted);
@@ -215,12 +219,29 @@ export class MissionManager {
   async extend(id: string, steps: unknown): Promise<Mission> {
     const mission = this.require(id);
     if (mission.status === 'canceled') throw new Error(`mission ${id} is canceled; its plan can no longer change`);
-    const additions = stepsSchema.parse(steps);
+    const additions = await this.alignWorkspaces(stepsSchema.parse(steps), mission.workspace);
     assertPlan(additions, mission.steps, mission.workspace, this.config.max_timeout_seconds);
     mission.steps.push(...toSteps(additions));
     mission.updated_at = new Date().toISOString();
     await this.persist(mission);
     return mission;
+  }
+
+  /**
+   * Resolve each distinct workspace spelling of an incoming plan against the mission's own directory, so the
+   * single-workspace rule gates on the directory rather than on how the client wrote it: a trailing separator,
+   * slashes the other way or a Windows short name all name a workspace the plan already runs in, and `dispatch`
+   * canonicalizes the same string anyway. Only a spelling that lands on this mission's directory is rewritten;
+   * anything else stays exactly as the client wrote it so `assertPlan` refuses it with the plan's own message.
+   */
+  private async alignWorkspaces(steps: MissionStepInput[], workspace: string): Promise<MissionStepInput[]> {
+    const lands = new Map<string, boolean>();
+    for (const candidate of new Set(steps.map(step => step.delegate.workspace))) {
+      if (candidate === workspace) { lands.set(candidate, true); continue; }
+      const resolved = await validateWorkspace(candidate, this.config.allowed_workspaces).catch(() => null);
+      lands.set(candidate, resolved === workspace);
+    }
+    return steps.map(step => lands.get(step.delegate.workspace) ? {...step, delegate: {...step.delegate, workspace}} : step);
   }
 
   /**

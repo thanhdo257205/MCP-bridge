@@ -69,6 +69,29 @@ test('create canonicalizes an allowed workspace and refuses one outside the allo
   assert.equal(manager.list().length, 0, 'a refused plan starts nothing');
 });
 
+test('the single-workspace rule gates on the directory, not on how the client spelled it', async () => {
+  // CI found this: the Windows runner's temp dir is a short path (C:\Users\RUNNER~1\…), so the plan stored the
+  // canonicalized workspace while the client kept sending its own spelling — and extend refused the very directory
+  // the mission was already running in. A trailing separator reproduces the same split on any OS.
+  const {missions, manager, workspace, root} = await harness();
+  const alias = workspace + path.sep;
+  const created = await missions.create(plan(alias, [['a', []]]));
+  assert.equal(created.workspace, await realpath(workspace), 'the record keeps the canonical directory');
+  assert.deepEqual([...new Set(created.steps.map(entry => entry.delegate.workspace))], [created.workspace],
+    'a plan must not print two spellings of one workspace in mission_plan');
+  await missions.extend(created.mission_id, [step(alias, 'b', ['a'])]);
+  const first = await missions.dispatch(created.mission_id, 'a');
+  await manager.wait(first.task.task_id);
+  const started = await missions.dispatch(created.mission_id, 'b');
+  assert.equal(started.task.workspace, created.workspace, 'both the recorded and the appended step run in the canonical directory');
+  await manager.wait(started.task.task_id);
+  // A different directory is still refused, and refused as a plan problem rather than as an unreadable path.
+  const elsewhere = path.join(root, 'elsewhere'); await mkdir(elsewhere);
+  await assert.rejects(() => missions.extend(created.mission_id, [step(elsewhere, 'c', ['a'])]), /runs entirely in/);
+  await assert.rejects(() => missions.extend(created.mission_id, [step(path.join(elsewhere, 'nope'), 'd', ['a'])]), /runs entirely in/);
+  assert.equal(missions.view(created.mission_id).progress.total, 2, 'a refused append adds nothing to the plan');
+});
+
 test('a step starts only after every dependency its plan names has completed', async () => {
   const {missions, manager, workspace} = await harness();
   const {mission_id} = await missions.create(plan(workspace, [['a', []], ['b', ['a']], ['c', ['b']]]));
