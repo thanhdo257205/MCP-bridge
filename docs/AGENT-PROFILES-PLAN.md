@@ -1,6 +1,7 @@
 # Kế hoạch: Quản lý Agent Profiles, Multi-Account & Sandbox Permission cho CLI
 
-- **Mục tiêu**: Cho phép mỗi CLI agent (Codex, Antigravity, ...) có thể hoạt động với nhiều phiên đăng nhập riêng biệt (ví dụ: `CODEX_HOME` trỏ tới các thư mục tài khoản khác nhau), đồng thời hỗ trợ cấu hình sandbox level (`workspace-write` vs `danger-full-access`) và chính sách approval (`never`, `auto`, `always`) do chủ máy kiểm soát an toàn.
+- **Mục tiêu**: Cho phép mỗi CLI agent (Codex, Antigravity, ...) có thể hoạt động với nhiều phiên đăng nhập riêng biệt (ví dụ: `CODEX_HOME` trỏ tới các thư mục tài khoản khác nhau), đồng thời hỗ trợ cấu hình sandbox level (`workspace-write` vs `danger-full-access`) và chính sách approval (`on-request`, `never`) do chủ máy kiểm soát an toàn.
+- **Cờ đã đo trên codex-cli 0.163.0** (`codex --help`, `codex exec --help`): `--sandbox` nhận đúng ba giá trị `read-only | workspace-write | danger-full-access` và là cờ của `exec`; `--ask-for-approval` nhận đúng hai giá trị `on-request | never` và là cờ **global**, phải đặt trước `exec` — `codex exec --ask-for-approval never` thoát với `unexpected argument '--ask-for-approval'`.
 - **Nhánh thực hiện**: `antigravity`
 - **Ngày lập**: 2026-10-27
 
@@ -16,7 +17,7 @@
 
 2. **Nhu cầu cấu hình Sandbox & Approval cho Codex**:
    - `codex exec` hỗ trợ các cờ sandbox: `--sandbox workspace-write` (mặc định), `--sandbox danger-full-access`, `--sandbox read-only`.
-   - `codex exec` hỗ trợ cờ xác nhận: `--ask-for-approval never` | `auto` | `always`.
+   - Cờ xác nhận là cờ global của `codex`, không phải của `exec`: `codex --ask-for-approval on-request|never exec ...`.
    - Mặc định bridge đang gán cứng `--sandbox workspace-write` để bảo vệ an toàn cho máy tính người dùng.
    - Khi người dùng cần giao các tác vụ hệ thống hoặc tác vụ rộng hơn phạm vi workspace mà chấp nhận rủi ro, cần có cơ chế cấu hình cấp quyền này một cách tường minh từ phía Owner (chủ máy), kèm theo cảnh báo rõ ràng trên UI và logs, không để client tự ý bypass.
 
@@ -36,7 +37,7 @@ Bổ sung trường `profiles` và các cờ sandbox tùy chọn vào schema `ag
     "codex_executable": "codex",
     "codex_model": "gpt-5-turbo",
     "codex_sandbox": "workspace-write",
-    "codex_ask_for_approval": "auto",
+    "codex_ask_for_approval": "on-request",
 
     // Danh sách các profile độc lập
     "profiles": {
@@ -79,7 +80,7 @@ Bổ sung trường `profiles` và các cờ sandbox tùy chọn vào schema `ag
   - `label`: Nhãn mô tả (string).
   - `env`: Record các cặp key-value biến môi trường sẽ được truyền trực tiếp vào tiến trình khi chạy agent này (ví dụ `CODEX_HOME`).
   - `codex_sandbox`: `'workspace-write' | 'danger-full-access' | 'read-only'`.
-  - `codex_ask_for_approval`: `'never' | 'auto' | 'always'`.
+  - `codex_ask_for_approval`: `'on-request' | 'never'`.
   - `model`: Model override riêng cho profile này.
   - `executable`: Đường dẫn binary riêng nếu khác binary mặc định.
 - Bổ sung `profiles: z.record(profileSchema).optional()` vào `agentsSchema`.
@@ -112,7 +113,7 @@ Bổ sung trường `profiles` và các cờ sandbox tùy chọn vào schema `ag
   - Bổ sung `env?: Record<string, string>`.
 - Trong `codexAdapter.buildInvocation(task)`:
   - Sử dụng `options.sandbox ?? 'workspace-write'`.
-  - Thêm `--ask-for-approval <mode>` nếu có.
+  - Thêm `--ask-for-approval <mode>` vào trước `exec` nếu profile có đặt (đặt sau `exec` thì CLI từ chối).
   - Trả về `customEnv: options.env`.
 
 ### 3.4. `src/agents/registry.ts` (Agent Registry)
@@ -137,7 +138,7 @@ Bổ sung trường `profiles` và các cờ sandbox tùy chọn vào schema `ag
 2. **Test Environment Injection**:
    - Khởi chạy một tiến trình agent profile có `env: { CODEX_HOME: '...' }`, kiểm chứng tiến trình con thực sự nhận được biến môi trường này.
 3. **Test Invocation Args**:
-   - Khi cấu hình `codex_sandbox: "danger-full-access"` và `codex_ask_for_approval: "never"`, `buildInvocation` tạo ra đúng các tham số `--sandbox danger-full-access --ask-for-approval never`.
+   - Khi cấu hình `codex_sandbox: "danger-full-access"` và `codex_ask_for_approval: "never"`, `buildInvocation` tạo ra `--ask-for-approval never` trước `exec` và `--sandbox danger-full-access` sau đó.
 4. **Test Đa Profile trong Registry**:
    - `createAgentRegistry` trả về cả agent mặc định và các agent profile tùy chỉnh.
    - `agents_list` thể hiện đúng id, label, capabilities và các cảnh báo an toàn tương ứng.

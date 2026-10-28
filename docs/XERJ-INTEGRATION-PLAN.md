@@ -4,10 +4,11 @@
 
 - **XERJ** (`tools/xerj/xerj.exe`) là search engine tốc độ cao viết bằng Rust cho AI coding agent, tương thích giao thức Elasticsearch HTTP (`localhost:9200`), hỗ trợ tree-sitter AST symbol indexing và passage-level extraction.
 - **Dữ liệu hiện có**: Thư mục `tools/xerj/` và index `mcp-bridge-docs` (749 docs, 5.3MB) đã được tải về và index sẵn trong `tools/xerj-data/` bởi agent trước.
+- **Mặc định tắt (opt-in)** ở bản phát hành: bật tính năng nghĩa là gửi nội dung `task` cho một dịch vụ local khác và ghép passage lấy được vào prompt mà agent phải tuân theo — nên `xerj.enabled` và `xerj.auto_reference` đều `default(false)`, `code_search` luôn nằm trên surface nhưng từ chối khi chưa bật, và hai route `/api/xerj/*` không forward query khi chưa bật.
 - **Mục tiêu**:
   1. Xây dựng module client `src/xerj/client.ts` kết nối với XERJ API (ES-compatible `_search` với `_passage` field và defs matching).
   2. Tạo MCP Tool `code_search` cho Tech Lead / Developer agents (Antigravity, Codex) để truy vấn nhanh định nghĩa và đoạn mã liên quan mà không phải đọc toàn bộ file.
-  3. Tính năng **Auto Reference Coding**: Khi bridge giao việc qua `start_task`, nếu XERJ đang chạy và task yêu cầu (`auto_reference !== false`), bridge tự động trích xuất các code passage liên quan nhất và gắn vào prompt giao việc làm context tham khảo (giúp giảm 2.7x - 5x tokens cho agent).
+  3. Tính năng **Auto Reference Coding**: Khi bridge giao việc qua `start_task`, chỉ khi chủ máy bật **cả hai** cờ `xerj.enabled` và `xerj.auto_reference`, bridge trích xuất các code passage liên quan nhất và gắn vào prompt giao việc làm context tham khảo (giúp giảm 2.7x - 5x tokens cho agent).
   4. Cung cấp API endpoint `/api/xerj/status` và `/api/xerj/search` để Web UI và HTTP client có thể sử dụng.
   5. Đảm bảo fallback an toàn (graceful degradation): Nếu daemon XERJ không chạy, bridge vẫn hoạt động bình thường 100%, không báo lỗi sập hệ thống.
 
@@ -87,10 +88,10 @@
 - Thêm `xerjSchema`:
   ```ts
   xerj: z.object({
-    enabled: z.boolean().default(true),
+    enabled: z.boolean().default(false),
     url: z.string().default('http://127.0.0.1:9200'),
     default_index: z.string().default('mcp-bridge-docs'),
-    auto_reference: z.boolean().default(true),
+    auto_reference: z.boolean().default(false),
     max_passages: z.number().default(3),
   }).default({})
   ```
@@ -103,7 +104,7 @@
 
 ### 3.4. Auto Reference trong Task Delegation (`src/tasks/manager.ts`)
 - Khi `start_task` được gọi:
-  - Kiểm tra xem config `xerj.auto_reference` có bật không và task options có tắt không (`auto_reference !== false`).
+  - Kiểm tra `xerj.enabled && xerj.auto_reference`; thiếu một trong hai thì không gọi index và không gắn passage.
   - Lấy query trích xuất từ `input.task` (hoặc `input.task` trực tiếp nếu ngắn).
   - Tìm kiếm các passage hàng đầu (score > ngưỡng tối thiểu).
   - Nếu có kết quả, chèn đoạn:
