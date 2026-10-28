@@ -65,12 +65,20 @@
       {
         "sha256": "fbd0fdebe8fcb95416f89dff95f8b4922e86d243d1139e613a88bde8cc54b034",
         "note": "multi-agent delegation (agents_list, agent/isolation/owns/autonomy) with no bridge authentication"
+      },
+      {
+        "sha256": "d0f94ad3c993ffc7778b68309217704ef236d370a6ea1edbe360f92980af5984",
+        "note": "profile and pool ids as agent, quota failover at-most-once, attempts[] evidence, code_search refusal"
       }
     ],
     "mission-orchestrator": [
       {
         "sha256": "828f9d44c0edf38a0dbbb39c469f47968b4be37512b224eb12b985b8b15e4624",
         "note": "first packaged mission skill (Phase 2)"
+      },
+      {
+        "sha256": "e8140f9d76f192848c935de19247dcf5572044da724d328cb3682b53b7e5ccfa",
+        "note": "step agent may be a profile or pool; a failover retry reuses the same worktree and its diff"
       }
     ]
   }
