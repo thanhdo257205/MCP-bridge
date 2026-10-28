@@ -82,9 +82,20 @@ Two switches control delegation itself: `agy-mcp-bridge delegation off` blocks n
 
 ## Agents, profiles and pools
 
-`agents.profiles.<id>` declares named agents that inherit an adapter and override its defaults (`env` such as `CODEX_HOME`, `model`, `executable`, `codex_sandbox`, `codex_ask_for_approval`), so one machine can run two logged-in accounts side by side. A profile id is a valid `agent` value and `agents_list` reports each one's availability and warnings. `priority` and `enabled` still order the adapters themselves.
+`agents.profiles.<id>` declares named agents that inherit an adapter and override its defaults (`env` such as `CODEX_HOME`, `model`, `executable`, `codex_sandbox`, `codex_ask_for_approval`). A profile id is a valid `agent` value and `agents_list` reports each one's availability and warnings.
+
+Whether a profile really is a second account depends on the adapter. A `codex` profile with its own `CODEX_HOME` signs in separately, so two Codex accounts do run side by side. An `antigravity` profile does **not**: `agy` resolves its credential from the machine's own login (on Windows the credential is in the keyring, so pointing `HOME`, `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` at another directory changes nothing), which means several antigravity profiles share one Google account and a pool of them cannot fail over to spare quota. `agy` signs in through Google OAuth.
+
+Four rules about these ids are easy to get wrong, all measured rather than inferred:
+
+- `agents.enabled` must list **every profile id** you declare, not just the adapters. A profile missing there is silently disabled, and a pool of such members then refuses with `Unknown agent "<pool id>"` — a message that names the pool while the broken line is `enabled`. Omitting `enabled` entirely enables everything; the example keeps the key so you can see it exists, which means a new profile has to be added to that list too.
+- A `codex` profile also needs the base `codex` id in `enabled`, because that is what makes the bridge probe the codex CLI at all. Without it the profile is unavailable **and reports no warning**, so `agents_list` shows a dead agent with no reason.
+- `model` on a profile is read only for a `codex` profile.
+- `priority` and `enabled` accept a pool id without complaining, but the default agent is matched against agent ids only — a pool there silently selects nothing. Name the pool in the `agent` argument of a task instead.
 
 `agents.pools.<id>` groups profiles for quota handling. Delegating to a pool id picks the first healthy member. When a member stops with something that reads like an exhausted quota or rate limit, the bridge marks it cooling for `quota_cooldown_seconds` and re-runs **the same task** on the next member — each member at most once per task, after which the task fails instead of looping. The replaced attempt is kept on the record as `attempts[]` (agent, error, exit, log tails) so a reviewer can still see why the first CLI stopped, and the retry keeps holding the execution lock rather than releasing and re-taking it, so no second ordinary task slips into the gap.
+
+An `antigravity` **profile** also runs with the CLI's own defaults rather than the owner's web-UI settings: the model choice, the permission level (`--mode`), the soft-deadline log file and its extended `--print-timeout` are applied to the id `antigravity` only. The omission fails closed — with no `--mode` flag Antigravity soft-denies anything that needs approval — so a profile task is more restricted than the same task on `antigravity`, never less.
 
 Two knobs are opt-in because they widen what the bridge can reach. Neither is reachable from a task, and neither stays invisible: the codex pair is reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
 

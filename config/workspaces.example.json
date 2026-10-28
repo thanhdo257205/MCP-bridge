@@ -12,7 +12,7 @@
   "default_autonomy": "auto",
   "agents": {
     "priority": ["antigravity", "codex"],
-    "enabled": ["antigravity", "codex"],
+    "enabled": ["antigravity", "codex", "codex-work", "codex-backup"],
     "codex_sandbox": "workspace-write",
     "codex_ask_for_approval": "on-request",
     "profiles": {

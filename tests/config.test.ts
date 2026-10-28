@@ -70,3 +70,27 @@ test('the tree watch cadence is the owner\'s, and a bad entry is refused instead
   assert.deepEqual((await loadConfig()).tree_watch?.delays_ms, WATCH_DELAYS_MS, 'the example documents the cadence the bridge actually runs');
   assert.equal((await loadConfig()).tree_watch?.enabled, true);
 });
+test('the shipped example only shows knobs that actually work: its profiles are enabled, its pools route to them, its priority lists agents', async () => {
+  const example = JSON.parse(await readFile(new URL('../../config/workspaces.example.json', import.meta.url), 'utf8')) as {
+    agents?: {enabled?: string[]; priority?: string[]; profiles?: Record<string, {adapter: string}>; pools?: Record<string, {members: string[]}>};
+  };
+  const {enabled, priority, profiles = {}, pools = {}} = example.agents ?? {};
+  // A profile is only enabled when agents.enabled lists it (registry.ts), so an example that lists adapters there ships
+  // profiles nothing can run, and a pool of those members refuses with Unknown agent "<pool id>" - which points the reader
+  // at the pool line instead of the enabled line.
+  if (enabled !== undefined) {
+    for (const [id, profile] of Object.entries(profiles)) {
+      assert.ok(enabled.includes(id), `agents.profiles."${id}" must also appear in agents.enabled`);
+      assert.ok(enabled.includes(profile.adapter), `agents.enabled must keep "${profile.adapter}": without the base adapter its CLI is never probed, so "${id}" is unavailable and reports no warning at all`);
+    }
+    for (const [id, pool] of Object.entries(pools)) {
+      for (const member of pool.members) {
+        assert.ok(Object.hasOwn(profiles, member), `pool "${id}" names member "${member}" which is not a declared profile`);
+        assert.ok(enabled.includes(member), `pool "${id}" routes to "${member}" which agents.enabled does not enable`);
+      }
+    }
+  }
+  // default_agent matches priority against agent ids only, and a pool id passes the config's unknown-id check.
+  for (const id of priority ?? [])
+    assert.ok(!Object.hasOwn(pools, id), `priority entry "${id}" is a pool id, which silently selects nothing`);
+});
