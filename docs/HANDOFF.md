@@ -682,9 +682,9 @@ Việc còn mở:
   kể cả mức `full` → `--dangerously-skip-permissions`. Trước bản sửa, profile bị khóa ở mặc định của CLI.
 - `Unknown agent "<pool id>"` nên nói thẳng "pool X không còn member nào usable (mỗi member phải có trong `agents.enabled`
   và CLI của nó phải khả dụng)" thay vì đổ tại tên agent.
-- `VERIFIED_AGY_VERSIONS` (`process.ts:9`) vẫn là `['1.4.3','1.4.7']` dù đã có bằng chứng thật trên 1.4.8 (mục 6.3) và
-  1.4.9 (đợt này, task `completed` exit 0 qua đúng đường pool). Chưa thêm vì chuẩn của tài liệu này là một lần
-  `npm run test:live` đầy đủ (smoke + cancel + shutdown), mà 1.4.9 mới có một task.
+- **Đã làm ở đợt 8 (mục 6.10):** `VERIFIED_AGY_VERSIONS` (`process.ts:9`) thành `['1.4.3','1.4.7','1.4.8','1.4.9']`.
+  1.4.8 vốn đã có một lần `npm run test:live` đầy đủ (mục 6.3); 1.4.9 tính tới đợt 7 mới có một task lẻ nên chưa được
+  thêm — đợt này chạy lại đủ `test:live` trên đúng CLI 1.4.9 rồi mới thêm, đúng chuẩn đã ghi.
 - Pool id trong `priority`: hoặc cho nó thật (default agent = pool), hoặc cảnh báo khi cấu hình như vậy.
 
 Quy tắc cho người tiếp theo:
@@ -738,7 +738,8 @@ Vài thứ chỉ ra khi đo, không có cách nào khác để biết:
   `.cmd` trỏ tới một `.js` của mình, và `.js` đó spawn CLI thật.
 - **`agy` trên máy này là native exe**, không phải shim npm: `%LOCALAPPDATA%\agy\bin\agy.exe` → `prefixArgs` rỗng.
   `agy models` hiện trả sáu id (`gemini-3.8-flash-{high,medium,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
-  `gpt-oss-120b-medium`), tức là họ model đã đổi so với các đợt trước — `VERIFIED_AGY_VERSIONS` vẫn chưa được cập nhật (mục 6.8).
+  `gpt-oss-120b-medium`), tức là họ model đã đổi so với các đợt trước — `VERIFIED_AGY_VERSIONS` đã cập nhật ở mục 6.10,
+  còn họ model thì chưa có test nào khóa tên id cụ thể.
 - **Test argv phải tự xóa `BRIDGE_AGY_PERMISSIONS`.** `permissionState` đọc env trước file, nên nếu shell của người chạy để
   leftover một mức nào đó thì argv trong test do env quyết định, không phải do đoạn code đang bị test.
 
@@ -757,3 +758,29 @@ Bằng chứng run trên đúng nội dung cuối:
   platform hay filesystem. Hai job `test (ubuntu-latest, …)` trong CI là verdict Linux thật.
 - `skills/` không đổi nên không phải đăng ký hash mới (`known-versions.json`); `tests/package.test.ts` vẫn chặn
   `docs/HANDOFF.md` trong tarball, và block markdown này không đổi hành vi runtime.
+
+### 6.10 Đợt 8 — 2026-10-28: `VERIFIED_AGY_VERSIONS` thêm 1.4.8 và 1.4.9, bằng chứng là một lần `test:live` đầy đủ
+
+`process.ts:9` từ `['1.4.3','1.4.7']` thành `['1.4.3','1.4.7','1.4.8','1.4.9']`. Không có logic nào đổi: danh sách này
+quyết hai thứ — `warnings` của `inspectCli` (`process.ts:139`) và câu trong `limitations` (`runtime.ts:76`), cả hai đều
+suy ra từ constant.
+
+**Vì sao phải đo thêm chứ không tin bằng chứng cũ:** chuẩn của tài liệu này (mục 6.8) là **cả** `npm run test:live`
+(smoke + cancel + shutdown), không phải một task `completed`. 1.4.8 đã đạt chuẩn đó từ đợt nghiệm thu nhánh
+`antigravity` (mục 6.3) nên chỉ cần ghi lại nguồn. 1.4.9 thì đợt 7 mới có một task chui qua đường pool — chưa đủ, nên
+trước khi thêm phải chạy lại toàn bộ live script trên đúng CLI máy này (`agy --version` = **1.4.9**).
+
+| Cái đo | Kết quả trên CLI thật |
+| --- | --- |
+| `node dist/scripts/live.js` với **1.4.9**, chạy trên `main` `17209c3` (code **chưa** sửa, để lấy chính cái cảnh báo cũ) | **exit 0**, `success: true`, 08:59:49,181Z → 09:00:59,903Z (70,7 s, sáu task thật, một bị hủy ngay). Smoke `completed` exit 0 `BRIDGE_SMOKE_OK`; `response_verified` + `workspace_unchanged` (sentinel `UNCHANGED`, thư mục chỉ còn `sentinel.txt`); `reconnected: true`; mission `a/b/c` đều `completed`, `progress {3,3,0,0,0,0}`, `plan_steps 3`; cancel `canceled` exit 1, `process_running: false`, `denied_actions: []`; `server_exit_code: 0`, `shutdown_with_active_task_verified: true`. Boot log ghi nguyên văn `only 1.4.3 and 1.4.7 have been verified` — tức trước bản sửa, CLI 1.4.9 vẫn chạy được nhưng bị đánh dấu chưa xác minh |
+| `inspectCli` trên đúng `agy` sau khi sửa | `version 1.4.9, supported: true, warnings: []`; `VERIFIED_AGY_VERSIONS` đọc ra `["1.4.3","1.4.7","1.4.8","1.4.9"]`. `agy` máy này là native exe (`%LOCALAPPDATA%\agy\bin\agy.exe`, `prefixArgs` rỗng) |
+| Regression test | Thêm hai dòng `['1.4.8','',true,false]` và `['1.4.9','',true,false]` vào bảng `CLI accepts the 1.4 patch family…`. Phá constant về `['1.4.3','1.4.7']` rồi build lại → **đỏ** ngay test đó; khôi phục → xanh. Hai dòng `1.4.0`/`1.4.99` vẫn `warn=true`, chứng minh thêm danh sách không biến cảnh báo thành vô điều kiện |
+| Suite Windows (Node 24.15.0) | **264 test / 258 pass / 0 fail / 6 skipped**, 4 m 37 s, exit 0. Số test bằng baseline `0.1.26` vì đợt này chỉ thêm hai dòng vào bảng có sẵn, không thêm test mới |
+
+**Chưa tuyên bố gì:** danh sách là **kết quả đo trên máy phát triển**, không phải cam kết mọi bản 1.4.8/1.4.9 ở máy khác
+đều giống nhau; 1.4.x patch khác (1.4.0, 1.4.10…) vẫn chỉ được họ version + cờ help duyệt, vẫn cảnh báo. Phần stdin của
+mục 8 HARDENING không đổi — live script dùng transport argv mặc định, nên chạy thêm patch cũng không chứng minh được stdin.
+Họ model đã đổi (`agy models` trả sáu id khác các đợt trước) nhưng không có test nào khóa tên model id, nên đợt này không đụng.
+
+**Linux:** không chạy local — thay đổi chỉ là một mảng hằng + tài liệu, không có nhánh platform nào; hai job
+`test (ubuntu-latest, …)` là verdict Linux thật. `skills/` và `config/` không đổi nên không phải đăng ký hash skill.
