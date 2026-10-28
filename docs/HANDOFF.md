@@ -279,6 +279,15 @@ Bối cảnh release: `main` đã nhận PR #28 và #29, `publish.yml` chạy xo
 - WSL Ubuntu có Node 20.20.2 và chạy được thẳng `dist/` build từ Windows qua `/mnt/c`; output của `wsl.exe` lẫn byte
   rỗng nên lọc `tr -d '\000'` trước khi đọc. Đó là đường lấy verdict Linux **trước** khi push, không phải bản thay
   thế CI (CI vẫn chạy matrix 20/22 trên cả hai OS).
+- **Đọc bằng chứng phát hành: đừng tin lần hỏi registry đầu tiên.** `publish.yml` không có `paths` filter nên **mọi**
+  push vào `main` — kể cả commit chỉ sửa docs — đều chạy CI rồi semantic-release và publish npm. Ngay sau khi job in
+  `+ agy-mcp-bridge@0.1.23`, cả `npm view`, packument tải trực tiếp, `curl` và `npm pack` đều vẫn trả **0.1.22** hoặc
+  404 trên đúng URL `.tgz`: npm đang ghi ("Your package is being processed and may take a few minutes to become
+  available") và CDN giữ **negative cache** cho URL vừa 404. Kết luận "chưa lên" từ lần hỏi đó là **sai**. Đường đúng:
+  (1) lấy log job publish và `git tag --points-at <release commit>`; (2) hỏi packument với cache-buster (thêm query
+  `?cb=1` → 200 ngay khi URL sạch vẫn 404); (3) nghiệm thu bằng **artifact**: `dist.shasum`/`integrity` trong packument
+  khớp `sha1sum` file tải về thật, rồi kiểm `files` trong tarball (hai skill có mặt, `docs/HANDOFF.md` không có). Với
+  0.1.23: shasum `882463797cd5753aa102e4775c11747ee9581550`, unpackedSize 526947, tag `v0.1.23` → `904307a`.
 
 ## 5. Đợt 4 — 2026-10-27: Phase 2 "mission" — bridge ghi nhận và chặn, agent ngoài điều khiển
 
@@ -576,3 +585,56 @@ bridge, và không làm task fail.
 - Attempt bị bỏ luôn còn trong `attempts[]` trên bản ghi, và luôn bị cắt khỏi `summary()`; đổi một trong hai thì A2 là
   test sẽ đỏ.
 - Thêm hoặc bớt tool thì sửa **cả** `tests/http.test.ts:55` và `tests/bridge.test.ts:115` (`tools.length`), không chỉ một.
+
+### 6.7 Đợt tài liệu 2026-10-28: mặt bằng profile / pool / `attempts` / `code_search` vào hai skill
+
+Surface của PR #32 đã lên `main` nhưng hai skill shipped vẫn chỉ nói về **một** agent và **không** có `code_search`.
+Đợt này sửa tài liệu, **không đổi runtime code**, năm file:
+
+| File | Nội dung mới | Vì sao phải viết |
+|---|---|---|
+| `skills/antigravity-bridge/SKILL.md` (126 → 136 dòng) | `agents_list` có thể trả id **profile** và id **pool**, cả hai đều là giá trị `agent` hợp lệ; mục mới *When the agent you named is a pool*: mỗi thành viên lành chạy **tối đa một lần** rồi task `failed`, phải đọc và báo cáo `attempts[]` (`agent, status, error, exit_code, duration_ms`), retry **giữ nguyên execution lane** nên thời lượng worst case là (số thành viên × `timeout_seconds`), và việc phát hiện quota đọc **text** của CLI nên một agent chỉ *kể lại* chữ `429` / `overloaded` cũng đủ đặt profile vào cooldown; `code_search` luôn được advertise nhưng chỉ trả kết quả khi chủ máy bật XERJ — lời từ chối là **trạng thái cấu hình**, không phải lỗi để retry; không trường delegate hay câu chữ task nào nâng được quyền thật của agent | Agent ngoài đọc skill cũ sẽ retry mãi một pool đã cạn, hiểu nhầm lời từ chối của `code_search` là lỗi hạ tầng, hoặc xin chủ máy bật cờ nguy hiểm qua prompt |
+| `skills/mission-orchestrator/SKILL.md` (82 → 84 dòng) | bước mission cũng nhận id profile/pool; **failover chạy lại trên đúng worktree cũ**, nên phần dở của attempt bị bỏ vẫn còn trong diff và tính vào `scope` của attempt sau; thêm dòng bảng "A pooled step ended `failed` with `attempts`" | Gate của mission là review diff **từng bước**; không nói điều này thì Tech Lead tưởng diff bước sau sạch từ đầu |
+| `skills/known-versions.json` | hai hash mới: `antigravity-bridge` lên **17** bản, `mission-orchestrator` lên **2** | `tests/skill-update.test.ts` chỉ nhận SKILL.md có sha256 nằm trong danh sách |
+| `docs/SMART-ROUTER-PLAN.md` §4 | bảng **kế hoạch vs. thực tế đã shipped** + danh sách việc còn mở, ưu tiên dần | Kế hoạch viết 2026-10-27 được người tiếp theo đọc như mô tả code |
+| `docs/HANDOFF.md` §4 | quy tắc đọc bằng chứng phát hành (bullet cuối) | tham chiếu "xem mục 4" ở cuối §5.8 đang **treo**, chưa từng có bullet đó |
+
+Năm điểm mà tài liệu cũ nói sai hoặc chưa nói, **đã đối chiếu lại code** chứ không suy từ kế hoạch:
+
+1. **`isHardTask` có một rule chết.** `src/agents/quota.ts:44` kiểm `input.effort === 'high'`, nhưng `isHardTask` chỉ
+   nhận `DelegateInput` (`src/security/input.ts:9-19`, `.strict()`, **không** có trường `effort`) → nhánh đó không bao
+   giờ bật. Effort thật của agent đến từ `readEffort(stateDirectory)` — một cài đặt **toàn bridge do chủ máy chọn**,
+   ghi vào `Task.effort` (`src/tasks/manager.ts:251`), không phải thuộc tính của task được delegate.
+2. **Ba `strategy` hành vi như nhau.** `quota-adaptive`, `priority-failover`, `round-robin` đều rơi vào `healthyMembers[0]`
+   (`src/agents/quota.ts:94` vẫn là comment stub). Schema nhận đủ ba nên cấu hình "đã chọn chiến lược" chỉ là chữ.
+3. **Cooldown chỉ sống trong RAM.** `globalHealthTracker` là singleton module: restart bridge xóa hết cooldown, dù
+   `quota_cooldown_seconds` (mặc định 900) vẫn ghi trong config. Không có file trạng thái cho việc này.
+4. **Pool cạn lúc delegate báo lỗi gây hiểu nhầm.** `selectAgent` rơi khỏi nhánh pool rồi throw `Unknown agent "<pool id>"`
+   (`src/tasks/manager.ts:153-155`) — client đọc sẽ tưởng mình gõ sai tên agent, trong khi sự thật là không thành viên
+   nào lành. Bản ghi task cũng lưu id **profile đã chọn** chứ không lưu id pool: `Task` (`src/tasks/manager.ts:31-47`)
+   không có field pool, `Entry.poolId` (`:78`) chỉ là trạng thái trong bộ nhớ, nên lịch sử và UI không tự nói task nào
+   đi qua failover — chỉ `attempts[]` cho biết.
+5. **Attempt reuse worktree.** `launch()` tái dùng `entry.worktreeInfo`, nên branch `bridge/<task_id>` mang diff của
+   **cả** attempt bị bỏ; `scope.out_of_scope` của attempt cuối là một phần của tổng đó, không phải của riêng nó.
+
+Quy tắc cho người tiếp theo:
+
+- **Sửa SKILL.md thì commit hash cùng một commit.** Thiếu hash là `tests/skill-update.test.ts` đỏ ngay trên branch.
+  Hash tính trên nội dung đã `normalize` (`\r\n` → `\n`, `scripts/install-skill.ts`), nên đổi line ending **không** làm
+  hash đổi — đừng tưởng xóa file LF/CRLF là tương đương.
+- **Tính hash lại ngay trước khi commit, và đừng sửa skill trong lúc suite đang chạy.** `tests/skill-update.test.ts` đọc
+  `skills/*/SKILL.md` **từ đĩa** lúc test chạy, không đọc từ commit: một câu sửa sau khi đã ghi hash làm bản đang chạy
+  mất giá trị, và nếu nó đỏ thì không rõ là đỏ vì nội dung hay vì race. Đã gặp trong đợt này và phải chạy lại cả suite.
+- Tài liệu về router phải ghi **cả phần stub và phần chết**, không chỉ phần chạy được: người đọc kế hoạch cũ đã tưởng
+  `priority-failover` là chiến lược thật và tưởng rule `effort` còn tác dụng.
+- **PR chỉ-sửa-docs vẫn publish npm** vì `publish.yml` không có `paths` filter (mục 4). Vì thế đợt này đi nhánh + PR
+  riêng, và **hỏi chủ máy trước khi merge** — gộp vào `main` là ra bản `0.1.24` trên registry.
+
+Bằng chứng, chạy trên **đúng nội dung cuối** (hash `d0f94ad3…` đã nằm trong `known-versions.json`, SKILL.md 136/84 dòng):
+
+- Windows, Node **24.15.0**: **261 test / 255 pass / 0 fail / 6 skipped**, 284,9 s, exit 0. Sáu dòng skip = năm test
+  nhóm POSIX signal + `cli: --open hands the UI address…`.
+- Linux (WSL Ubuntu, Node **20.20.2**, `dist/` build từ Windows chạy thẳng qua `/mnt/c`): **261 / 260 / 0 fail / 1 skipped**,
+  228,2 s, exit 0. Một test skip là `Windows .cmd shims resolve to a local Node entry without a shell`.
+- Hai lần chạy trước đó **không được tính**: một lần đang chạy thì tôi sửa một câu trong SKILL.md (nêu ở quy tắc trên),
+  một lần bị stop để sửa; cả hai đều exit 0 nhưng verdict không còn áp dụng cho nội dung cuối.
