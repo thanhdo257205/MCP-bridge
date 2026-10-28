@@ -15,6 +15,7 @@ import type { AgentRuntime } from '../src/agents/types.js';
 import { startHttpBridge } from '../src/http.js';
 import { missionsFor } from './helpers.js';
 import type { Config, XerjConfig } from '../src/config.js';
+import { codexApprovalSchema, xerjSchema } from '../src/config.js';
 
 const call = async (client: Client, name: string, args: Record<string, unknown> = {}) => {
   const result = await client.callTool({name, arguments: args});
@@ -228,6 +229,14 @@ async function promptForTask(xerj: Config['xerj']): Promise<{prompt: string; que
     await rm(root, {recursive: true, force: true});
   }
 }
+
+test('the shipped defaults leave XERJ off', () => {
+  const parsed = xerjSchema.parse({});
+  assert.equal(parsed.enabled, false, 'an install that never mentions xerj must not query another service');
+  assert.equal(parsed.auto_reference, false, 'and must not paste a retrieved passage into a prompt');
+  assert.equal(parsed.url, 'http://127.0.0.1:9200');
+  assert.equal(codexApprovalSchema.safeParse('auto').success, false, 'codex has no approval policy named auto');
+});
 
 test('a retrieved passage enters the prompt only when the owner enabled both XERJ flags', async () => {
   const on = {enabled: true, url: 'http://127.0.0.1:9200', default_index: 'spy', auto_reference: true, max_passages: 3};
