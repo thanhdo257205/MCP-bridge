@@ -29,14 +29,17 @@ export interface Invocation {
   stdin?: string;
   /** A file the CLI writes its final message to; read after the process closes. */
   resultFile?: string;
+  customEnv?: Record<string, string>;
   /** How stdout should be parsed; set only by adapters that support several modes. */
   transport?: PromptTransport;
+
 }
 
 export interface RawRun {
   stdout: string; stderr: string; exitCode: number | null; signal: string | null;
   resultFile: string | null;
   transport?: PromptTransport;
+
 }
 
 export interface AgentResult {
@@ -50,6 +53,8 @@ export interface AgentResult {
   stats?: TaskStats;
   /** The CLI itself reported a timeout (exit code may still be 0). */
   timeout?: boolean;
+  /** Indicates if the failure was caused by rate limit, token or billing quota exhaustion. */
+  isQuotaExceeded?: boolean;
 }
 
 export interface AgentAdapter {

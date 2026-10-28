@@ -3,7 +3,45 @@ import path from 'node:path';
 import { paths, packageRoot } from './paths.js';
 import * as z from 'zod/v4';
 
+export const codexSandboxSchema = z.enum(['workspace-write', 'danger-full-access', 'read-only']);
+// The two policies codex-cli 0.163.0 accepts for --ask-for-approval; anything else makes codex exit before it reads the prompt.
+export const codexApprovalSchema = z.enum(['on-request', 'never']);
+
+export const agentProfileSchema = z.object({
+  adapter: z.enum(['codex', 'antigravity']),
+  label: z.string().min(1).max(100).optional(),
+  env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).optional(),
+  codex_sandbox: codexSandboxSchema.optional(),
+  codex_ask_for_approval: codexApprovalSchema.optional(),
+  model: z.string().min(1).max(200).optional(),
+  executable: z.string().min(1).max(4096).optional()
+}).strict();
+export type AgentProfile = z.infer<typeof agentProfileSchema>;
+
+export const poolSchema = z.object({
+  strategy: z.enum(['quota-adaptive', 'priority-failover', 'round-robin']).default('quota-adaptive'),
+  members: z.array(z.string().min(1).max(64)).min(1).max(50),
+  hard_task_profile: z.string().min(1).max(64).optional(),
+  quota_cooldown_seconds: z.number().int().min(10).max(86400).default(900)
+}).strict();
+export type PoolConfig = z.infer<typeof poolSchema>;
+
+export const xerjSchema = z.object({
+  // Off unless the owner turns it on: enabling it sends task text to another local service and prepends retrieved
+  // passages to the prompt an agent follows, so a search hit becomes an instruction the agent never got from the client.
+  enabled: z.boolean().default(false),
+  url: z.string().default('http://127.0.0.1:9200'),
+  default_index: z.string().default('mcp-bridge-docs'),
+  auto_reference: z.boolean().default(false),
+  max_passages: z.number().int().min(1).max(10).default(3)
+}).strict();
+export type XerjConfig = z.infer<typeof xerjSchema>;
+
 const agentsSchema = z.object({
+  codex_sandbox: codexSandboxSchema.optional(),
+  codex_ask_for_approval: codexApprovalSchema.optional(),
+  profiles: z.record(z.string().min(1).max(64), agentProfileSchema).optional(),
+  pools: z.record(z.string().min(1).max(64), poolSchema).optional(),
   priority: z.array(z.string().min(1).max(64)).max(50).optional(),
   enabled: z.array(z.string().min(1).max(64)).max(50).optional(),
   codex_executable: z.string().min(1).max(4096).optional(),
@@ -21,6 +59,7 @@ const schema = z.object({
   max_parallel_worktrees: z.number().int().min(1).max(8).optional(),
   default_autonomy: z.enum(['suggest', 'auto', 'full']).optional(),
   agents: agentsSchema.optional(),
+  xerj: xerjSchema.optional(),
   /**
    * The process-tree watcher that runs while a task is live. One poll costs a full process-table query (about half a
    * second on the reference machine), so the cadence is owner-tunable and the whole watch can be turned off; without

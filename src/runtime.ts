@@ -74,7 +74,7 @@ export async function createRuntime() {
     limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, max_mission_steps: MAX_STEPS_PER_MISSION, max_retained_missions: MAX_RETAINED_MISSIONS, concurrent_tasks: maxParallelWorktrees + 1, concurrent_normal_tasks: 1, max_parallel_worktrees: maxParallelWorktrees, max_queued_tasks: config.max_queued_tasks},
     limitations: [
       `Antigravity requires agy 1.4.x with all required flags; real execution was verified on ${VERIFIED_AGY_VERSIONS.join(' and ')}.`,
-      'Codex runs non-interactively with sandbox workspace-write; approval-requiring actions still fail instead of bypassing the sandbox.',
+      'Codex defaults to sandbox workspace-write; the bridge owner may raise sandbox/approval in config (danger-full-access / ask-for-approval never), which is surfaced as agent warnings.',
       'Ordinary tasks are serialized globally. Only tasks with isolation "worktree" run concurrently, each in its own git worktree and branch.',
       'Mission plans are recorded and gated by the bridge, but the bridge never dispatches a step by itself: every step starts on a client call, and a canceled or completed plan grants nothing.',
       'Worktree tasks declare owns; files outside that list are reported for review and are never merged automatically.',
@@ -85,7 +85,7 @@ export async function createRuntime() {
       'Workspace preflight is not an OS sandbox and cannot prevent concurrent link swaps.',
       'Existing agent permissions, hooks, MCP and credential access remain governed by each CLI configuration.',
       'Antigravity permission flags are off unless the bridge owner raises the level in the web UI (a client cannot change it). At the default level, actions that need approval are denied (see denied_actions).',
-      'No permission bypass flags. Dangerous actions require separate interactive approval.',
+      'Antigravity has no client-side permission bypass. Codex sandbox/approval are owner-config only; dangerous settings emit warnings and still require the owner to opt in via workspaces.json.',
       `After an agent process exits, the bridge releases the process trees it left behind (Windows: taskkill on every subtree still hanging below the agent or below a process recorded while it ran, after re-checking that each pid still names the same process; POSIX: the exited process group). The outcome is published as the task's cleanup field, and a graceful shutdown waits for it. A bridge killed abruptly, or tree_watch disabled in config, can still orphan processes.`,
       'Worktree directories of finished tasks are kept for review. Only empty leftovers are removed at startup, a directory a live process still holds is reported instead of forced, and a repository left holding a record whose directory is gone is pruned.',
       'Redaction recognizes known patterns only. Never include credentials in task data.'

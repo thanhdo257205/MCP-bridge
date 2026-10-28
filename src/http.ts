@@ -43,6 +43,31 @@ export async function startHttpBridge(options: {
     if (req.url === '/health' && req.method === 'GET') {
       reply(200, {status: 'ok', transport: 'streamable-http', mcp_endpoint: `${baseUrl}/mcp`, ...options.manager.overview(), missions: options.missions.overview()}); return;
     }
+    if (req.url === '/api/xerj/status' && req.method === 'GET') {
+      const xerj = options.manager.getXerjClient();
+      if (!options.manager.isXerjEnabled()) {
+        reply(200, {enabled: false, available: false, url: xerj.url, default_index: xerj.defaultIndex, indices: []});
+        return;
+      }
+      void xerj.isAvailable().then(async available => {
+        const indices = available ? await xerj.listIndices() : [];
+        reply(200, {available, url: xerj.url, default_index: xerj.defaultIndex, indices});
+      }).catch(() => reply(200, {available: false, url: xerj.url, default_index: xerj.defaultIndex, indices: []}));
+      return;
+    }
+    if (req.url?.startsWith('/api/xerj/search') && req.method === 'GET') {
+      if (!options.manager.isXerjEnabled()) {
+        reply(404, {error: 'XERJ search is disabled: set "xerj.enabled" to true in workspaces.json'});
+        return;
+      }
+      const parsed = new URL(req.url, baseUrl || 'http://127.0.0.1:3000');
+      const q = parsed.searchParams.get('q') ?? '';
+      const limit = parseInt(parsed.searchParams.get('limit') ?? '5', 10);
+      const index = parsed.searchParams.get('index') ?? undefined;
+      const xerj = options.manager.getXerjClient();
+      void xerj.search(q, {limit, index}).then(result => reply(200, result as unknown as Record<string, unknown>)).catch(() => reply(500, {error: 'Search failed'}));
+      return;
+    }
     if (req.url !== '/mcp') { reply(404, {error: 'Use /mcp for MCP or GET /health for health checks'}); return; }
     void requestContext.run({userAgent: req.headers['user-agent']}, () => mcp(req, res)).catch(() => {
       if (!res.headersSent) reply(500, {error: 'MCP request failed'});

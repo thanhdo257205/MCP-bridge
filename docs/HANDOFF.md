@@ -407,6 +407,8 @@ chứng là Chrome, và người sau sửa trang này phải xem lại bằng Ch
 5. Trang UI chỉ đọc + dừng, **không có nút dispatch** — có chủ đích: khởi động bước là quyết định của client MCP.
 6. Chưa live-test plan có bước chạy bằng `codex` vì CLI đó trên máy này hết auth (401 `token_revoked` / 402
    `deactivated_workspace`); mọi bước live đều là `agy`. Cần `codex login` rồi chạy lại `scripts/live.ts`.
+   **(Đã hết hiệu lực 2026-10-28: `codex` 0.163.0 chạy lại bình thường, một task codex thật đã live-xanh — xem mục 6.3.
+   Phần còn đúng: các **bước mission** vẫn chưa chạy bằng codex.)**
 7. Retention mission (20) đuổi bản ghi **kẻ trước, không hỏi**: plan cũ bị đuổi thì bước của nó thành `lost` mãi mãi.
    Chưa có cảnh báo chủ máy, chưa có cách "ghim" một plan.
 
@@ -429,8 +431,148 @@ chứng là Chrome, và người sau sửa trang này phải xem lại bằng Ch
   qua điều đó.
 - Giữ hợp đồng token của surface MCP: receipt không echo plan, dispatch khi chạy chỉ 6 trường, `mission_status` không
   có text task, chỉ `mission_plan` mang `delegate`. Test `MCP surface: receipts omit the plan, the gate reads as a tool
-  error, a running step says wait` giữ cả bốn, và `tools/list` nay là **13** tool (test stdio + test HTTP đã đổi theo).
+  error, a running step says wait` giữ cả bốn, và `tools/list` khi đợt này kết thúc là **13** tool (test stdio + test
+  HTTP đã đổi theo). Đầu nhánh `antigravity` sau đó nối thêm `code_search`, nên con số hiện tại là **14** — xem mục 6.
 - Skill thứ hai là `skills/mission-orchestrator/SKILL.md`: đổi nó thì **phải** nối sha256 vào `skills/known-versions.json`
   (test `skill-update` enforce), và `tests/package.test.ts` giờ đòi cả hai skill có mặt trong tarball — thiếu một là
   `agy-mcp-bridge skill install --skill mission-orchestrator` hỏng trên máy cài bằng npm.
 
+### 5.8 Bản sửa đến SAU khi mục 5 viết xong — `b2da0cb`, "thư mục đúng nhưng spelling khác"
+
+Chính CI Windows tìm ra, không phải test cục bộ: thư mục temp của runner là **đường dẫn ngắn** (dạng 8.3), nên
+`realpath()` trả một chuỗi khác hẳn chuỗi client đã gửi dù trỏ cùng một chỗ. Hệ quả: `create()` lưu workspace đã
+canonical hóa trong khi từng bước của plan vẫn giữ nguyên spelling client gửi vào; `mission_extend` sau đó so chuỗi
+của client với chuỗi canonical và **từ chối đúng cái thư mục mà mission đang chạy thật**.
+
+Bản sửa (`src/missions/missions.ts`, +25 dòng): `create()` lưu **một** spelling cho cả bản ghi, còn `extend()` giải
+mỗi spelling khác nhau mà client gửi **đối chiếu vào** thư mục của mission **trước** khi áp quy tắc plan — chỉ spelling nào đáp
+xuống đúng thư mục đó mới được nhận, mọi spelling khác vẫn bị từ chối bằng nguyên văn lý do của plan.
+
+Test hồi quy: `the single-workspace rule gates on the directory, not on how the client spelled it`
+(`tests/missions.test.ts`, +23 dòng) — assert bản ghi giữ đường dẫn canonical, assert mọi bước (đã ghi và vừa nối)
+chạy trong cùng thư mục canonical, và assert "một lời append bị từ chối thì không thêm gì vào plan". Test này **đỏ**
+khi bỏ phép giải spelling và **xanh trên cả hai OS**, nên lớp lỗi này không còn phụ thuộc vào máy nào chạy suite.
+
+Số liệu của đúng đầu nhánh sau bản sửa, lấy từ log CI run `40549136043` (commit merge `f7f8121`, bốn job matrix):
+
+| Nền | Kết quả |
+|---|---|
+| Windows 22 và Windows 20 | **241 test · 235 pass · 0 fail · 6 skipped** (bốn job cùng số) |
+| Ubuntu 22 và Ubuntu 20 | **241 test · 240 pass · 0 fail · 1 skipped** |
+
+PR #31 merge, `main` = `f7f8121`, job publish in `+ agy-mcp-bridge@0.1.22` và tag `v0.1.22` → `cc5ef99` (xem mục 4 về
+cách đọc bằng chứng phát hành: `npm view` có thể trả số cũ vì cache registry).
+
+
+
+## 6. Đợt 5 — 2026-10-28: duyệt nhánh `antigravity`, sửa bốn lỗi trước khi merge
+
+Nhánh `antigravity` (`a51b53f` + `f503ea0`, 22 file, **+1868/−30** so với `main`) do một agent khác viết: **agent
+profiles** (env riêng, sandbox/approval riêng), **quota failover pool** và **XERJ code search**. Chủ máy chốt ba câu
+hỏi **trước** khi sửa:
+
+| Câu hỏi | Đã chốt |
+|---|---|
+| XERJ (`code_search` + auto-reference) | **Gộp vào `main` nhưng default off**: muốn dùng phải tự sửa `workspaces.json` |
+| Codex `danger-full-access` / `ask-for-approval never` | **Giữ** quyền cấu hình (chỉ chủ máy bật được) **kèm cảnh báo lúc khởi động**; ví dụ shipped hạ về mức an toàn |
+| Bốn lỗi tìm thấy khi duyệt | **Sửa xong rồi mới merge**, không merge trước rồi fix sau |
+
+Ba commit của đợt này: `b07db73` (merge `main` vào nhánh), `5f71769` (code + tests), `faffbe7` (test pin default
+XERJ). Tài liệu (README + hai plan + mục này) đi commit riêng, đúng quy tắc tách nhóm commit.
+
+### 6.1 Bốn phát hiện và bản sửa
+
+| # | Phát hiện | Bản sửa |
+|---|---|---|
+| **F1** | **Mọi task Codex chết ngay khi spawn.** `--ask-for-approval` là cờ **toàn cục** của codex, không phải cờ của `exec`; nhánh cũ đặt nó **sau** `exec` nên `codex-cli 0.163.0` thoát với `unexpected argument`, prompt không bao giờ được đọc. Enum còn nhận `auto` và `always`, hai giá trị CLI không chấp nhận, và `config/workspaces.example.json` shipped đúng `"auto"` | `codexApprovalSchema = z.enum(['on-request','never'])` kèm chú thích vì sao chỉ hai giá trị đó; `src/agents/codex.ts` dùng `args.unshift('--ask-for-approval', …)` **trước** `exec`; example config về `on-request`; `codexSandboxSchema` giữ ba giá trị đo được `read-only|workspace-write|danger-full-access`; text fallback trong `src/agents/registry.ts` sửa `'auto'` → `'on-request'`. Grammar xác nhận bằng `--help` thật, không suy từ tài liệu |
+| **F2** | **XERJ bật mặc định, và kết quả search trở thành chỉ thị.** `xerj.enabled` default `true`, cửa auto-reference chỉ là `auto_reference !== false` → mỗi task được giao đều bị gửi text sang một service local khác, và passage retrieve được **nối vào prompt mà agent tuân theo** | `xerjSchema.enabled` và `auto_reference` đều `default(false)`; cửa là `isXerjEnabled() && config.xerj?.auto_reference` (**cả hai** cờ, có chủ đích); `code_search` vẫn nằm trên surface nhưng throw `XERJ search is disabled: set "xerj.enabled" to true in workspaces.json` thay vì trả rỗng; `/api/xerj/status` short-circuit `enabled:false` **không gọi mạng**, `/api/xerj/search` trả 404 khi tắt |
+| **F3** | **Failover làm mất lane và xóa lock của task khác.** Code cũ `rmdir` execution lock **trước** khi relaunch attempt kế tiếp (`entry.holdsLock` ngắn mạch nhánh mkdir), nên retry chạy mà không còn lock — và nếu một task thường khác kịp tạo lock mới thì cái bị xóa là lock **của nó** | Đường failover **không release gì cả**: task vẫn giữ lane tới khi xong. Test bắt tại lúc launch (`secondLaunchLock.held === true`), không suy từ log |
+| **F4** | **Failover phi tang chứng cứ và có thể quay vòng.** Attempt bị bỏ bị ghi đè sạch (không còn error, exit code, log), và `selectProfile` không loại profile đã thử nên pool N thành viên cứ quay lại các member vừa cooldown | `attempts[]` trên `Task`: `agent, status, error, exit_code, signal, ended_at, duration_ms, stdout_tail, stderr_tail` (cắt ở `ATTEMPT_TAIL_CHARS = 4000` để không nhân bản bản ghi); `entry.poolTried` loại mọi profile đã đốt → pool N cho **tối đa N−1** retry, hết pool thì task **fail** chứ không treo; `summary()` cắt `attempts` (và `stdout/stderr/final_response`) nên poll không phình |
+
+### 6.2 Bằng chứng — bảy guard, bỏ ra là đỏ
+
+Cùng môi trường cô lập như mục 5.3 (junction `node_modules`, snapshot `.pristine`, restore + build lại sau mỗi phép
+thử, sửa **một** dòng, `--test-name-pattern`, treo = đỏ). Kết quả: **7/7 đỏ**.
+
+| # | Guard bị bỏ hoặc bị nới | Test được chỉ định | Cách đỏ |
+|---|---|---|---|
+| A1 | thêm lại `rmdir` lock trước khi relaunch (đúng lỗi F3) | `a quota failover keeps the lane it already holds and keeps the abandoned attempt as evidence` | fail 3 663 ms |
+| A2 | bỏ `attempts.push` khi failover (lỗi F4) | cùng test trên | fail 2 617 ms |
+| A3 | bỏ `tried` khi chọn profile kế tiếp | `failover visits each profile in the pool at most once and then fails the task` | fail 2 358 ms |
+| A4 | quay cửa auto-reference về `auto_reference !== false`, bỏ điều kiện `enabled` | `a retrieved passage enters the prompt only when the owner enabled both XERJ flags` | fail 4 575 ms |
+| A5 | bỏ lời từ chối trong handler `code_search` | `code_search is on the surface but refuses while XERJ is disabled` | fail 257 ms |
+| A6 | `args.unshift` → `args.push` cho `--ask-for-approval` (đúng thứ tự lỗi F1) | `codexAdapter buildInvocation passes configured sandbox, approval and customEnv` | fail 3,3 ms |
+| A7 | đặt lại default `xerj.enabled`/`auto_reference` thành bật | `the shipped defaults leave XERJ off` | fail 10,1 ms |
+
+Hai test failover dựng agent giả bằng `fakeProfile()` (EventEmitter ép kiểu `ChildProcess`) nên **không cần CLI thật**
+và chạy được trên mọi máy. Bẫy phải ghi lại: `globalHealthTracker` là **singleton module-level**, p1 để lại cooldown
+sang test kế tiếp làm thứ tự retry thành `['p2','p1']`; phải gọi `healthyPool()` xóa cooldown cả p1 lẫn p2 ở **đầu mỗi**
+test thì assertion thứ tự mới có nghĩa.
+
+### 6.3 Bằng chứng — suite hai nền trên đúng đầu commit sẽ push
+
+| Nền | Lệnh | Kết quả |
+|---|---|---|
+| Windows, Node 24.15.0 | `npm run build` rồi `node dist/scripts/run-tests.js` (`--test-concurrency=1`) | **261 test · 255 pass · 0 fail · 6 skipped**, 242,1 s, exit 0 |
+| Linux (WSL Ubuntu, Node 20.20.2, `dist/` build từ Windows chạy thẳng qua `/mnt/c`) | `node dist/scripts/run-tests.js` | **261 test · 260 pass · 0 fail · 1 skipped**, 225,4 s, exit 0 |
+
+Sáu dòng skip trên Windows là năm test POSIX-only cộng `cli: --open …`; trên Linux dòng skip duy nhất vẫn là
+`Windows .cmd shims resolve to a local Node entry without a shell`. Assertion `tools/list` đã đổi **13 → 14** ở cả
+`tests/http.test.ts` và `tests/bridge.test.ts` vì `code_search` được đăng ký kể cả khi XERJ tắt — có chủ đích: mặt tool
+không phụ thuộc config của chủ máy, còn từ chối thì nói rõ lý do thay vì trả kết quả rỗng.
+
+**CLI thật, hai cái.** `node dist/scripts/live.js` trên đúng đầu commit: **exit 0**, `success: true`,
+`workspace_unchanged: true`, `reconnected: true`, `shutdown_with_active_task_verified: true`, server exit 0. Bridge boot
+với `agy` **1.4.8** (không phải 1.4.7 như các đợt trước), task smoke `completed` exit 0 trả đúng `BRIDGE_SMOKE_OK`,
+mission ba bước `a → b → c` cả ba `completed`, sáu lời từ chối vẫn nguyên văn (xem mục 5.4), task cancel `canceled`
+exit 1, `denied_actions: []`.
+
+Đường **codex** (tức F1) được nghiệm thu bằng script riêng `test-results/codex-live.mjs` (gitignored, không ship): config chỉ
+bật `codex`, `codex_sandbox: read-only`, `codex_ask_for_approval: on-request`, delegate một task `agent: 'codex'` trong
+workspace scratch ở `%TEMP%`. Kết quả: `agents_list` báo `codex 0.163.0 available: true` **không warning**, task
+`completed`, **exit 0**, `final_response` đúng `CODEX_LIVE_OK`, `attempts: null` (không có failover), sentinel file
+không đổi. Trước bản sửa thì chính lệnh này chết ngay khi spawn vì `--ask-for-approval` đứng sau `exec` — nên đây là
+bằng chứng mà unit test không thể tự xưng.
+
+Hai noise thực tế ghi lại để người sau không bất ngờ: `codex` stderr đầy
+`rmcp::transport::worker ... error sending request for url (http://127.0.0.1:8080/mcp)` và config.toml của máy user bị
+phàn nàn `features.rmcp_client is ignored` — cả hai là **config toàn cục của codex trên máy chủ máy**, không phải của
+bridge, và không làm task fail.
+
+### 6.4 Rủi ro đã chấp nhận, ghi lại chứ không sửa code
+
+1. **Relaunch failover là fire-and-forget.** `return this.launch(entry)` nằm trong callback `child.once('close')`; nếu
+   `launch` throw thì không ai bắt promise đó và task ở trạng thái `running` mà không có process. Khá khó tới được vì
+   `shutdown()` hủy các entry trước và `entry.stop` bỏ qua nhánh quota — nhưng đó là khoảng trống thật.
+2. **Cây process của attempt bị bỏ không được reap** — chỉ cây của child cuối cùng. Hệ quả quan sát được: worktree
+   removal gặp `EBUSY` và báo về (không im lặng), và startup sweep vẫn bắt lại được các tiến trình lạc.
+3. **`QUOTA_ERROR_PATTERNS` khớp rộng.** `/\b429\b/` và `/\boverloaded\b/i` quét cả stdout lẫn stderr của agent, nên một
+   task **không** hết quota (agent chỉ kể lại chữ đó) vẫn bị đánh cooldown và failover. Chưa siết vì cần mẫu lỗi thật
+   từ phía `agy`; `markCooldown` mặc định 900 s, tức một lần khớp nhầm loại profile đó khỏi pool 15 phút.
+4. **Env của profile đi thẳng vào child env**, không qua `childEnvironment` (bộ lọc strip secrets) — chủ đích, vì nó
+   chỉ do chủ máy viết trong `workspaces.json`. Hệ quả: file đó là đường tin cậy, **đừng** nhét token vào `env`.
+
+### 6.5 Việc còn mở của đợt này
+
+1. `tests/smart-pool.test.ts:131` gán pid **ngẫu nhiên 1000–9000** cho child giả. Đã kiểm lại đường nguy hiểm:
+   `reapOwnedTree` chỉ giết **root** là con của pid đã ghi, `alive(pid)` true thì trả về bất động, và `verify` đọc lại
+   đúng các pid sắp giết — nên số ngẫu nhiên không với tới tiến trình lạ. Vẫn nên đổi sang pid cao như
+   `tests/agent-profiles.test.ts` (`900_000 + n`) để không phải dựa vào lập luận đó.
+2. **Failover chưa chạy bằng CLI thật.** Đường codex đơn lẻ đã live-xanh (mục 6.3), nhưng **chưa** có lần chạy thật nào
+   đốt quota của profile thứ nhất rồi để profile thứ hai nhận task: muốn vậy cần hai profile đăng nhập thật và một lần
+   hết quota thật. Hành vi đó hiện chỉ do hai test `fakeProfile()` chứng minh. Tương tự, chưa live-test plan mission có
+   bước chạy bằng `codex`. (Trước 2026-10-27 `codex` trên máy này hết auth — 401 `token_revoked` / 402
+   `deactivated_workspace` — nay đã dùng lại được, nên các mục cũ trong HANDOFF nói "codex không test được" là **hết hiệu lực**.)
+3. `fallback: true` (tự chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+4. Ngân sách theo pool/profile chưa có; usage vẫn chỉ theo task và theo ngày.
+
+### 6.6 Quy tắc cho người tiếp theo
+
+- **Hai cờ XERJ là hai cửa riêng biệt.** Đừng "tiện tay" gộp `enabled` và `auto_reference` làm một: passage lấy từ index
+  nằm trong prompt agent, nên một kết quả search trở thành chỉ thị mà client không gửi. A4 đỏ nếu gộp.
+- **Không release execution lock trong đường failover.** Task retry vẫn thuộc cùng một lane; A1 đỏ nếu thử lại cách cũ.
+- **Cờ toàn cục của codex đứng trước `exec`** (A6) và enum approval chỉ nhận `on-request|never`. Cả hai là kết quả
+  **đo** trên `codex-cli 0.163.0`; nâng CLI thì phải đo lại `--help`, không đoán.
+- Attempt bị bỏ luôn còn trong `attempts[]` trên bản ghi, và luôn bị cắt khỏi `summary()`; đổi một trong hai thì A2 là
+  test sẽ đỏ.
+- Thêm hoặc bớt tool thì sửa **cả** `tests/http.test.ts:55` và `tests/bridge.test.ts:115` (`tools.length`), không chỉ một.

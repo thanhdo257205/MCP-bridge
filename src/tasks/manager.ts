@@ -24,6 +24,8 @@ import {effortFlags,readEffort,type EffortLevel} from '../effort.js';
 import {lowerLevel,permissionFlags,permissionState,type PermissionLevel} from '../permissions.js';
 import {listModels,readModel,type ModelInfo} from '../models.js';
 import {pidAlive, recoverExecutionLock} from './execution-lock.js';
+import { globalHealthTracker, isHardTask } from '../agents/quota.js';
+import { XerjClient } from '../xerj/client.js';
 
 export type Status = 'queued' | 'running' | 'completed' | 'failed' | 'timeout' | 'canceled' | 'unsupported';
 export interface Task {
@@ -39,9 +41,19 @@ export interface Task {
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
   denied_actions: {action: string; display_name: string}[];
+  /** Attempts a quota failover abandoned before this one, each with the reason it stopped (absent when there was no failover). */
+  attempts?: TaskAttempt[];
   review_required: true; acceptance_verified: false;
 }
-export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
+/** One agent attempt that was given up on and replaced by another profile in the same pool. */
+export interface TaskAttempt {
+  agent: string; status: Status; error: string | null; exit_code: number | null; signal: string | null;
+  ended_at: string | null; duration_ms: number; stdout_tail: string; stderr_tail: string;
+}
+/** How much of an abandoned attempt's log is kept: enough to show why it stopped, small enough not to multiply the record. */
+const ATTEMPT_TAIL_CHARS = 4000;
+const tail = (text: string): string => (text.length > ATTEMPT_TAIL_CHARS ? text.slice(-ATTEMPT_TAIL_CHARS) : text);
+export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response' | 'attempts'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** A finished task publishes its status as soon as this budget runs out, even if the process query is wedged. */
 const REAP_BUDGET_MS = 6000;
@@ -63,6 +75,10 @@ interface Entry {
   finish?: () => void;
   /** Validated input and the resolved agent kept until the process starts (a queued task waits with it). */
   pending?: {input: DelegateInput; workspace: string; timeout: number; agent: AgentRuntime; autonomy: Autonomy};
+  poolId?: string;
+  poolTried?: Set<string>;
+  worktreeInfo?: Worktree;
+  holdsLock?: boolean;
   /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
   lastOutputAt?: number;
   /** Log file agy was asked to write (only when the soft deadline is on); its modification time is a liveness signal. */
@@ -103,15 +119,37 @@ export class TaskManager {
   private pendingRelease = new Set<Promise<void>>();
   private readonly agents: AgentRuntime[];
   private readonly defaultAgent: string | null;
+  private xerjClient: XerjClient;
   constructor(private config: Config, private runtime: Runtime) {
     this.agents = runtime.agents?.length
       ? runtime.agents
       : [legacyAntigravityAgent(runtime, config.prompt_transport)];
     this.defaultAgent = runtime.defaultAgent ?? this.agents.find(agent => agent.enabled && agent.status.available)?.adapter.id ?? null;
+    this.xerjClient = new XerjClient({ url: config.xerj?.url, defaultIndex: config.xerj?.default_index });
   }
 
+  getXerjClient(): XerjClient { return this.xerjClient; }
+  setXerjClient(client: XerjClient): void { this.xerjClient = client; }
+  /** XERJ is opt-in: without it the bridge never puts task text in front of another local service, and never puts a retrieved passage into a prompt. */
+  isXerjEnabled(): boolean { return this.config.xerj?.enabled === true; }
+
   private get maxParallelWorktrees(): number { return this.config.max_parallel_worktrees ?? 2; }
-  private selectAgent(id?: string): AgentRuntime {
+  private selectAgent(id?: string, taskInput?: DelegateInput): AgentRuntime {
+    const pools = this.config.agents?.pools ?? {};
+    const targetPoolId = (id && pools[id]) ? id : (!id && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
+    if (targetPoolId) {
+      const pool = pools[targetPoolId];
+      const isHard = taskInput ? isHardTask(taskInput) : false;
+      const pickedId = globalHealthTracker.selectProfile(
+        pool,
+        isHard,
+        (candId) => this.agents.some(a => a.adapter.id === candId && a.enabled && a.status.available)
+      );
+      if (pickedId) {
+        const found = this.agents.find(a => a.adapter.id === pickedId);
+        if (found) return found;
+      }
+    }
     if (id !== undefined) {
       const agent = this.agents.find(item => item.adapter.id === id);
       if (!agent) throw new Error(`Unknown agent "${id}". Known agents: ${this.agents.map(item => item.adapter.id).join(', ')}`);
@@ -168,8 +206,8 @@ export class TaskManager {
     if (this.closing) throw new Error('Bridge is shutting down');
 
     let agent: AgentRuntime | undefined;
-    if (input.agent !== undefined) agent = this.selectAgent(input.agent);
-    else try { agent = this.selectAgent(); } catch { agent = undefined; }
+    if (input.agent !== undefined) agent = this.selectAgent(input.agent, input);
+    else try { agent = this.selectAgent(undefined, input); } catch { agent = undefined; }
     const supported = Boolean(agent?.status.available);
     const autonomy = input.autonomy ?? this.config.default_autonomy ?? 'auto';
 
@@ -198,7 +236,10 @@ export class TaskManager {
       stdout_truncated: false, stderr_truncated: false,
       final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
     };
+    const pools = this.config.agents?.pools ?? {};
+    const poolId = (input.agent && pools[input.agent]) ? input.agent : (!input.agent && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
     const entry: Entry = {
+      poolId,
       task, done: Promise.resolve(), pending: supported ? {input, workspace, timeout, agent: agent!, autonomy} : undefined,
       request: {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
@@ -241,8 +282,8 @@ export class TaskManager {
   private async launch(entry: Entry): Promise<void> {
     const {task} = entry;
     const {input, workspace, timeout, agent, autonomy} = entry.pending!;
-    let ownsLock = false;
-    let worktree: Worktree | null = null;
+    let ownsLock = Boolean(entry.holdsLock);
+    let worktree: Worktree | null = entry.worktreeInfo ?? null;
     let execWorkspace = workspace;
     const lock = path.join(this.runtime.stateDirectory, 'execution.lock');
     try {
@@ -253,14 +294,21 @@ export class TaskManager {
       }
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       if (task.isolation === 'worktree') {
-        worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+        if (!worktree) {
+          worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+          entry.worktreeInfo = worktree;
+          task.worktree = worktree.root;
+          task.branch = worktree.branch;
+          task.worktree_toplevel = worktree.toplevel;
+          if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
+        }
         execWorkspace = worktree.workspace;
         task.worktree = worktree.root;
         task.branch = worktree.branch;
         task.worktree_toplevel = worktree.toplevel;
         // Keep the regenerated prompt equal to the one the agent received (the worktree workspace, not the original one).
         if (entry.request) { entry.request.worktree = worktree.workspace; entry.request.branch = worktree.branch; }
-      } else {
+      } else if (!ownsLock) {
         try { await mkdir(lock); ownsLock = true; }
         catch {
           const recovery=await recoverExecutionLock(this.runtime.stateDirectory);
@@ -268,6 +316,7 @@ export class TaskManager {
           await mkdir(lock);ownsLock=true;
         }
       }
+      entry.holdsLock = ownsLock;
       const checkStarting = () => {
         if (this.closing || entry.stop === 'canceled' || task.status === 'canceled') throw new Error('Canceled before execution');
       };
@@ -278,6 +327,25 @@ export class TaskManager {
       await this.persist(task);
       checkStarting();
       const promptInput = {...input, workspace: execWorkspace, autonomy};
+      // Both flags, not just auto_reference: a passage retrieved from the index is appended to the prompt the agent
+      // follows, so an index hit becomes an instruction the client never sent. The owner opts in twice, on purpose.
+      if (this.isXerjEnabled() && this.config.xerj?.auto_reference) {
+        try {
+          const searchRes = await this.xerjClient.search(input.task, {
+            limit: this.config.xerj?.max_passages ?? 3
+          });
+          if (searchRes.available && searchRes.hits.length > 0) {
+            const referenceBlock = this.xerjClient.formatPassagesForPrompt(searchRes.hits);
+            if (referenceBlock) {
+              promptInput.context = promptInput.context
+                ? `${promptInput.context}\n\n${referenceBlock}`
+                : referenceBlock;
+            }
+          }
+        } catch {
+          // Best-effort auto-reference
+        }
+      }
       // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
       const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
       if(entry.request)entry.request.permission=permission;
@@ -307,7 +375,7 @@ export class TaskManager {
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
       const streaming = invocation.transport !== undefined && invocation.transport !== 'argv';
-      const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin};
+      const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin, customEnv: invocation.customEnv};
       const child = agent.launch
         ? agent.launch(invocation.args, execWorkspace, options)
         : startProcess(invocation.executable, [...(agent.prefixArgs ?? []), ...invocation.args], execWorkspace, options);
@@ -445,6 +513,42 @@ export class TaskManager {
               finalStatus = 'completed';
             } else {
               task.error = result.error ? redact(result.error) : `${agent.adapter.label} did not provide a complete successful response`;
+              if (result.isQuotaExceeded) {
+                const poolConfig = entry.poolId ? this.config.agents?.pools?.[entry.poolId] : undefined;
+                const cooldown = poolConfig?.quota_cooldown_seconds ?? 900;
+                globalHealthTracker.markCooldown(agent.adapter.id, cooldown);
+                console.error(`[bridge] Agent profile "${agent.adapter.id}" exhausted quota/rate limit. Marked in cooldown (${cooldown}s).`);
+                if (poolConfig) {
+                  // Every profile this task already burned is excluded, so a pool of N gives at most N-1 retries and a
+                  // pool that runs out fails the task instead of cycling through cooled members forever.
+                  const tried = entry.poolTried ??= new Set([agent.adapter.id]);
+                  const nextId = globalHealthTracker.selectProfile(
+                    poolConfig,
+                    isHardTask(input),
+                    (candidateId) => this.agents.some(a => a.adapter.id === candidateId && a.enabled && a.status.available),
+                    tried
+                  );
+                  const nextAgent = nextId ? this.agents.find(a => a.adapter.id === nextId) : undefined;
+                  if (nextAgent && nextId) {
+                    tried.add(nextId);
+                    console.error(`[bridge] Task ${task.task_id} auto-failing over from "${agent.adapter.id}" to "${nextId}"...`);
+                    // The first attempt's evidence survives the retry: the error, exit and output tails are what a
+                    // reviewer needs to tell "quota exhausted" from "the agent did the work badly", and the next
+                    // attempt's own flush overwrites task.stdout wholesale.
+                    (task.attempts ??= []).push({
+                      agent: agent.adapter.id, status: 'failed', error: task.error, exit_code: code, signal,
+                      ended_at: task.ended_at, duration_ms: task.duration_ms,
+                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr)
+                    });
+                    entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
+                    task.agent = nextId;
+                    task.error = null;
+                    // The execution lock is deliberately NOT released here: this task still holds the lane, so the
+                    // retry cannot let a second ordinary task in and a release can never delete a lock another task owns.
+                    return this.launch(entry);
+                  }
+                }
+              }
             }
           } catch (error) {
             task.error ??= error instanceof Error ? redact(error.message) : `Could not parse ${agent.adapter.label} output`;
@@ -565,7 +669,7 @@ export class TaskManager {
   }
   /** Status view: metadata only. Logs and the final response come from get(). */
   summary(id: string): TaskSummary {
-    const {stdout: _stdout, stderr: _stderr, final_response: _response, ...rest} = this.get(id);
+    const {stdout: _stdout, stderr: _stderr, final_response: _response, attempts: _attempts, ...rest} = this.get(id);
     return rest;
   }
   /** All retained tasks, newest first, without logs. */

@@ -96,6 +96,20 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     description: 'Terminate only the managed task process tree. Partial file changes remain; no automatic rollback.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: false}
   }, async ({task_id}) => guard(() => manager.cancel(task_id)));
+  server.registerTool('code_search', {
+    description: 'Fast codebase passage and definition search powered by XERJ local index. Returns exact matching code snippets and definitions with file paths without reading whole files (saves tokens). Requires xerj.enabled in the bridge config.',
+    inputSchema: z.object({
+      query: z.string().min(1).max(200).describe('Code symbol, function name, class, or search query'),
+      limit: z.number().int().min(1).max(20).optional().default(5).describe('Maximum number of matching code passages to return (1-20, default 5)'),
+      index: z.string().min(1).max(100).optional().describe('Optional XERJ index name to search (defaults to configured index, e.g. mcp-bridge-docs)')
+    }).strict(),
+    annotations: {readOnlyHint: true, openWorldHint: false}
+  }, async ({query, limit, index}) => guard(async () => {
+    // Registered either way so the tool surface does not depend on the owner's config; the query text leaves the
+    // bridge only when the owner has opted in, and a refusal says so instead of returning an empty result.
+    if (!manager.isXerjEnabled()) throw new Error('XERJ search is disabled: set "xerj.enabled" to true in workspaces.json');
+    return manager.getXerjClient().search(query, {limit, index});
+  }));
   // Missions: the bridge records and gates the plan, the client drives it. Nothing here starts an agent on its own.
   const receipt = (mission_id: string) => {
     const view = missions.view(mission_id);

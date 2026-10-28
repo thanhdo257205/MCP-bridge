@@ -1,19 +1,26 @@
 import type { PromptTransport } from '../antigravity/invocation.js';
 import { finalEnvelope, invocationFor } from '../antigravity/invocation.js';
 import { extractStats } from '../usage.js';
+import { isQuotaError } from './quota.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
 const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
 
-export function antigravityAdapter(executable: string, defaultTransport: PromptTransport): AgentAdapter {
+export interface AntigravityOptions {
+  id?: string;
+  label?: string;
+  env?: Record<string, string>;
+}
+
+export function antigravityAdapter(executable: string, defaultTransport: PromptTransport, options: AntigravityOptions = {}): AgentAdapter {
   return {
-    id: 'antigravity',
-    label: 'Antigravity',
+    id: options.id ?? 'antigravity',
+    label: options.label ?? 'Antigravity',
     capabilities: CAPABILITIES,
     buildInvocation(task) {
       const transport = task.promptTransport ?? defaultTransport;
       const invocation = invocationFor(task.prompt, task.timeoutSeconds, transport, task.model ?? null, task.extraArgs ?? []);
-      return {executable, args: invocation.args, stdin: invocation.stdin, transport};
+      return {executable, args: invocation.args, stdin: invocation.stdin, transport, customEnv: options.env};
     },
     async parseResult(raw: RawRun): Promise<AgentResult> {
       const transport = raw.transport ?? defaultTransport;
@@ -51,7 +58,9 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
       }
       // A stream result that is not the expected envelope is reported by field name, because that is what tells the owner to turn step progress off.
       const fields = transport === 'argv' ? '' : ` (stream result fields: ${Object.keys(envelope).slice(0, 12).join(', ') || 'none'}; if step progress is on, turn it off in Settings to return to the JSON mode)`;
-      return {...result, error: typeof envelope.error === 'string' ? envelope.error : `CLI did not provide a complete successful response${fields}`};
+      const finalErr = typeof envelope.error === 'string' ? envelope.error : `CLI did not provide a complete successful response${fields}`;
+      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isQuotaError(raw.stdout);
+      return {...result, error: finalErr, isQuotaExceeded: quotaHit};
     }
   };
 }

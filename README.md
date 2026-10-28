@@ -60,7 +60,7 @@ Then call `antigravity_environment` from a fresh session — that is the proof; 
 
 | Field | Meaning |
 |---|---|
-| `agent` | id from `agents_list` (`antigravity`, `codex`). Omit for the highest-priority available agent; naming an unavailable agent errors rather than switching silently. |
+| `agent` | id from `agents_list` (`antigravity`, `codex`), or a profile / pool id from [Agents, profiles and pools](#agents-profiles-and-pools). Omit for the highest-priority available agent; naming an unavailable agent errors rather than switching silently. |
 | `isolation` | `none` (default — edits the workspace, globally serial) or `worktree` (branch `bridge/<task_id>` under `.bridge-state/worktrees/<task_id>`, parallel up to `max_parallel_worktrees`). Worktree tasks must declare `owns`, and the repo needs at least one commit. Uncommitted changes in the main checkout are **not** copied in. |
 | `owns` | relative paths the agent may touch. After the run the bridge diffs the worktree against this list and reports anything else in `scope.out_of_scope`. It never auto-merges, never deletes the branch, and does not run repo hooks. |
 | `autonomy` | `suggest` \| `auto` \| `full` — an instruction to the CLI agent, not a permission grant. Destructive actions stay hard-denied (see below). |
@@ -74,10 +74,22 @@ Then call `antigravity_environment` from a fresh session — that is the proof; 
 | `antigravity_task_wait` | blocks up to `wait_seconds` (default cap 55 s), returns early when the task ends |
 | `antigravity_task_output` | final response, stdout/stderr, errors, `denied_actions`, truncation |
 | `antigravity_cancel_task` | kills the task's process tree; does not revert file changes |
+| `code_search` | XERJ passage/definition lookup; registered always but **refused while `xerj.enabled` is off** |
 
 `completed` means the CLI exited with a parseable result — always `review_required: true`, `acceptance_verified: false`. A 0 exit code can still be reported as `failed` after a permission denial or a timeout. While a task runs, `wait`/`status` return a short `activity` line instead of making the client read logs.
 
 Two switches control delegation itself: `agy-mcp-bridge delegation off` blocks new tasks immediately without a restart, and `BRIDGE_DELEGATION=off` pins it at startup. Tasks still refuse to be delegated by policy the skill describes (security, auth, secrets, data deletion, deploy, CI and public API changes are not delegated).
+
+## Agents, profiles and pools
+
+`agents.profiles.<id>` declares named agents that inherit an adapter and override its defaults (`env` such as `CODEX_HOME`, `model`, `executable`, `codex_sandbox`, `codex_ask_for_approval`), so one machine can run two logged-in accounts side by side. A profile id is a valid `agent` value and `agents_list` reports each one's availability and warnings. `priority` and `enabled` still order the adapters themselves.
+
+`agents.pools.<id>` groups profiles for quota handling. Delegating to a pool id picks the first healthy member. When a member stops with something that reads like an exhausted quota or rate limit, the bridge marks it cooling for `quota_cooldown_seconds` and re-runs **the same task** on the next member — each member at most once per task, after which the task fails instead of looping. The replaced attempt is kept on the record as `attempts[]` (agent, error, exit, log tails) so a reviewer can still see why the first CLI stopped, and the retry keeps holding the execution lock rather than releasing and re-taking it, so no second ordinary task slips into the gap.
+
+Two knobs are opt-in because they widen what the bridge can reach. Neither is reachable from a task, and neither stays invisible: the codex pair is reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
+
+- `codex_sandbox: "danger-full-access"` / `codex_ask_for_approval: "never"` — readable from the bridge's own config file only. No task, tool argument or MCP client can ask for them, and `--ask-for-approval` is passed where codex accepts it (before `exec`).
+- `xerj.enabled` / `xerj.auto_reference` — both default to `false`. Turning them on sends task text to another local service and can place a retrieved passage inside the prompt an agent follows, which is a decision for the machine's owner, not for a delegating client.
 
 ## Missions
 
