@@ -699,3 +699,15 @@ Quy tắc cho người tiếp theo:
   vì thế: `git checkout` kéo file về bản lỗi, nên hai variant sau đỏ ở assertion *đầu tiên* chứ không phải assertion đang
   định test. Save bản đã sửa ra `/tmp` rồi restore từ đó, và kiểm `git diff --stat` trước khi kết luận.
 
+Bằng chứng chạy trên **đúng nội dung cuối** (`README.md` +12/−1, `docs/HANDOFF.md` +72 kể cả block này, guard 24 dòng,
+config mẫu 1 dòng đổi):
+
+- Windows, Node **24.15.0**: **262 test / 256 pass / 0 fail / 6 skipped**, 330,7 s, exit 0. So với baseline của `0.1.24`
+  (261/255/0/6) là **+1 test** — đúng guard mới; số skip không đổi (năm test nhóm POSIX signal + `cli: --open`).
+- **Linux không chạy local đợt này**: bản sửa chỉ là config mẫu (tài liệu trong tarball) + guard chỉ parse JSON + markdown,
+  không có đường nào phân nhánh theo nền tảng. Hai job `test (ubuntu-latest, …)` trong CI là verdict Linux thật, và
+  `tests/package.test.ts` vẫn chặn việc đưa `docs/HANDOFF.md` vào tarball.
+- Suite được khởi động **trước** khi tôi sửa ba câu markdown cuối. Điều đó không làm mất giá trị run: phép kiểm
+  `grep -rn "README\|HANDOFF" tests/*.ts` chỉ ra đúng một file tham chiếu là `tests/package.test.ts`, và cả hai chỗ
+  (`:33`, `:44`) chỉ kiểm **tên file trong tarball**, không đọc nội dung. TS và config JSON thì đã ở bản cuối trước `tsc`.
+
