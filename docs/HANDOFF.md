@@ -638,3 +638,64 @@ Bằng chứng, chạy trên **đúng nội dung cuối** (hash `d0f94ad3…` đ
   228,2 s, exit 0. Một test skip là `Windows .cmd shims resolve to a local Node entry without a shell`.
 - Hai lần chạy trước đó **không được tính**: một lần đang chạy thì tôi sửa một câu trong SKILL.md (nêu ở quy tắc trên),
   một lần bị stop để sửa; cả hai đều exit 0 nhưng verdict không còn áp dụng cho nội dung cuối.
+
+### 6.8 Đợt 6 — 2026-10-28: config mẫu tự bẫy `agents.enabled`, và profile `antigravity` là công dân hạng hai
+
+Chủ máy hỏi "đã thêm được tài khoản vào một profile riêng chưa". Trả lời bằng ba phép đo, không bằng đọc schema.
+Ba driver (`profile-enabled-probe.mjs`, `agy-profile-live.mjs`, `agy-profile-argv-probe.mjs`) nằm trong `test-results/`
+và **không commit** — đó là scratch gitignored, nên chúng chỉ còn giá trị mô tả; đủ chi tiết để viết lại ở mục "Quy tắc"
+dưới. Scratch để trong `%TEMP%` của worktree, và không record nào rơi vào `%APPDATA%\agy-mcp-bridge` (nghiệm lại: 0 file
+khớp task id của probe, file mới nhất vẫn là 2026-10-24).
+
+| Phát hiện | Bằng chứng | Mức |
+|---|---|---|
+| Profile không nằm trong `agents.enabled` bị vô hiệu **âm thầm**, và pool của nó từ chối bằng **tên pool** | live: `Unknown agent "agy-trap-pool". Known agents: antigravity, codex, agy-trap`; gốc `registry.ts:74` + `manager.ts:153-155` | đo thật |
+| Profile `codex` cần cả id `codex` trong `enabled`; thiếu thì `available: false` với **`warnings: []`** | probe registry, cấu hình `codex-off-profile-on`: `codex-work enabled=true available=false warnings=[]`; gốc `registry.ts:53` (chỉ probe CLI khi `codex` được bật) | đo thật |
+| `enabled` trên `agents_list` nói dối với profile codex: luôn `true` dù profile bị vô hiệu | `codex.ts:88` hardcode `enabled: true`; nhánh antigravity truyền `isProfileEnabled` (`registry.ts:103`) — hai profile codex trong probe đều `enabled=true` kèm warning "Disabled in the bridge config" | đọc code, nhất quán với probe |
+| Pool id đặt trong `priority` không chọn gì và cũng không cảnh báo | probe `pool-as-priority` → `default_agent: antigravity`; `registry.ts:29` coi pool id là id hợp lệ nên không warn, `:143` chỉ match agent id | đo thật |
+| Profile `antigravity` **không nhận** model, quyền, soft-deadline mà chủ máy đã chọn | probe argv (CLI giả): base = `--model gemini-3-pro-high --mode accept-edits --log-file … --print-timeout 7200s`; profile = không có cả bốn, `--print-timeout 60s`. Gốc: `manager.ts:249` và `manager.ts:354` so sánh `adapter.id === 'antigravity'`, còn `registry.ts:102` put id profile vào adapter | đo thật |
+| `agy` không tách tài khoản theo env | đổi `HOME`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA` → vẫn đúng một tài khoản; credential lấy từ keyring Windows, đăng nhập là Google OAuth | đo thật |
+
+Bản sửa đợt này **chỉ** động tới config mẫu, guard và tài liệu — không đổi hành vi runtime:
+
+- `config/workspaces.example.json`: `agents.enabled` giờ liệt kê cả `codex-work` / `codex-backup` bên cạnh hai adapter.
+  Chạy lại probe `ids-in-enabled`: hai profile `available=true`, pool route tới `codex-work:usable, codex-backup:usable`.
+- Guard mới trong `tests/config.test.ts`: mỗi profile phải có trong `enabled` (kèm adapter gốc của nó), mỗi thành viên pool
+  phải là profile đã khai báo, và `priority` không được chứa pool id. Bỏ bản sửa JSON ra thì đỏ ở
+  `agents.profiles."codex-work" must also appear in agents.enabled`.
+  Bốn assertion đều được chứng minh là **còn sống**, mỗi cái đỏ đúng một lần với đúng lỗi của nó (trên baseline đã sửa):
+
+  | Phá gì | Đỏ ở |
+  |---|---|
+  | `enabled` bỏ `codex-work`/`codex-backup` (đúng bản lỗi gốc) | `agents.profiles."codex-work" must also appear in agents.enabled` |
+  | `enabled` bỏ id `codex`, giữ hai profile | `agents.enabled must keep "codex": … "codex-work" is unavailable and reports no warning at all` |
+  | `priority` = `["codex-smart-pool", …]` | `priority entry "codex-smart-pool" is a pool id, which silently selects nothing` |
+  | pool member `codex-ghost` (thêm vào `enabled` để cô lập lỗi) | `pool "codex-smart-pool" names member "codex-ghost" which is not a declared profile` |
+- README mục "Agents, profiles and pools" viết lại: bỏ câu "một máy chạy hai tài khoản song song" (đúng với codex, sai với
+  antigravity), thêm bốn rule hay nhầm và ghi rõ profile antigravity thiếu gì, thiếu theo hướng **an toàn hơn**
+  (không `--mode` = agy tự từ chối mềm), nên đây là mất năng lực chứ không phải vượt quyền.
+
+Việc còn mở — cái đầu tiên **không được làm nhân tiện**, vì nó mở rộng quyền:
+
+- Sửa hai phép so sánh id (`manager.ts:249`, `:354`) thành một marker "họ adapter" trên `AgentAdapter`. Hệ quả: `--mode`
+  sẽ áp cho task chạy profile, tức là kể cả mức `full` → `--dangerously-skip-permissions` khi chủ máy chọn mức đó.
+  Hiện profile đang bị khóa ở mặc định của CLI, vốn là mặc định an toàn hơn. Phải hỏi chủ máy trước.
+- `Unknown agent "<pool id>"` nên nói thẳng "pool X không còn member nào usable (mỗi member phải có trong `agents.enabled`
+  và CLI của nó phải khả dụng)" thay vì đổ tại tên agent.
+- `VERIFIED_AGY_VERSIONS` (`process.ts:9`) vẫn là `['1.4.3','1.4.7']` dù đã có bằng chứng thật trên 1.4.8 (mục 6.3) và
+  1.4.9 (đợt này, task `completed` exit 0 qua đúng đường pool). Chưa thêm vì chuẩn của tài liệu này là một lần
+  `npm run test:live` đầy đủ (smoke + cancel + shutdown), mà 1.4.9 mới có một task.
+- Pool id trong `priority`: hoặc cho nó thật (default agent = pool), hoặc cảnh báo khi cấu hình như vậy.
+
+Quy tắc cho người tiếp theo:
+
+- **Đo argv của process con, đừng suy từ schema.** Bốn cờ thiếu không hiện ra ở bất kỳ lỗi nào, không hiện trong
+  `delegateSchema`/`agentProfileSchema`; chỉ argv nói thật.
+- Fake CLI trên Windows phải là `.cmd` có `%~dp0\entry.js` (regex `SHIM_ENTRY`, `process.ts:42`); đường dẫn `.js` tuyệt đối
+  bị `resolveCommand` từ chối thẳng (`:36`, "a native .exe or an npm .cmd shim …").
+- Probe ghi owner settings (`model.json`, `permissions.json`, `soft-timeout.json`) thì set **`BRIDGE_HOME`** (bắt buộc absolute)
+  trỏ vào scratch: không set thì chúng rơi vào `.bridge-state` của worktree và đổi hành vi mọi lần chạy sau từ checkout đó.
+- **Đừng `git checkout --` một bản sửa chưa commit** rồi tưởng nó vẫn còn. Lần mutation-test đầu tiên của đợt này bị hỏng
+  vì thế: `git checkout` kéo file về bản lỗi, nên hai variant sau đỏ ở assertion *đầu tiên* chứ không phải assertion đang
+  định test. Save bản đã sửa ra `/tmp` rồi restore từ đó, và kiểm `git diff --stat` trước khi kết luận.
+
