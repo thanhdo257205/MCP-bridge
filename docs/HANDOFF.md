@@ -675,11 +675,11 @@ Bản sửa đợt này **chỉ** động tới config mẫu, guard và tài li�
   antigravity), thêm bốn rule hay nhầm và ghi rõ profile antigravity thiếu gì, thiếu theo hướng **an toàn hơn**
   (không `--mode` = agy tự từ chối mềm), nên đây là mất năng lực chứ không phải vượt quyền.
 
-Việc còn mở — cái đầu tiên **không được làm nhân tiện**, vì nó mở rộng quyền:
+Việc còn mở:
 
-- Sửa hai phép so sánh id (`manager.ts:249`, `:354`) thành một marker "họ adapter" trên `AgentAdapter`. Hệ quả: `--mode`
-  sẽ áp cho task chạy profile, tức là kể cả mức `full` → `--dangerously-skip-permissions` khi chủ máy chọn mức đó.
-  Hiện profile đang bị khóa ở mặc định của CLI, vốn là mặc định an toàn hơn. Phải hỏi chủ máy trước.
+- **Đã làm ở đợt 7 (mục 6.9):** sửa hai phép so sánh id (`manager.ts:249`, `:354`) thành một marker "họ adapter" trên
+  `AgentAdapter`. Chủ máy đã duyệt hệ quả trước khi code được viết: `--mode` giờ áp cho task chạy profile, tức là
+  kể cả mức `full` → `--dangerously-skip-permissions`. Trước bản sửa, profile bị khóa ở mặc định của CLI.
 - `Unknown agent "<pool id>"` nên nói thẳng "pool X không còn member nào usable (mỗi member phải có trong `agents.enabled`
   và CLI của nó phải khả dụng)" thay vì đổ tại tên agent.
 - `VERIFIED_AGY_VERSIONS` (`process.ts:9`) vẫn là `['1.4.3','1.4.7']` dù đã có bằng chứng thật trên 1.4.8 (mục 6.3) và
@@ -711,3 +711,49 @@ config mẫu 1 dòng đổi):
   `grep -rn "README\|HANDOFF" tests/*.ts` chỉ ra đúng một file tham chiếu là `tests/package.test.ts`, và cả hai chỗ
   (`:33`, `:44`) chỉ kiểm **tên file trong tarball**, không đọc nội dung. TS và config JSON thì đã ở bản cuối trước `tsc`.
 
+
+### 6.9 Đợt 7 — 2026-10-28: profile `antigravity` nhận đủ setting của chủ máy (marker "họ adapter")
+
+Chủ máy đã duyệt hệ quả mở rộng quyền ghi ở mục 6.8, nên bản sửa chỉ làm đúng một việc: thêm `family` vào `AgentAdapter`
+(`agents/types.ts`, giá trị `antigravity` / `codex`, do chính adapter khai báo) và đổi hai phép so sánh trong `manager.ts`
+(`:249` chỗ ghi model vào request, `:354` chỗ quyết định cờ quyền / effort / log-file / print-timeout / transport)
+từ `adapter.id` sang `adapter.family`. `registry.ts` không phải sửa: `antigravityAdapter()` sinh cả bản id gốc lẫn bản profile,
+nên family luôn đi đúng CLI thật kể cả khi profile trỏ `executable` tới một shim khác.
+
+Bằng chứng, đo chứ không suy:
+
+| Kiểm | Cách đo | Kết quả |
+|---|---|---|
+| argv của profile đúng bằng argv của agent gốc | test mới `an antigravity profile is launched with the owner model, permission level, effort, soft deadline and log file`: ghi owner settings (`gemini-3-pro-high`, `accept-edits`, effort `high`, soft deadline 7200 s) vào state scratch, chạy `antigravity` rồi profile `agy-team` trên cùng CLI giả, so argv sau khi bỏ hai phần luôn khác theo task (prompt và tên log) | **Xanh**; cả hai argv đều có `--model/--mode/--effort/--print-timeout 7200s/--log-file` |
+| Bỏ fix ở `manager.ts:354` (đổi `family` về `id`) | giữ nguyên bản đã sửa trong `/tmp`, patch rồi restore từ đó (đúng quy tắc đợt 6) | **Đỏ** ở `agy-team gets the model chosen in the web UI` |
+| Bỏ fix ở `manager.ts:249` | như trên, chỉ đổi chỗ ghi model vào request | **Đỏ** cùng assertion — `:249` chính là nguồn của `--model`, nên hai chỗ này là một chuỗi nhân quả, không phải hai lỗi rời |
+| Stream transport | bật step progress rồi chạy lại cả hai id trong cùng test | **Xanh**: cả hai đều là `--output-format stream-json` |
+| Family đặt sai trên adapter | test `an antigravity profile keeps the adapter family its owner settings belong to` đọc `createAgentRegistry` với một profile antigravity + một profile codex | **Xanh**, và đỏ ngay khi `family` của một adapter bị khai sai |
+| CLI thật, không phải mock | probe `test-results/live-profile-argv.mjs` (scratch gitignored, **không commit**): bridge thật với `BRIDGE_HOME` trỏ vào `%TEMP%\agy-profile-live-…`, config chỉ có `antigravity` + profile `agy-team`, delegate qua đúng MCP tool, argv đo ở ranh giới CLI nhờ `executable` của profile là wrapper `.cmd` → `agyw.js` ghi argv rồi spawn `agy.exe` | argv thật của task profile: `--output-format json --print-timeout 120s --disable-slash-commands --model gemini-3.8-flash-low --mode accept-edits`; task `completed`, exit 0, `agent: agy-team`, sentinel `UNCHANGED`, verdict `LIVE PROFILE ARGV OK` trên **agy 1.4.9** |
+
+Vài thứ chỉ ra khi đo, không có cách nào khác để biết:
+
+- **Một wrapper `.cmd` tự ghi log sẽ bị bỏ qua hoàn toàn.** `resolveCommand` (`process.ts:33`) thấy `.cmd` là thay nó bằng
+  `node.exe` + entry `.js` khớp `SHIM_ENTRY`, nên lệnh trong wrapper không bao giờ chạy. Muốn đo argv thì wrapper phải là
+  `.cmd` trỏ tới một `.js` của mình, và `.js` đó spawn CLI thật.
+- **`agy` trên máy này là native exe**, không phải shim npm: `%LOCALAPPDATA%\agy\bin\agy.exe` → `prefixArgs` rỗng.
+  `agy models` hiện trả sáu id (`gemini-3.8-flash-{high,medium,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
+  `gpt-oss-120b-medium`), tức là họ model đã đổi so với các đợt trước — `VERIFIED_AGY_VERSIONS` vẫn chưa được cập nhật (mục 6.8).
+- **Test argv phải tự xóa `BRIDGE_AGY_PERMISSIONS`.** `permissionState` đọc env trước file, nên nếu shell của người chạy để
+  leftover một mức nào đó thì argv trong test do env quyết định, không phải do đoạn code đang bị test.
+
+Hệ quả an toàn, đã viết lại trong README mục "Agents, profiles and pools": `--mode` giờ tới được task chạy profile, nghĩa là
+mức `full` của chủ máy sinh `--dangerously-skip-permissions` cho cả task profile. Trước bản sửa, profile bị khóa ở mặc định của
+CLI và đó là con đường duy nhất để cờ đó không tới. Profile `antigravity` vì thế **không còn "an toàn hơn theo mặc định"**:
+nó an toàn đúng bằng mức chủ máy đặt trong Settings.
+Vẫn còn một khoảng cách chưa nhân tiện sửa: field `model` trên profile antigravity vẫn bị bỏ qua (chỉ profile codex đọc nó),
+vì model của antigravity lấy từ web UI, không từ config.
+
+Bằng chứng run trên đúng nội dung cuối:
+
+- Windows, Node **24.15.0**: **264 test / 258 pass / 0 fail / 6 skipped**, 275,7 s, exit 0. So với baseline `0.1.25`
+  (262/256/0/6) là **+2 test** — đúng hai test mới của đợt này; số skip không đổi.
+- **Linux không chạy local**: thay đổi chỉ là một field trên interface và hai phép so sánh chuỗi, không có nhánh nào theo
+  platform hay filesystem. Hai job `test (ubuntu-latest, …)` trong CI là verdict Linux thật.
+- `skills/` không đổi nên không phải đăng ký hash mới (`known-versions.json`); `tests/package.test.ts` vẫn chặn
+  `docs/HANDOFF.md` trong tarball, và block markdown này không đổi hành vi runtime.
