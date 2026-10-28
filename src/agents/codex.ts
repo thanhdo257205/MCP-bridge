@@ -13,7 +13,7 @@ export interface CodexOptions {
   label?: string;
   model?: string;
   sandbox?: 'workspace-write' | 'danger-full-access' | 'read-only' | string;
-  askForApproval?: 'never' | 'auto' | 'always' | string;
+  askForApproval?: 'on-request' | 'never' | string;
   env?: Record<string, string>;
 }
 
@@ -28,7 +28,9 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
         'exec', '--json', '--sandbox', options.sandbox ?? 'workspace-write', '--skip-git-repo-check', '--ephemeral',
         '--cd', task.workspace, '--color', 'never', '-o', resultFile
       ];
-      if (options.askForApproval) args.push('--ask-for-approval', options.askForApproval);
+      // A global codex flag, so it goes before the `exec` subcommand: `codex exec --ask-for-approval never` exits
+      // with "unexpected argument" on codex-cli 0.163.0 and the task never starts.
+      if (options.askForApproval) args.unshift('--ask-for-approval', options.askForApproval);
       if (options.model) args.push('-m', options.model);
       args.push('-');
       return {executable: command.executable, args, stdin: `${task.prompt}\n`, resultFile, customEnv: options.env};

@@ -52,7 +52,7 @@ test('no authentication, Host/Origin guarded, body bounded and both protocol era
     assert.equal(badHost,403);
     assert.equal((await fetch(bridge.mcpUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(140000)})).status,413);
     assert.equal((await fetch(bridge.healthUrl,{headers:{Authorization:'Bearer anything'}})).status,200);
-    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,mode);try{assert.equal((await client.listTools()).tools.length,13);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');assert.equal((await call(client,'agents_list')).default_agent,'antigravity');}finally{await client.close();}}
+    for(const mode of ['auto','legacy'] as const) {const client=await connect(bridge.mcpUrl,mode);try{assert.equal((await client.listTools()).tools.length,14);assert.equal((await call(client,'antigravity_environment')).cli_version,'mock');assert.equal((await call(client,'agents_list')).default_agent,'antigravity');}finally{await client.close();}}
   } finally {await bridge.close();}
 });
 test('client disconnect preserves running task; reconnect can query and cancel it',async()=>{

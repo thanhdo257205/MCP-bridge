@@ -4,7 +4,8 @@ import { paths, packageRoot } from './paths.js';
 import * as z from 'zod/v4';
 
 export const codexSandboxSchema = z.enum(['workspace-write', 'danger-full-access', 'read-only']);
-export const codexApprovalSchema = z.enum(['never', 'auto', 'always']);
+// The two policies codex-cli 0.163.0 accepts for --ask-for-approval; anything else makes codex exit before it reads the prompt.
+export const codexApprovalSchema = z.enum(['on-request', 'never']);
 
 export const agentProfileSchema = z.object({
   adapter: z.enum(['codex', 'antigravity']),
@@ -26,10 +27,12 @@ export const poolSchema = z.object({
 export type PoolConfig = z.infer<typeof poolSchema>;
 
 export const xerjSchema = z.object({
-  enabled: z.boolean().default(true),
+  // Off unless the owner turns it on: enabling it sends task text to another local service and prepends retrieved
+  // passages to the prompt an agent follows, so a search hit becomes an instruction the agent never got from the client.
+  enabled: z.boolean().default(false),
   url: z.string().default('http://127.0.0.1:9200'),
   default_index: z.string().default('mcp-bridge-docs'),
-  auto_reference: z.boolean().default(true),
+  auto_reference: z.boolean().default(false),
   max_passages: z.number().int().min(1).max(10).default(3)
 }).strict();
 export type XerjConfig = z.infer<typeof xerjSchema>;

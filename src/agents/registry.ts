@@ -59,7 +59,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     }
   }
   if (settings.codex_sandbox === 'danger-full-access' || settings.codex_ask_for_approval === 'never') {
-    const dangerWarn = `Agent "codex" is configured with dangerous permissions (sandbox: ${settings.codex_sandbox ?? 'workspace-write'}, approval: ${settings.codex_ask_for_approval ?? 'auto'})`;
+    const dangerWarn = `Agent "codex" is configured with dangerous permissions (sandbox: ${settings.codex_sandbox ?? 'workspace-write'}, approval: ${settings.codex_ask_for_approval ?? 'on-request'})`;
     codexStatus.warnings.push(dangerWarn);
     warnings.push(dangerWarn);
   }
@@ -121,7 +121,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
         const sandbox = profile.codex_sandbox ?? settings.codex_sandbox;
         const askForApproval = profile.codex_ask_for_approval ?? settings.codex_ask_for_approval;
         if (sandbox === 'danger-full-access' || askForApproval === 'never') {
-          const dangerMsg = `Agent "${profileId}" is configured with dangerous permissions (sandbox: ${sandbox ?? 'workspace-write'}, approval: ${askForApproval ?? 'auto'})`;
+          const dangerMsg = `Agent "${profileId}" is configured with dangerous permissions (sandbox: ${sandbox ?? 'workspace-write'}, approval: ${askForApproval ?? 'on-request'})`;
           profileWarnings.push(dangerMsg);
           warnings.push(dangerMsg);
         }

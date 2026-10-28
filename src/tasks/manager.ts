@@ -41,9 +41,19 @@ export interface Task {
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
   denied_actions: {action: string; display_name: string}[];
+  /** Attempts a quota failover abandoned before this one, each with the reason it stopped (absent when there was no failover). */
+  attempts?: TaskAttempt[];
   review_required: true; acceptance_verified: false;
 }
-export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response'>;
+/** One agent attempt that was given up on and replaced by another profile in the same pool. */
+export interface TaskAttempt {
+  agent: string; status: Status; error: string | null; exit_code: number | null; signal: string | null;
+  ended_at: string | null; duration_ms: number; stdout_tail: string; stderr_tail: string;
+}
+/** How much of an abandoned attempt's log is kept: enough to show why it stopped, small enough not to multiply the record. */
+const ATTEMPT_TAIL_CHARS = 4000;
+const tail = (text: string): string => (text.length > ATTEMPT_TAIL_CHARS ? text.slice(-ATTEMPT_TAIL_CHARS) : text);
+export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response' | 'attempts'>;
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** A finished task publishes its status as soon as this budget runs out, even if the process query is wedged. */
 const REAP_BUDGET_MS = 6000;
@@ -120,6 +130,8 @@ export class TaskManager {
 
   getXerjClient(): XerjClient { return this.xerjClient; }
   setXerjClient(client: XerjClient): void { this.xerjClient = client; }
+  /** XERJ is opt-in: without it the bridge never puts task text in front of another local service, and never puts a retrieved passage into a prompt. */
+  isXerjEnabled(): boolean { return this.config.xerj?.enabled === true; }
 
   private get maxParallelWorktrees(): number { return this.config.max_parallel_worktrees ?? 2; }
   private selectAgent(id?: string, taskInput?: DelegateInput): AgentRuntime {
@@ -315,7 +327,9 @@ export class TaskManager {
       await this.persist(task);
       checkStarting();
       const promptInput = {...input, workspace: execWorkspace, autonomy};
-      if (this.config.xerj?.auto_reference !== false) {
+      // Both flags, not just auto_reference: a passage retrieved from the index is appended to the prompt the agent
+      // follows, so an index hit becomes an instruction the client never sent. The owner opts in twice, on purpose.
+      if (this.isXerjEnabled() && this.config.xerj?.auto_reference) {
         try {
           const searchRes = await this.xerjClient.search(input.task, {
             limit: this.config.xerj?.max_passages ?? 3
@@ -505,23 +519,33 @@ export class TaskManager {
                 globalHealthTracker.markCooldown(agent.adapter.id, cooldown);
                 console.error(`[bridge] Agent profile "${agent.adapter.id}" exhausted quota/rate limit. Marked in cooldown (${cooldown}s).`);
                 if (poolConfig) {
+                  // Every profile this task already burned is excluded, so a pool of N gives at most N-1 retries and a
+                  // pool that runs out fails the task instead of cycling through cooled members forever.
+                  const tried = entry.poolTried ??= new Set([agent.adapter.id]);
                   const nextId = globalHealthTracker.selectProfile(
                     poolConfig,
                     isHardTask(input),
-                    (candidateId) => candidateId !== agent.adapter.id && this.agents.some(a => a.adapter.id === candidateId && a.enabled && a.status.available)
+                    (candidateId) => this.agents.some(a => a.adapter.id === candidateId && a.enabled && a.status.available),
+                    tried
                   );
-                  if (nextId && nextId !== agent.adapter.id) {
-                    const nextAgent = this.agents.find(a => a.adapter.id === nextId);
-                    if (nextAgent) {
-                      console.error(`[bridge] Task ${task.task_id} auto-failing over from "${agent.adapter.id}" to "${nextId}"...`);
-                      entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
-                      task.agent = nextId;
-                      task.error = null;
-                      task.stdout = '';
-                      task.stderr = '';
-                      if (ownsLock) await rmdir(lock).catch(() => {});
-                      return this.launch(entry);
-                    }
+                  const nextAgent = nextId ? this.agents.find(a => a.adapter.id === nextId) : undefined;
+                  if (nextAgent && nextId) {
+                    tried.add(nextId);
+                    console.error(`[bridge] Task ${task.task_id} auto-failing over from "${agent.adapter.id}" to "${nextId}"...`);
+                    // The first attempt's evidence survives the retry: the error, exit and output tails are what a
+                    // reviewer needs to tell "quota exhausted" from "the agent did the work badly", and the next
+                    // attempt's own flush overwrites task.stdout wholesale.
+                    (task.attempts ??= []).push({
+                      agent: agent.adapter.id, status: 'failed', error: task.error, exit_code: code, signal,
+                      ended_at: task.ended_at, duration_ms: task.duration_ms,
+                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr)
+                    });
+                    entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
+                    task.agent = nextId;
+                    task.error = null;
+                    // The execution lock is deliberately NOT released here: this task still holds the lane, so the
+                    // retry cannot let a second ordinary task in and a release can never delete a lock another task owns.
+                    return this.launch(entry);
                   }
                 }
               }
@@ -645,7 +669,7 @@ export class TaskManager {
   }
   /** Status view: metadata only. Logs and the final response come from get(). */
   summary(id: string): TaskSummary {
-    const {stdout: _stdout, stderr: _stderr, final_response: _response, ...rest} = this.get(id);
+    const {stdout: _stdout, stderr: _stderr, final_response: _response, attempts: _attempts, ...rest} = this.get(id);
     return rest;
   }
   /** All retained tasks, newest first, without logs. */

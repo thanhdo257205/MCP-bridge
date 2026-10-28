@@ -45,6 +45,10 @@ export async function startHttpBridge(options: {
     }
     if (req.url === '/api/xerj/status' && req.method === 'GET') {
       const xerj = options.manager.getXerjClient();
+      if (!options.manager.isXerjEnabled()) {
+        reply(200, {enabled: false, available: false, url: xerj.url, default_index: xerj.defaultIndex, indices: []});
+        return;
+      }
       void xerj.isAvailable().then(async available => {
         const indices = available ? await xerj.listIndices() : [];
         reply(200, {available, url: xerj.url, default_index: xerj.defaultIndex, indices});
@@ -52,6 +56,10 @@ export async function startHttpBridge(options: {
       return;
     }
     if (req.url?.startsWith('/api/xerj/search') && req.method === 'GET') {
+      if (!options.manager.isXerjEnabled()) {
+        reply(404, {error: 'XERJ search is disabled: set "xerj.enabled" to true in workspaces.json'});
+        return;
+      }
       const parsed = new URL(req.url, baseUrl || 'http://127.0.0.1:3000');
       const q = parsed.searchParams.get('q') ?? '';
       const limit = parseInt(parsed.searchParams.get('limit') ?? '5', 10);

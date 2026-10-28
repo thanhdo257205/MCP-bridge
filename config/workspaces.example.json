@@ -14,16 +14,14 @@
     "priority": ["antigravity", "codex"],
     "enabled": ["antigravity", "codex"],
     "codex_sandbox": "workspace-write",
-    "codex_ask_for_approval": "auto",
+    "codex_ask_for_approval": "on-request",
     "profiles": {
       "codex-work": {
         "adapter": "codex",
         "label": "Codex (Work Account)",
         "env": {
           "CODEX_HOME": "C:/Users/name/.codex-work"
-        },
-        "codex_sandbox": "danger-full-access",
-        "codex_ask_for_approval": "never"
+        }
       },
       "codex-backup": {
         "adapter": "codex",
@@ -43,10 +41,10 @@
     }
   },
   "xerj": {
-    "enabled": true,
+    "enabled": false,
     "url": "http://127.0.0.1:9200",
     "default_index": "mcp-bridge-docs",
-    "auto_reference": true,
+    "auto_reference": false,
     "max_passages": 3
   },
   "tree_watch": {
