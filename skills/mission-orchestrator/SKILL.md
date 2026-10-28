@@ -15,6 +15,7 @@ Use one when the work is genuinely a sequence: implement → test what you chang
 
 - Call `antigravity_environment` and `agents_list`. Require `bridge_status=ready`, `supported.missions=true`, `delegation.enabled=true` and `accepting_tasks=true`, and take the workspace from `allowed_workspaces` (an empty allowlist permits nothing). Read `limits`: `max_mission_steps`, `max_retained_missions`, `max_timeout_seconds`, `max_parallel_worktrees`.
 - Every step runs in the mission's single `workspace`; a step that names another one is rejected. Plan one mission per repository.
+- A step's `delegate.agent` may be a profile or pool id from `agents_list`, not only `antigravity` or `codex`. Bind a step to a **pool** only when it is acceptable for a different account to answer it; name one **profile** when the step depends on a specific login, model or environment. If a pooled step fails over, the retry runs in the **same** worktree, so the abandoned attempt's partial edits stay in the diff and count toward the next attempt's `scope` - read that step's `attempts` before trusting who wrote what.
 - Look at the repository yourself first (status, the files in scope, existing untracked work) and record a baseline. The plan is where you write down what you already learned, so a step does not have to rediscover it.
 - The tools do not list missions, so save the `mission_id` from the receipt the moment it returns. If it is lost, ask the user to read it in the web UI (Nhiệm vụ page) rather than recreating a plan that may already be running.
 
@@ -66,6 +67,7 @@ States come from the task records, live: `ready` (dispatchable now), `pending` (
 | Situation | What to do |
 |---|---|
 | Dependency `failed`, `timeout`, `canceled` or `lost` | Nothing unlocks automatically. Read the step's task output, then `mission_extend` a new step (a new `step_id`) that carries the fix, with the failure output and what is already done in its `context`. |
+| A pooled step ended `failed` with `attempts` | Every healthy member ran once and stopped. Read each attempt's error before deciding: quota-shaped text means the accounts are exhausted, which appending an identical step will not fix. Append the step again against one named profile, take that part yourself, or tell the user and stop. |
 | A step needs a second attempt | Append a step; the plan is append-only, so an old `step_id` is permanently used. The same `task_id` is never started twice. |
 | Work discovered while the plan runs | `mission_extend` while the mission is `open`. Keep the goal of the mission the same; add steps, do not rewrite history. |
 | The plan no longer matches reality | `mission_cancel`. No further step can be dispatched and no further step can be appended. Start a new mission instead of forcing an old plan. |
