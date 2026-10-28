@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {inspectCli,startProcess} from '../src/antigravity/process.js';
 const fixture=fileURLToPath(new URL('../../tests/fixtures/inspect-agy.mjs',import.meta.url));
 test('CLI accepts the 1.4 patch family with complete help and warns for unverified patches',async()=>{
-  for(const [version,missing,supported,warn] of [['1.4.3','',true,false],['1.4.7','',true,false],['1.4.0','',true,true],['1.4.99','',true,true],['1.5.0','',false,false],['2.4.3','',false,false],['1.4.3','--print-timeout',false,false]] as const){
+  for(const [version,missing,supported,warn] of [['1.4.3','',true,false],['1.4.7','',true,false],['1.4.8','',true,false],['1.4.9','',true,false],['1.4.0','',true,true],['1.4.99','',true,true],['1.5.0','',false,false],['2.4.3','',false,false],['1.4.3','--print-timeout',false,false]] as const){
     const result=await inspectCli({executable:process.execPath,prefixArgs:[fixture,version,missing],source:'fixture'},process.cwd());
     assert.equal(result.supported,supported,`${version} ${missing}`);assert.equal(result.warnings.length>0,warn);
   }
