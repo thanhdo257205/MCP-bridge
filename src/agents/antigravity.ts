@@ -16,6 +16,7 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
   return {
     id: options.id ?? 'antigravity',
     label: options.label ?? 'Antigravity',
+    family: 'antigravity',
     capabilities: CAPABILITIES,
     buildInvocation(task) {
       const transport = task.promptTransport ?? defaultTransport;

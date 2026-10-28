@@ -93,6 +93,7 @@ test('TaskManager routes hard task to hard_task_profile and auto-fails over on q
     const adapter: AgentAdapter = {
       id,
       label: id,
+      family: 'codex',
       capabilities: ['code'],
       buildInvocation: (task) => ({ executable: 'mock', args: [], stdin: task.prompt }),
       parseResult: async (raw) => {

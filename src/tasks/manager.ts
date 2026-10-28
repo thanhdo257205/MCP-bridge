@@ -246,7 +246,7 @@ export class TaskManager {
         context: input.context === undefined ? null : redact(input.context), timeout_seconds: timeout,
         client: meta.client ? redact(meta.client).slice(0, 100) : null,
         agent: task.agent, isolation: input.isolation, owns: input.owns, autonomy,
-        model: agent?.adapter.id === 'antigravity' ? await readModel(this.runtime.stateDirectory) : null,
+        model: agent?.adapter.family === 'antigravity' ? await readModel(this.runtime.stateDirectory) : null,
         permission: permissionState(this.runtime.stateDirectory).level,
         effort: readEffort(this.runtime.stateDirectory)
       }
@@ -351,7 +351,7 @@ export class TaskManager {
       if(entry.request)entry.request.permission=permission;
       // Soft deadline (owner setting, off by default): agy gets the absolute limit as its own print timeout and a log file whose growth shows it is alive.
       const soft=readSoftTimeout(this.runtime.stateDirectory);
-      const antigravity = agent.adapter.id === 'antigravity';
+      const antigravity = agent.adapter.family === 'antigravity';
       const absoluteLimit=Math.max(timeout,soft.limit_seconds);
       let logFile:string|undefined;
       if(antigravity&&soft.enabled){

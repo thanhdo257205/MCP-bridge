@@ -21,6 +21,7 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
   return {
     id: options.id ?? 'codex',
     label: options.label ?? 'Codex',
+    family: 'codex',
     capabilities: CAPABILITIES,
     buildInvocation(task) {
       const resultFile = path.join(task.stateDirectory, 'results', `${task.taskId}.txt`);
