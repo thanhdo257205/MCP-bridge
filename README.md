@@ -18,7 +18,7 @@ Fastest first run: from inside the project you want to work on, `agy-mcp-bridge 
 
 `agy-mcp-bridge check | setup codex|claude|both | delegation on|off|status | skill install | config | update | help`. `--open` launches the web UI in your browser. Config and task history live in the user data directory (`%APPDATA%\agy-mcp-bridge`, `~/.config/agy-mcp-bridge`, `~/Library/Application Support/agy-mcp-bridge`; override with `BRIDGE_HOME`), so an upgrade never deletes them. `agy-mcp-bridge config` prints the real paths.
 
-At startup the bridge probes each CLI. An agent that is missing or unsupported is marked unavailable and takes no task; if `agy` is unavailable, the default agent silently becomes the next enabled one, so check `agents_list` after changing machines. Priority and per-agent switches live under `agents` in `config/workspaces.json`. Verified against real agent execution on `agy` 1.4.3 and 1.4.7; other 1.4.x patches run with a logged warning; other majors are refused.
+At startup the bridge probes each CLI. An agent that is missing or unsupported is marked unavailable and takes no task; if `agy` is unavailable, the default agent silently becomes the next enabled one, so check `agents_list` after changing machines. Priority and per-agent switches live under `agents` in `config/workspaces.json`. Verified against real agent execution on `agy` 1.4.3, 1.4.7, 1.4.8 and 1.4.9; other 1.4.x patches run with a logged warning; other majors are refused.
 
 From a git clone instead of npm: `npm ci && npm run build && npm start`, then `npm run check` in a second terminal. `npm run dev` builds and runs; there is no hot reload, because an automatic restart would cut off a task mid-edit.
 

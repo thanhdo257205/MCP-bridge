@@ -6,7 +6,7 @@ import { inside } from '../security/workspace.js';
 export interface ResolvedCommand { executable: string; prefixArgs: string[]; source: string; }
 
 /** Patch releases exercised with a real agent run; other 1.4.x patches still run but warn. */
-export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7'] as const;
+export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7', '1.4.8', '1.4.9'] as const;
 
 /**
  * Resolve a command without ever going through a shell. On Windows an npm-installed CLI is usually a `.cmd`
