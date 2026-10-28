@@ -138,7 +138,7 @@ test('code_search tool is registered on McpServer and proxies query to XerjClien
     supported: true,
     executable: 'agy',
     agents: [{
-      adapter: { id: 'antigravity', label: 'Antigravity', executableName: 'agy', buildInvocation: () => ({ executable: 'agy', args: [] }) },
+      adapter: { id: 'antigravity', label: 'Antigravity', family: 'antigravity', executableName: 'agy', buildInvocation: () => ({ executable: 'agy', args: [] }) },
       enabled: true,
       status: { available: true, path: 'agy', warnings: [] }
     }]

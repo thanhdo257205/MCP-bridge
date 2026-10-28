@@ -6,6 +6,8 @@ import type { TaskStats } from '../usage.js';
 export type Autonomy = 'suggest' | 'auto' | 'full';
 export type Isolation = 'none' | 'worktree';
 export type AgentCapability = 'code' | 'review' | 'test' | 'research' | 'long-run';
+/** The CLI dialect a task is turned into. Owner settings key on this rather than on `id`, so a profile inherits them with its adapter. */
+export type AgentFamily = 'antigravity' | 'codex';
 
 export interface DeniedAction { action: string; display_name: string; }
 
@@ -60,6 +62,7 @@ export interface AgentResult {
 export interface AgentAdapter {
   id: string;
   label: string;
+  family: AgentFamily;
   capabilities: AgentCapability[];
   buildInvocation(task: AgentTask): Invocation;
   parseResult(raw: RawRun): Promise<AgentResult>;

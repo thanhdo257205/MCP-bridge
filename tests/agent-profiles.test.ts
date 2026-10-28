@@ -13,6 +13,11 @@ import { antigravityAdapter } from '../src/agents/antigravity.js';
 import { createAgentRegistry, publicAgents, type AntigravityInspection } from '../src/agents/registry.js';
 import { childEnvironment } from '../src/antigravity/process.js';
 import { globalHealthTracker } from '../src/agents/quota.js';
+import { writeModel } from '../src/models.js';
+import { writePermission } from '../src/permissions.js';
+import { writeEffort } from '../src/effort.js';
+import { writeSoftTimeout } from '../src/soft-timeout.js';
+import { writeProgress } from '../src/progress.js';
 import type { AgentRuntime } from '../src/agents/types.js';
 import type { ChildProcess } from 'node:child_process';
 import type { Config } from '../src/config.js';
@@ -332,6 +337,104 @@ test('failover visits each profile in the pool at most once and then fails the t
     assert.equal(done.agent, 'p2', 'the record names the profile that was last in charge');
   } finally {
     await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const AGY_JSON = '{"status":"SUCCESS","num_turns":1,"response":"ok"}';
+const AGY_STREAM = '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"response":"ok"}}';
+
+/** A fake `agy` that answers with a successful final envelope and records the argv of every launch. */
+function agyRuntime(id: string, launches: string[][], output: () => string): AgentRuntime {
+  return {
+    adapter: antigravityAdapter('agy', 'argv', {id, label: id}),
+    status: {id, label: id, available: true, version: '1.4.9', executable: 'agy', capabilities: ['code' as const], warnings: []},
+    enabled: true, prefixArgs: [],
+    launch: (args) => {
+      launches.push(args);
+      const child = new EventEmitter() as EventEmitter & {pid: number; stdout: PassThrough; stderr: PassThrough; stdin: PassThrough};
+      child.pid = 700_000 + launches.length;
+      child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+      setTimeout(() => { child.stdout.end(`${output()}\n`); child.emit('close', 0, null); }, 10);
+      return child as unknown as ChildProcess;
+    }
+  };
+}
+/** Only the flags matter here: the prompt carries the agent id and the log file name carries the task id. */
+const argvFlags = (args: string[]): string[] => {
+  const flags: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--print' || args[i] === '--log-file') { i++; continue; }
+    flags.push(args[i]);
+  }
+  return flags;
+};
+
+test('an antigravity profile keeps the adapter family its owner settings belong to', async () => {
+  const registry = await createAgentRegistry({
+    allowed_workspaces: [], executable: 'agy', max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144,
+    max_retained_tasks: 50, max_queued_tasks: 3, extra_env_passthrough: [], prompt_transport: 'argv',
+    agents: {enabled: ['antigravity', 'agy-team', 'codex', 'codex-work'], profiles: {
+      'agy-team': {adapter: 'antigravity'}, 'codex-work': {adapter: 'codex'}
+    }}
+  } as unknown as Config, {executable: 'agy', supported: true, version: '1.4.9', warnings: []});
+  assert.equal(registry.agents.find(a => a.adapter.id === 'agy-team')?.adapter.family, 'antigravity');
+  assert.equal(registry.agents.find(a => a.adapter.id === 'codex-work')?.adapter.family, 'codex');
+});
+
+test('an antigravity profile is launched with the owner model, permission level, effort, soft deadline and log file', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-profile-argv-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  // permissionState prefers the environment over the owner's file, and a level forced outside the test would decide the argv.
+  const forced = process.env.BRIDGE_AGY_PERMISSIONS; delete process.env.BRIDGE_AGY_PERMISSIONS;
+  const launches: string[][] = [];
+  let stream = false;
+  try {
+    await writeModel(state, 'gemini-3-pro-high');
+    await writePermission(state, 'accept-edits');
+    await writeEffort(state, 'high');
+    await writeSoftTimeout(state, {enabled: true, limit_seconds: 7200});
+    const config: Config = {
+      allowed_workspaces: [workspace], executable: 'agy', max_timeout_seconds: 15, default_timeout_seconds: 10,
+      max_output_bytes: 262144, max_retained_tasks: 10, max_queued_tasks: 0, max_parallel_worktrees: 2,
+      default_autonomy: 'auto', extra_env_passthrough: [], prompt_transport: 'argv'
+    };
+    const output = () => stream ? AGY_STREAM : AGY_JSON;
+    const manager = new TaskManager(config, {
+      executable: 'agy', supported: true, stateDirectory: state, defaultAgent: 'antigravity',
+      agents: [agyRuntime('antigravity', launches, output), agyRuntime('agy-team', launches, output)]
+    });
+    const run = async (agent: string) => {
+      const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent});
+      const done = await manager.wait(started.task_id);
+      assert.equal(done.status, 'completed', `${agent} ran the fake CLI to a parsed result`);
+      return {started, done};
+    };
+
+    const first = await run('antigravity'); const second = await run('agy-team');
+    const [base, profile] = launches;
+    for (const [name, args] of [['antigravity', base], ['agy-team', profile]] as const) {
+      assert.ok(args.includes('--model'), `${name} gets the model chosen in the web UI`);
+      assert.equal(args[args.indexOf('--model') + 1], 'gemini-3-pro-high', `${name} gets the model chosen in the web UI`);
+      assert.equal(args[args.indexOf('--mode') + 1], 'accept-edits', `${name} gets the permission level chosen in the web UI`);
+      assert.equal(args[args.indexOf('--effort') + 1], 'high', `${name} gets the effort chosen in the web UI`);
+      assert.equal(args[args.indexOf('--print-timeout') + 1], '7200s', `${name} gets the soft deadline as its own print timeout`);
+      assert.ok(String(args[args.indexOf('--log-file') + 1]).startsWith(path.join(state, 'agy-logs')), `${name} is asked to write the liveness log`);
+    }
+    assert.deepEqual(argvFlags(profile), argvFlags(base), 'a profile is launched with exactly the flags of the agent it comes from');
+    assert.equal(manager.detail(second.started.task_id).request?.model, 'gemini-3-pro-high', 'the profile task records the model it ran with');
+    assert.equal(manager.detail(first.started.task_id).request?.model, 'gemini-3-pro-high');
+
+    stream = true;
+    await writeProgress(state, true);
+    await run('antigravity'); await run('agy-team');
+    const [baseStream, profileStream] = launches.slice(2);
+    assert.deepEqual([baseStream[3], profileStream[3]], ['stream-json', 'stream-json'], 'step progress reaches both');
+    assert.deepEqual(argvFlags(profileStream), argvFlags(baseStream), 'the stream transport is not kept from a profile either');
+    await manager.shutdown();
+  } finally {
+    if (forced !== undefined) process.env.BRIDGE_AGY_PERMISSIONS = forced; else delete process.env.BRIDGE_AGY_PERMISSIONS;
     await rm(root, { recursive: true, force: true });
   }
 });
