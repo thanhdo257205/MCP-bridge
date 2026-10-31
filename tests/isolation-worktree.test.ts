@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -149,6 +149,25 @@ test('pruning clears the bridge worktrees whose directory is gone and leaves eve
   assert.ok(!listed.includes(bridge.root.replace(/\\/g, '/')), 'the bridge worktree record is gone');
   assert.ok(listed.includes(byHand.replace(/\\/g, '/')), 'a worktree made by hand keeps its record');
   assert.ok(listed.includes(lockedPath.replace(/\\/g, '/')), 'a locked record is never touched');
+});
+
+test('pruning finds the bridge worktrees when the worktrees root is spelled with a Windows 8.3 short name', {skip: process.platform !== 'win32'}, async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), 'agy-prune-short-name-'));
+  const state = path.join(repo, 'state');
+  const worktrees = path.join(state, 'worktrees');
+  await mkdir(worktrees, {recursive: true});
+  await git(repo, ['init', '-b', 'main']);
+  await writeFile(path.join(repo, 'tracked.txt'), 'base\n');
+  await git(repo, ['add', 'tracked.txt']);
+  await git(repo, ['-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', '-m', 'base']);
+  const bridge = await createWorktree({workspace: repo, stateDirectory: state, taskId: randomUUID()});
+  await rm(bridge.root, {recursive: true, force: true});
+  // CI runners hand out their temp directory in the short form (C:\Users\RUNNER~1\...), while git reports the long one.
+  const short = execFileSync('powershell.exe', ['-NoProfile', '-Command', `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${worktrees.replace(/'/g, "''")}').ShortPath`], {encoding: 'utf8'}).trim();
+  if (short.toLowerCase() === worktrees.toLowerCase()) return; // 8.3 names are switched off on this volume: there is no second spelling to test
+  const result = await pruneWorktrees(repo, short);
+  assert.equal(result.reason, '');
+  assert.equal(result.pruned, 1, `the record is found through the short spelling ${short}`);
 });
 
 test('a repository whose directory went without git is queued for pruning', async () => {
