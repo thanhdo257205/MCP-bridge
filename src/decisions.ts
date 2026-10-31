@@ -9,7 +9,8 @@ export const DECISIONS_FILE = 'decisions.jsonl';
 const MAX_FILE_BYTES = 512 * 1024;
 const KEEP_RECORDS = 500;
 
-export type DecisionAction = 'apply' | 'discard';
+export type DecisionAction = 'apply' | 'discard' | 'approve' | 'rerun' | 'dismiss';
+const ACTIONS: readonly string[] = ['apply', 'discard', 'approve', 'rerun', 'dismiss'];
 export interface Decision {
   at: string;
   task_id: string;
@@ -40,7 +41,7 @@ export async function readDecisions(stateDirectory: string, limit = 50): Promise
     if (!line.trim()) continue;
     try {
       const value = JSON.parse(line) as Decision;
-      if (typeof value.at === 'string' && typeof value.task_id === 'string' && (value.action === 'apply' || value.action === 'discard') && typeof value.ok === 'boolean') {
+      if (typeof value.at === 'string' && typeof value.task_id === 'string' && ACTIONS.includes(value.action) && typeof value.ok === 'boolean') {
         records.push({at: value.at, task_id: value.task_id, action: value.action, ok: value.ok, detail: String(value.detail ?? '').slice(0, 500)});
       }
     } catch { /* skip a damaged line */ }

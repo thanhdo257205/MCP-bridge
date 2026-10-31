@@ -9,6 +9,7 @@ const ICONS = {
   missions: 'M4 5h4v4H4zM4 15h4v4H4zM16 10h4v4h-4zM8 7h3a2 2 0 0 1 2 2v3M8 17h3a2 2 0 0 0 2-2v-3',
   usage: 'M4 20V10M10 20V4M16 20v-8M22 20H2',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  approvals: 'M9 12l2 2 4-4M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z',
   out: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'
 };
 
@@ -20,6 +21,7 @@ const MATCH = {
 const state = {
   overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
   missions: null, selectedMission: null, plan: null,
+  approvals: null, approvalPick: {}, approvalDir: {},
   open: new Set(), changes: null, connected: true, toast: '', q: '', filter: 'all'
 };
 let timer = null;
@@ -176,6 +178,129 @@ function followChanges() {
   if (state.changes?.task_id !== task.task_id || state.changes.loading) return;
   void loadChanges(task.task_id, true);
 }
+/* ---------- Approval queue: a task whose agent was refused something waits here. No CLI lets the owner approve in the middle of a run, so the owner either
+   runs the task again, as a new task, with a little more permission for that one run, or sets the refusal aside. Only this page can do it. ---------- */
+const DECISION_LABEL = {apply: 'Áp dụng', discard: 'Bỏ worktree', approve: 'Cho phép', rerun: 'Chạy lại', dismiss: 'Bỏ qua'};
+// What each permission is, in the CLI's own terms, and how far it reaches. The page never invents a grant: the options come from the bridge.
+const OPTION_TEXT = {
+  'agy-level:accept-edits': ['Tự duyệt việc sửa file', '--mode accept-edits. Lệnh và đường dẫn ngoài workspace vẫn bị hỏi, nên vẫn bị từ chối.'],
+  'agy-level:auto': ['Chế độ tự động của Antigravity', '--mode auto: Antigravity tự quyết định hành động của nó.'],
+  'agy-level:full': ['Bỏ qua mọi yêu cầu quyền', '--dangerously-skip-permissions: mọi thao tác được duyệt, kể cả lệnh và đường dẫn ngoài workspace.'],
+  'codex-add-dir': ['Mở thêm một thư mục để ghi', '--add-dir <thư mục>: chỉ đúng thư mục này; mọi thư mục khác ngoài workspace vẫn bị chặn.'],
+  'opencode-allow:bash': ['Cho phép chạy lệnh shell', 'bash=allow cho lần này. Shell của OpenCode ghi được cả ra ngoài workspace.'],
+  'opencode-allow:edit': ['Cho phép sửa file', 'edit=allow cho lần này.'],
+  'opencode-auto': ['Duyệt mọi thứ không bị chặn rõ ràng', '--auto: tự duyệt mọi quyền mà cấu hình OpenCode không từ chối.']
+};
+const optionKey = option => option.elevation?.kind === 'agy-level' ? `agy-level:${option.elevation.level}`
+  : option.elevation?.kind === 'opencode-allow' ? `opencode-allow:${option.elevation.permission}` : option.kind;
+const elevationKey = e => e.kind === 'agy-level' ? `agy-level:${e.level}` : e.kind === 'opencode-allow' ? `opencode-allow:${e.permission}` : e.kind;
+function retryNote(task) {
+  const e = task.elevation;
+  const what = e ? `${(OPTION_TEXT[elevationKey(e)] || [e.kind])[0]}${e.kind === 'codex-add-dir' ? ` (${e.dir})` : ''}` : 'không rõ';
+  return `Đây là lần chạy lại của task ${task.retry_of.slice(0, 8)}, với thêm quyền chỉ cho lần chạy này: ${what}. Cài đặt của bạn không đổi.`;
+}
+let approvalsAt = 0;
+async function loadApprovals(force) {
+  if (!force && Date.now() - approvalsAt < 4000) return;
+  approvalsAt = Date.now();
+  try { state.approvals = (await api('approvals')).approvals; } catch { /* keep the list already on screen */ }
+  patch();
+}
+/** The option the page preselects: the one the bridge marked narrowest, unless the owner already picked another. */
+function pickedOption(view) {
+  const chosen = state.approvalPick[view.task_id];
+  if (Number.isInteger(chosen) && chosen >= 0 && chosen < view.options.length) return chosen;
+  const narrow = view.options.findIndex(option => option.narrowest);
+  return narrow >= 0 ? narrow : 0;
+}
+async function approveRerun(view, option) {
+  const typed = (state.approvalDir[view.task_id] || '').trim();
+  if (option.needs_dir && !typed) { notify('Nhập đường dẫn tuyệt đối của thư mục trước'); return; }
+  const elevation = option.needs_dir ? {kind: option.kind, dir: typed} : option.elevation;
+  const [title, note] = OPTION_TEXT[optionKey(option)] || [option.kind, ''];
+  if (!confirm(`Chạy lại task này với thêm quyền?\n\n${title}${option.needs_dir ? `: ${typed}` : ''}\n${note}\n\nChỉ áp dụng cho MỘT lần chạy: bridge tạo task mới từ đúng yêu cầu đã ghi của task cũ. Cài đặt của bạn không đổi và lần chạy sau không thừa hưởng quyền này.${option.wide ? '\n\nMức này RỘNG: nó mở nhiều hơn các hành động đã bị từ chối.' : ''}`)) return;
+  try {
+    await api(`tasks/${view.task_id}/approve`, {method: 'POST', body: {confirm: true, elevation}});
+    notify('Đã tạo task chạy lại');
+  } catch (error) { notify(error.message); }
+  await refresh(true);
+  await loadApprovals(true);
+}
+async function dismissRefusal(view) {
+  if (!confirm('Bỏ qua các hành động bị từ chối của task này?\n\nKhông chạy gì thêm. Việc này được ghi vào nhật ký quyết định.')) return;
+  try { await api(`tasks/${view.task_id}/dismiss`, {method: 'POST', body: {confirm: true}}); notify('Đã bỏ qua'); }
+  catch (error) { notify(error.message); }
+  await refresh(true);
+  await loadApprovals(true);
+}
+/** What a person decides on: the refused actions, then what the task can be given, then the two buttons. */
+function approvalBody(view) {
+  const denied = h('div', {}, h('div', {class: 'msg-head', text: 'Hành động bị từ chối'}),
+    h('div', {class: 'chips'}, view.denied.map(item => h('span', {
+      class: item.suspected ? 'chip suspected' : 'chip',
+      title: item.suspected ? 'Bridge chỉ suy ra từ văn bản của một lệnh thất bại; chưa chắc đây là từ chối quyền.' : 'CLI báo hành động này bị từ chối.',
+      text: `${item.suspected ? '? ' : ''}${item.display_name || item.action}`}))));
+  if (view.state === 'rerun') {
+    return [denied, h('div', {class: 'callout good'}, 'Đã chạy lại ở task ', view.rerun_task_id ? h('button', {class: 'link-btn', onclick: () => openTask(view.rerun_task_id), text: view.rerun_task_id.slice(0, 8)}) : '?', '.')];
+  }
+  if (view.state === 'dismissed') return [denied, h('div', {class: 'callout', text: 'Đã bỏ qua: không chạy gì thêm.'})];
+  if (!view.options.length) {
+    return [denied, h('div', {class: 'callout warn', text: 'Không có cách nâng quyền hẹp cho loại hành động này. Bạn chỉ có thể bỏ qua, hoặc đổi cấu hình của agent rồi giao lại.'}),
+      h('div', {class: 'chips'}, h('button', {class: 'btn small', onclick: () => dismissRefusal(view), text: 'Bỏ qua'}))];
+  }
+  const picked = pickedOption(view);
+  const option = view.options[picked];
+  const rows = view.options.map((item, index) => {
+    const [title, note] = OPTION_TEXT[optionKey(item)] || [item.kind, ''];
+    return h('label', {class: `option${index === picked ? ' picked' : ''}`},
+      h('input', {type: 'radio', name: `pick-${view.task_id}`, checked: index === picked, onchange: () => { state.approvalPick[view.task_id] = index; patch(); }}),
+      h('span', {}, h('strong', {text: title}), h('span', {class: 'muted', text: note}),
+        h('span', {class: 'chips'}, item.narrowest ? h('span', {class: 'pill ok', text: 'hẹp nhất'}) : null, item.wide ? h('span', {class: 'pill bad', text: 'rộng'}) : null)));
+  });
+  return [denied,
+    h('div', {class: 'msg-head', text: 'Quyền thêm, chỉ cho một lần chạy lại'}),
+    h('div', {class: 'option-list', role: 'radiogroup'}, rows),
+    option.needs_dir ? h('input', {type: 'text', class: 'search', 'aria-label': 'Thư mục được mở thêm', placeholder: 'Đường dẫn tuyệt đối của thư mục, ví dụ C:\\du-an\\build',
+      value: state.approvalDir[view.task_id] || '', oninput: event => { state.approvalDir[view.task_id] = event.target.value; }}) : null,
+    h('div', {class: 'chips'},
+      h('button', {class: 'btn primary small', onclick: () => approveRerun(view, option), text: 'Cho phép và chạy lại'}),
+      h('button', {class: 'btn small', onclick: () => dismissRefusal(view), text: 'Bỏ qua'})),
+    h('p', {class: 'muted', text: 'Task mới dùng đúng yêu cầu đã ghi của task cũ; quyền thêm chỉ nằm trong lần chạy đó, không đổi cài đặt nào của bạn.'})];
+}
+function approvalCard(view) {
+  return h('section', {class: 'card panel approval'},
+    h('div', {class: 'mission-head'}, h('div', {},
+      h('h2', {}, view.title || view.task_id.slice(0, 8), pill(view.status),
+        view.state === 'pending' ? h('span', {class: 'pill warn', text: 'Chờ duyệt'}) : null),
+      h('div', {class: 'meta-line muted mono', title: view.workspace}, `${view.agent} · ${folder(view.workspace)}${view.isolation === 'worktree' ? ' · worktree' : ''}`),
+      h('div', {class: 'meta-line muted'}, view.ended_at ? agoEl(view.ended_at, 'meta') : null, view.retry_of ? ` · chạy lại từ ${view.retry_of.slice(0, 8)}` : '',
+        h('button', {class: 'link-btn', onclick: () => openTask(view.task_id), text: 'Mở task'})))),
+    h('div', {class: 'approval-body'}, approvalBody(view)));
+}
+function approvalsView() {
+  const head = h('div', {class: 'page-head'}, h('div', {}, h('h1', {text: 'Duyệt'}),
+    h('p', {text: 'Task có hành động bị agent từ chối. Không CLI nào cho duyệt giữa chừng, nên bạn duyệt sau: chạy lại task như một task mới với thêm quyền cho đúng lần đó, hoặc bỏ qua.'})));
+  const note = h('p', {class: 'callout warn', text: 'Chỉ bạn duyệt được, ở trang này. Không có tool MCP nào để duyệt hay nâng quyền, nên một agent không tự duyệt được yêu cầu của chính nó.'});
+  const list = state.approvals;
+  if (!list) return [head, note, h('div', {class: 'card empty'}, state.connected ? 'Đang tải…' : 'Không đọc được hàng đợi.')];
+  const pending = list.filter(view => view.state === 'pending');
+  const settled = list.filter(view => view.state !== 'pending');
+  if (!list.length) return [head, note, h('div', {class: 'card empty'}, h('strong', {text: 'Chưa có gì cần duyệt'}), 'Khi một agent bị từ chối quyền ở một hành động, task đó hiện ở đây.')];
+  return [head, note,
+    pending.length ? h('h2', {class: 'section-title', text: `Chờ duyệt (${pending.length})`}) : h('div', {class: 'card empty'}, h('strong', {text: 'Không còn gì chờ duyệt'})),
+    ...pending.map(approvalCard),
+    settled.length ? h('h2', {class: 'section-title', text: `Đã xử lý (${settled.length})`}) : null,
+    ...settled.map(approvalCard)];
+}
+/** On the task page: the same card, for the one task being read. */
+function approvalPanel(task) {
+  const view = (state.approvals || []).find(item => item.task_id === task.task_id);
+  const el = details('approval', 'Duyệt hành động bị từ chối', ...(view ? approvalBody(view) : [h('p', {class: 'muted', text: 'Đang tải…'})]));
+  el.addEventListener('toggle', () => { if (el.open) void loadApprovals(true); });
+  if (!state.approvals) void loadApprovals(true);
+  return el;
+}
+
 /* ---------- Mission page: read the recorded plan, stop it, never start a step ---------- */
 let missionsAt = 0;
 /** A step changes state only when its task does, so the list is read when the page opens and then at most every 8 seconds. */
@@ -472,7 +597,7 @@ function reviewBody(task) {
     !task.applied_at && !task.discarded_at ? h('p', {class: 'muted', text: 'Đọc diff từng file ở mục "Thay đổi trong workspace" trước khi áp dụng.'}) : null,
     mine.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Nhật ký quyết định'}),
       h('ul', {class: 'change-list'}, mine.map(item => h('li', {class: 'change-row'},
-        h('span', {class: `change-kind ${item.ok ? 'added' : 'deleted'}`, text: item.action === 'apply' ? 'Áp dụng' : 'Bỏ'}),
+        h('span', {class: `change-kind ${item.ok ? 'added' : 'deleted'}`, text: DECISION_LABEL[item.action] || item.action}),
         h('span', {class: 'change-path', text: `${item.ok ? '' : 'Bị từ chối: '}${item.detail}`}),
         h('span', {class: 'change-count mono', text: clock(item.at)}))))) : null
   ];
@@ -569,8 +694,9 @@ function detailView() {
   } else {
     answer = [
       task.final_response ? h('p', {class: 'text', text: task.final_response}) : h('p', {class: 'muted', text: `${agentName} không trả về phản hồi cuối.`}),
+      task.retry_of ? h('div', {class: 'callout', text: retryNote(task)}) : null,
       task.denied_actions.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Thao tác bị từ chối quyền'}),
-        h('div', {class: 'chips'}, task.denied_actions.map(a => h('span', {class: 'chip', text: a.display_name || a.action})))) : null,
+        h('div', {class: 'chips'}, task.denied_actions.map(a => h('span', {class: a.suspected ? 'chip suspected' : 'chip', title: a.suspected ? 'Bridge chỉ suy ra từ văn bản của một lệnh thất bại.' : null, text: `${a.suspected ? '? ' : ''}${a.display_name || a.action}`})))) : null,
       scopeBody(task),
       cleanupBody(task),
       task.error ? h('div', {class: 'callout bad', text: task.error}) : null,
@@ -586,6 +712,7 @@ function detailView() {
 
   return h('article', {class: 'card detail'}, head, progress, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
+    task.denied_actions.length && task.status !== 'running' && task.status !== 'queued' ? approvalPanel(task) : null,
     task.isolation === 'worktree' && task.status !== 'running' && task.status !== 'queued' ? reviewPanel(task) : null,
     details('steps', `Các bước ${agentName} báo cáo`, h('div', {id: 'steps-body'}, stepsBody(state.detail?.activity))),
     details('logs', `Log của tiến trình ${agentName}`, logs),
@@ -851,14 +978,15 @@ function settingsView(o) {
 
 /* ---------- Shell: built once per view change, then patched region by region ---------- */
 function mount() {
-  const nav = (view, label) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view), label);
+  const badge = h('span', {class: 'nav-badge', hidden: true, 'aria-label': 'Số task chờ duyệt'});
+  const nav = (view, label, extra) => h('button', {'aria-current': state.view === view ? 'page' : null, onclick: () => { state.view = view; render(); }}, icon(view), label, extra);
   const live = h('div', {class: 'live', role: 'status'});
   const side = h('aside', {class: 'side'}, h('div', {class: 'brand'}, h('img', {src: '/ui/favicon.svg', alt: ''}), h('span', {text: 'Antigravity Bridge'})),
-    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('missions', 'Nhiệm vụ'), nav('usage', 'Sử dụng'), nav('settings', 'Cài đặt')),
+    h('nav', {class: 'nav', 'aria-label': 'Điều hướng'}, nav('tasks', 'Task'), nav('missions', 'Nhiệm vụ'), nav('approvals', 'Duyệt', badge), nav('usage', 'Sử dụng'), nav('settings', 'Cài đặt')),
     h('div', {class: 'side-foot'}, live));
   const banner = h('div', {'aria-live': 'polite'});
   const main = h('main', {class: 'main'}, banner);
-  regions = {live, banner, main, view: state.view};
+  regions = {live, banner, main, badge, view: state.view};
   if (state.view === 'tasks') {
     regions.stats = h('section', {class: 'stats', 'aria-label': 'Tổng quan'});
     regions.list = h('div', {class: 'task-list', role: 'list'});
@@ -876,6 +1004,9 @@ function mount() {
   } else if (state.view === 'missions') {
     regions.missions = h('div', {class: 'mission-page'});
     main.append(regions.missions);
+  } else if (state.view === 'approvals') {
+    regions.approvals = h('div', {class: 'approvals-page'});
+    main.append(regions.approvals);
   } else {
     regions.settings = h('div', {});
     main.append(regions.settings);
@@ -896,6 +1027,9 @@ const stable = task => task.status === 'running' || task.status === 'queued' ? {
 function patch() {
   const o = state.overview;
   if (!regions || !o) return;
+  const waiting = o.tasks.filter(task => task.denied_actions?.length && !task.approval && task.status !== 'queued' && task.status !== 'running').length;
+  regions.badge.hidden = waiting === 0;
+  regions.badge.textContent = String(waiting);
   setRegion('live', String(state.connected), () => [h('span', {class: `dot${state.connected ? '' : ' off'}`}), h('span', {text: state.connected ? 'Đang cập nhật trực tiếp' : 'Mất kết nối tới bridge'})]);
   setRegion('banner', JSON.stringify([state.connected, o.warnings, o.update, o.permission?.level]), () => [
     !state.connected ? h('div', {class: 'banner', role: 'alert', text: 'Mất kết nối tới bridge. Dữ liệu bên dưới có thể đã cũ.'}) : null,
@@ -907,7 +1041,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.diff, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.approvals, state.approvalPick, state.diff, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
@@ -919,6 +1053,9 @@ function patch() {
   } else if (regions.view === 'missions') {
     loadMissions();
     setRegion('missions', JSON.stringify([o.missions, state.missions, state.selectedMission, state.plan]), () => missionsView(o));
+  } else if (regions.view === 'approvals') {
+    loadApprovals();
+    setRegion('approvals', JSON.stringify([state.approvals, state.approvalPick, state.connected]), () => approvalsView().filter(Boolean));
   } else {
     if (!state.models && !state.modelsLoading) loadModels();
     setRegion('settings', JSON.stringify([state.models, o.model, o.permission, o.effort, o.wait, o.budget && [o.budget.task_tokens, o.budget.day_tokens], o.soft_timeout, o.progress, o.cli, o.agents, o.default_agent, o.default_autonomy, o.concurrency, o.delegation, o.limits, o.allowed_workspaces, o.session_workspaces, o.server.mcp_endpoint]), () => settingsView(o));

@@ -1,6 +1,6 @@
 # Hàng đợi duyệt cho hành động ngoài chính sách (Phase 4) — điều tra và thiết kế
 
-**Trạng thái:** B1, chỉ tài liệu. Chưa có mã hàng đợi. Phần cài đặt (B2) chỉ bắt đầu khi chủ dự án đồng ý thiết kế ở mục 5–6 và trả lời các câu hỏi ở mục 8.
+**Trạng thái:** B2 đã cài đặt theo thiết kế "duyệt sau" sau khi chủ dự án duyệt; những chỗ khác thiết kế và bằng chứng kiểm thật nằm ở mục 9. Các mục 1–8 là điều tra và thiết kế gốc, giữ nguyên.
 
 `docs/MULTI-AGENT-PLAN.md` (Phase 4) ghi "hàng đợi duyệt cho hành động ngoài chính sách". Điều chưa ai biết là **agent có dừng lại chờ duyệt giữa chừng được không**. Tài liệu này đo điều đó trên máy thật, rồi thiết kế đúng theo những gì đo được.
 
@@ -159,3 +159,42 @@ Ngoài MVP và chưa kiểm: duyệt giữa chừng (API server của OpenCode c
 4. **Codex "nghi ngờ"** (suy ra từ văn bản): có đưa vào hàng đợi (gắn nhãn suy đoán), hay chỉ làm khi CLI báo `declined`/`denied` thật?
 5. **`agy`**: đăng nhập `agy` trên máy này để đo mục 2.1 trước khi viết mã, hay chấp nhận thiết kế dựa trên bằng chứng cũ và cờ trong `--help`?
 6. Có làm việc ngoài phạm vi ở mục 7 (đặc biệt mục 1, thiếu nhận diện hết hạn mức OpenCode) thành PR riêng không?
+
+## 9. Đã cài đặt (B2): khác với thiết kế ở trên, và kiểm thật
+
+**Chốt cho các câu hỏi ở mục 8** (chủ dự án duyệt thiết kế, các câu hỏi còn lại lấy phương án đề xuất): (1) "duyệt sau" là MVP; (2) task worktree chạy lại dùng
+**worktree mới từ HEAD** (tự nhiên có được vì lần chạy lại là một task mới), worktree cũ giữ nguyên; (3) task có `denied_actions` ở OpenCode/Codex **giữ nguyên
+trạng thái** (`completed` kèm hành động bị từ chối) để không đổi hành vi mission và failover; (4) codex "nghi ngờ" **có** vào hàng đợi, gắn `suspected: true` và chỉ
+là suy đoán; (5) `agy` chưa đo lại (vẫn chưa đăng nhập): thiết kế dựa trên bằng chứng cũ và `--help`; (6) các quan sát ở mục 7 chưa sửa trong PR này.
+
+**Khác với mục 5:**
+
+- Trạng thái "đã chạy lại / đã bỏ qua" nằm **trên bản ghi task** (`approval: {state, at, task_id}`), không suy từ `decisions.jsonl` như mục 5.5 đã viết: nhật ký bị cắt
+  khi dài, bản ghi task thì không, và hàng đợi còn nguyên sau khi khởi động lại bridge (đã thử).
+- `dismiss` là một giá trị mới của `DecisionAction` (cùng `approve` và `rerun`).
+- `codex --sandbox danger-full-access` **không** được cài đặt: chưa đo, và là mức không có sandbox. Với codex chỉ có `--add-dir <thư mục>`; hành động không phải ghi
+  ngoài workspace (lệnh, mạng) thì hàng đợi chỉ cho bỏ qua.
+- Quyền nâng không vượt qua họ agent: một `Elevation` của codex không bao giờ tới lần launch của opencode và ngược lại (kiểm lúc duyệt và lúc launch).
+- OpenCode: một quyền cho từng lần chạy là bản vá `permission` trong `OPENCODE_CONFIG_CONTENT` của đúng lần launch đó, gộp vào cấu hình profile đã có; nếu profile đặt **một chuỗi
+  cho mọi quyền** (ví dụ `"permission": "ask"`) thì từ chối thay vì làm lỏng các quyền khác.
+
+**Kiểm thật trên giao diện** (bridge cô lập: `BRIDGE_HOME` và `ANTIGRAVITY_BRIDGE_CONFIG` tạm, cổng 3999, repo scratch; `opencode` 2.2.5 thật, model free; profile `oc-ask` có
+`permission: {bash: ask, edit: ask}` trong `OPENCODE_CONFIG_CONTENT`):
+
+1. Giao một task qua MCP (`antigravity_delegate`, agent `oc-ask`): OpenCode bị từ chối lệnh shell; task có `denied_actions` =
+   `shell: cd …\ws && echo IN_OK > inside.txt` (đọc từ sự kiện `tool_use` thật). Thanh bên hiện huy hiệu **1** ở mục "Duyệt".
+2. Khởi động lại bridge trên cùng thư mục: hàng đợi **còn nguyên** (yêu cầu vẫn "chờ duyệt").
+3. Ở trang Duyệt chọn "Cho phép chạy lệnh shell" (mức hẹp nhất, được chọn sẵn; `--auto` hiện nhãn "rộng") và bấm "Cho phép và chạy lại". Hộp thoại xác nhận ghi rõ
+   quyền, phạm vi và rằng chỉ cho một lần chạy.
+4. Task mới có `retry_of` và `elevation: {kind: "opencode-allow", permission: "bash"}`; task cũ thành `approval.state = "rerun"`; nhật ký có `approve` rồi `rerun`.
+   **`inside.txt` chứa `IN_OK` được tạo trong workspace** và lần chạy lại **không bị từ chối** (`denied_actions` rỗng) dù profile vẫn đặt `bash: ask`. Trang task của lần chạy
+   lại hiện ghi chú "lần chạy lại của task …". Trang Duyệt chuyển yêu cầu sang "Đã xử lý" kèm liên kết tới task mới.
+
+Điều kiểm thật tìm ra: một `null` trong mảng trả về của trang Duyệt hiện thành chữ "null" ở cuối trang (`replaceChildren` biến `null` thành văn bản); đã sửa.
+
+**Hạn chế đã thấy khi kiểm thật (chưa xử lý):**
+
+- Một run kết thúc vì **hết giờ hoặc bị hủy** không đọc kết quả của CLI (`parseResult` bị bỏ qua), nên các lần từ chối trong run đó **không** vào hàng đợi. OpenCode, khi bị từ chối, hay
+  thử cách khác cho tới khi hết giờ (đã thấy: model tiếp tục dùng tool `execute` của MCP); chỉ dẫn "bị từ chối thì dừng và báo" trong prompt làm run kết thúc đúng lúc.
+- Hạn mức miễn phí của OpenCode làm run dừng giữa chừng (`provider.free-limit`); lần từ chối trước đó vẫn được ghi lại, nhưng task `failed` vì lý do khác.
+- Chưa đo: bản vá `permission` qua `OPENCODE_CONFIG_CONTENT` thắng cấu hình **toàn cục** của người dùng (chỉ thấy nó thắng cấu hình `ask` của chính profile); `agy` ở mọi khía cạnh; Linux, macOS.

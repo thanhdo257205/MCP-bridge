@@ -1,20 +1,21 @@
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, realpath, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
 import { inside, validateWorkspace } from '../security/workspace.js';
-import { appendDecision } from '../decisions.js';
+import { appendDecision, type DecisionAction } from '../decisions.js';
 import { applyWorktreeChanges, repositoryRoot } from '../isolation/apply.js';
 import { worktreeFileDiff, type FileDiff } from '../isolation/diff.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
 import {legacyAntigravityAgent} from '../agents/antigravity.js';
-import type {AgentRuntime, Autonomy, Isolation, PublicAgentStatus} from '../agents/types.js';
+import type {AgentFamily, AgentRuntime, Autonomy, Elevation, Isolation, PublicAgentStatus} from '../agents/types.js';
+import {describeElevation, elevationFamily, elevationOptions, elevationRefusal, isPendingApproval, parseElevation, type ElevationOption} from '../approvals.js';
 import {createWorktree, inspectScope, removeWorktree, type ScopeReport, type Worktree} from '../isolation/worktree.js';
 import {reapOwnedTree, type ProcessInfo, type TreeReport, type TreeWatch} from '../isolation/orphans.js';
 import type {PromptTransport} from '../antigravity/invocation.js';
@@ -48,7 +49,13 @@ export interface Task {
   exit_code: number | null; signal: string | null; stdout: string; stderr: string;
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
-  denied_actions: {action: string; display_name: string}[];
+  denied_actions: {action: string; display_name: string; suspected?: boolean}[];
+  /** Set on a task the owner started from the approval queue: the task whose refused actions it runs again. */
+  retry_of?: string | null;
+  /** The extra permission the owner gave this one run (never a setting; see Elevation). Absent on every other task. */
+  elevation?: Elevation | null;
+  /** What the owner did with this task's refused actions: ran it again (`task_id` is the new task) or dismissed them. Absent while it waits. */
+  approval?: {state: 'rerun' | 'dismissed'; at: string; task_id?: string} | null;
   /** Attempts a quota failover abandoned before this one, each with the reason it stopped (absent when there was no failover). */
   attempts?: TaskAttempt[];
   review_required: true; acceptance_verified: false;
@@ -66,6 +73,12 @@ export interface TaskAttempt {
 const ATTEMPT_TAIL_CHARS = 4000;
 const tail = (text: string): string => (text.length > ATTEMPT_TAIL_CHARS ? text.slice(-ATTEMPT_TAIL_CHARS) : text);
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response' | 'attempts'>;
+/** One row of the approval queue, as the web page reads it. */
+export interface ApprovalView {
+  task_id: string; agent: string; family: AgentFamily | null; status: Status; ended_at: string | null; workspace: string; isolation: Isolation;
+  title: string | null; denied: {action: string; display_name: string; suspected?: boolean}[]; options: ElevationOption[];
+  state: 'pending' | 'rerun' | 'dismissed'; rerun_task_id: string | null; retry_of: string | null;
+}
 const TASK_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 /** A finished task publishes its status as soon as this budget runs out, even if the process query is wedged. */
 const REAP_BUDGET_MS = 6000;
@@ -206,12 +219,15 @@ export class TaskManager {
 
   /** Calls are admitted strictly in the order they arrive: workspace validation is asynchronous and must not let a later call overtake an earlier one. */
   delegate(raw: DelegateRequest, meta: {client?: string | null} = {}): Promise<Task> {
-    const admitted = this.admission.then(() => this.admit(raw, meta));
+    return this.admitInOrder(raw, meta);
+  }
+  private admitInOrder(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}): Promise<Task> {
+    const admitted = this.admission.then(() => this.admit(raw, meta, rerun));
     this.admission = admitted.then(() => undefined, () => undefined);
     return admitted;
   }
 
-  private async admit(raw: DelegateRequest, meta: {client?: string | null}): Promise<Task> {
+  private async admit(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
     const delegation = delegationState(this.runtime.stateDirectory);
     if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`agy-mcp-bridge delegation on\` (\`npm run delegation -- on\` in a git checkout)`);
@@ -250,7 +266,8 @@ export class TaskManager {
       exit_code: null, signal: null,
       stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0,
       stdout_truncated: false, stderr_truncated: false,
-      final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false
+      final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false,
+      ...(rerun ? {retry_of: rerun.retryOf, elevation: rerun.elevation} : {})
     };
     const pools = this.config.agents?.pools ?? {};
     const poolId = (input.agent && pools[input.agent]) ? input.agent : (!input.agent && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
@@ -363,7 +380,10 @@ export class TaskManager {
         }
       }
       // The level in force when the task was accepted, or the current one if the owner has lowered it since: lowering applies to queued tasks too, raising never does.
-      const permission=lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
+      // A run the owner elevated from the approval queue uses the level they chose for it instead: that is the point of the grant, and it ends with this run.
+      const elevation=task.elevation??undefined;
+      if(elevation&&agent.adapter.family!==elevationFamily(elevation))throw new Error('The permission granted to this run does not belong to its agent');
+      const permission=elevation?.kind==='agy-level'?elevation.level:lowerLevel(entry.request?.permission??'default',permissionState(this.runtime.stateDirectory).level);
       if(entry.request)entry.request.permission=permission;
       // Soft deadline (owner setting, off by default): agy gets the absolute limit as its own print timeout and a log file whose growth shows it is alive.
       const soft=readSoftTimeout(this.runtime.stateDirectory);
@@ -388,7 +408,7 @@ export class TaskManager {
         autonomy, owns: task.owns, taskId: task.task_id, stateDirectory: this.runtime.stateDirectory,
         // The task's model is a per-family setting: a codex model handed to another family would override that family's own.
         model: antigravity ? entry.request?.model ?? null : agent.adapter.family === 'codex' ? this.config.agents?.codex_model : undefined,
-        extraArgs, promptTransport: transport
+        extraArgs, promptTransport: transport, elevation
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
       const compactLine = agent.adapter.compactLine?.bind(agent.adapter);
@@ -529,7 +549,8 @@ export class TaskManager {
             task.cli_status = result.cliStatus;
             task.final_response = result.response === null ? null : redact(result.response);
             task.denied_actions = result.deniedActions.slice(0, 100).map(item => ({
-              action: redact(item.action).slice(0, 200), display_name: redact(item.display_name).slice(0, 200)
+              action: redact(item.action).slice(0, 200), display_name: redact(item.display_name).slice(0, 200),
+              ...(item.suspected ? {suspected: true} : {})
             }));
             if (result.timeout) {
               finalStatus = 'timeout'; task.error = result.error ? redact(result.error) : 'CLI reported a timeout';
@@ -735,7 +756,7 @@ export class TaskManager {
     if (!root || !inside(root, canonical)) throw new Error('The task worktree is not under the bridge state directory');
     return task;
   }
-  private recordDecision(id: string, action: 'apply' | 'discard', ok: boolean, detail: string): Promise<void> {
+  private recordDecision(id: string, action: DecisionAction, ok: boolean, detail: string): Promise<void> {
     return appendDecision(this.runtime.stateDirectory, {at: new Date().toISOString(), task_id: id, action, ok, detail});
   }
   /** One file's content diff from a worktree task. Read only, so it is allowed while the task still runs. */
@@ -781,6 +802,78 @@ export class TaskManager {
       task.discarded_at = new Date().toISOString();
       await this.persist(task);
       await this.recordDecision(id, 'discard', true, task.applied_at ? 'worktree removed after its changes were applied' : 'worktree removed without applying its changes');
+      return this.summary(id);
+    });
+  }
+
+  /**
+   * The approval queue (docs/APPROVAL-QUEUE-PLAN.md). A task whose agent was refused something waits here; the owner, and only the owner, at the page,
+   * either runs it again as a NEW task with a little more permission for that one run, or sets the refusal aside. Both go through the same one-at-a-time
+   * queue as apply and discard, so a double click cannot start two reruns.
+   */
+  private familyOf(agentId: string): AgentFamily | null { return this.agents.find(item => item.adapter.id === agentId)?.adapter.family ?? null; }
+  approvals(): ApprovalView[] {
+    const views: ApprovalView[] = [];
+    for (const [id, entry] of this.entries) {
+      const task = entry.task;
+      if (!task.denied_actions.length || task.status === 'queued' || task.status === 'running') continue;
+      const family = this.familyOf(task.agent);
+      views.push({
+        task_id: id, agent: task.agent, family, status: task.status, ended_at: task.ended_at, workspace: task.workspace, isolation: task.isolation,
+        title: entry.request?.task.split('\n').find(line => line.trim())?.trim().slice(0, 140) ?? null,
+        denied: task.denied_actions.map(item => ({...item})), options: family ? elevationOptions(family, task.denied_actions) : [],
+        state: task.approval?.state ?? 'pending', rerun_task_id: task.approval?.task_id ?? null, retry_of: task.retry_of ?? null
+      });
+    }
+    return views.sort((a, b) => Date.parse(b.ended_at ?? '') - Date.parse(a.ended_at ?? '')).slice(0, 100);
+  }
+  approveTask(id: string, requested: unknown): Promise<{task: Task; rerun_of: string}> {
+    return this.enqueueDecision(async () => {
+      const entry = this.entries.get(id);
+      if (!entry) throw new Error('Unknown or expired task_id');
+      const original = entry.task;
+      if (original.approval) throw new Error(original.approval.state === 'rerun' ? 'This task was already run again' : 'This task was already dismissed');
+      if (!isPendingApproval(original)) throw new Error(original.status === 'queued' || original.status === 'running' ? 'The task is still running' : 'This task has no refused actions waiting for approval');
+      const refuse = async (reason: string): Promise<never> => { await this.recordDecision(id, 'approve', false, reason); throw new Error(reason); };
+      const request = entry.request;
+      if (!request) return refuse('The recorded request of this task is gone, so it cannot be run again');
+      const family = this.familyOf(original.agent);
+      if (!family) return refuse(`Agent "${original.agent}" is no longer configured`);
+      let elevation: Elevation;
+      try { elevation = parseElevation(requested); } catch (error) { return refuse(error instanceof Error ? error.message : 'Invalid permission'); }
+      const why = elevationRefusal(family, original.denied_actions, elevation);
+      if (why) return refuse(why);
+      if (elevation.kind === 'codex-add-dir') {
+        const info = await stat(elevation.dir).catch(() => null);
+        if (!info?.isDirectory()) return refuse('The directory does not exist');
+      }
+      // The new task is built from the request as it was recorded, never from anything the agent wrote.
+      const raw: DelegateRequest = {
+        task: request.task, workspace: original.workspace, acceptance_criteria: request.acceptance_criteria,
+        ...(request.context ? {context: request.context} : {}), timeout_seconds: request.timeout_seconds,
+        agent: request.agent ?? original.agent, isolation: request.isolation ?? original.isolation,
+        owns: request.owns ?? original.owns, autonomy: request.autonomy ?? original.autonomy
+      };
+      let created: Task;
+      try { created = await this.admitInOrder(raw, {client: request.client ?? null}, {retryOf: id, elevation}); }
+      catch (error) { return refuse(`The new run could not be started: ${error instanceof Error ? redact(error.message) : 'unknown error'}`); }
+      original.approval = {state: 'rerun', at: new Date().toISOString(), task_id: created.task_id};
+      await this.persist(original);
+      await this.recordDecision(id, 'approve', true, describeElevation(elevation));
+      await this.recordDecision(id, 'rerun', true, `task ${created.task_id}`);
+      return {task: created, rerun_of: id};
+    });
+  }
+  dismissApproval(id: string): Promise<TaskSummary> {
+    return this.enqueueDecision(async () => {
+      const entry = this.entries.get(id);
+      if (!entry) throw new Error('Unknown or expired task_id');
+      const task = entry.task;
+      if (task.approval) throw new Error(task.approval.state === 'rerun' ? 'This task was already run again' : 'This task was already dismissed');
+      if (!isPendingApproval(task)) throw new Error(task.status === 'queued' || task.status === 'running' ? 'The task is still running' : 'This task has no refused actions waiting for approval');
+      task.approval = {state: 'dismissed', at: new Date().toISOString()};
+      await this.persist(task);
+      await this.recordDecision(id, 'dismiss', true, `${task.denied_actions.length} refused action(s) set aside`);
       return this.summary(id);
     });
   }

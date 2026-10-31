@@ -252,8 +252,12 @@ ngân sách token theo mission — usage vẫn chỉ được ghi và tổng h�
 - Chỉ chủ bridge làm được việc này qua web UI (`POST /ui/api/tasks/<id>/apply|discard` với `confirm: true`). Không có tool MCP tương ứng, nên một
   agent hay client không tự áp dụng kết quả của chính nó.
 
-Chưa làm của Phase 4: trang Settings cho agent ưu tiên / số task song song / autonomy mặc định (hiện là file cấu hình), hàng đợi duyệt hành động
-ngoài chính sách và nút hợp nhất theo nhánh (commit).
+**Đã làm (lát cắt 3: hàng đợi duyệt hành động bị từ chối).** Trang "Duyệt" và panel trên trang Task (`docs/APPROVAL-QUEUE-PLAN.md`). Không CLI nào cho duyệt giữa chừng, nên đây là
+duyệt sau: task kết thúc mà agent bị từ chối hành động thì vào hàng đợi; chủ bridge chọn "Cho phép và chạy lại" (task mới có `retry_of`, kèm quyền hẹp nhất cho đúng lần đó:
+`agy --mode`, `codex --add-dir`, hoặc bản vá `permission` của `opencode`) hoặc "Bỏ qua". Quyền nâng không ghi vào cài đặt nào, không sang agent khác, và chỉ qua web UI
+(`GET /ui/api/approvals`, `POST /ui/api/tasks/<id>/approve|dismiss` với `confirm: true`); không có tool MCP nào để duyệt.
+
+Chưa làm của Phase 4: trang Settings cho agent ưu tiên / số task song song / autonomy mặc định (hiện là file cấu hình) và nút hợp nhất theo nhánh (commit).
 
 ### Phase 5 — Tích hợp và hardening
 

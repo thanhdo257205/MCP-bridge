@@ -1,12 +1,46 @@
 import type { ResolvedCommand } from '../antigravity/process.js';
 import { captureOutput } from './probe.js';
-import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, AgentTask, Invocation, RawRun } from './types.js';
+import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, AgentTask, DeniedAction, Invocation, RawRun } from './types.js';
 import { isQuotaError } from './quota.js';
 
 export const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
 // Verified against opencode v2.2.5: `opencode run` reads the message from stdin and, with `--format json`, writes one JSON event per line.
 const REQUIRED_FLAGS = ['--format', '--model', '--auto', '--standalone'];
 const MAX_RESPONSE_CHARS = 1024 * 1024;
+const MAX_DENIED = 20;
+/** The error of a tool call that OpenCode refused because it could not ask (v2.2.5: "This non-interactive run cannot ask the user for permission, ..."). */
+const PERMISSION_REJECTED = /cannot ask the user for permission/i;
+
+/** What a refused tool call was asked to do, in a few words: the command of a shell call, the path of a file call, else the names of its arguments. */
+function summarizeToolInput(tool: unknown, input: unknown): string {
+  if (typeof input === 'string') return input.slice(0, 200);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
+  const value = input as Record<string, unknown>;
+  const pick = typeof value.command === 'string' ? value.command : typeof value.path === 'string' ? value.path : typeof value.filePath === 'string' ? value.filePath : null;
+  return (pick ?? Object.keys(value).slice(0, 5).join(', ')).slice(0, 200);
+}
+
+/**
+ * The OPENCODE_CONFIG_CONTENT of one run with `permission` set to allow for a single permission, keeping whatever else the profile already set.
+ * A value that is not a JSON object is refused rather than overwritten: this is a permission being widened, so it must be exactly what was meant.
+ */
+function withAllowedPermission(env: Record<string, string> | undefined, permission: 'bash' | 'edit'): Record<string, string> {
+  let config: Record<string, unknown> = {};
+  const existing = env?.OPENCODE_CONFIG_CONTENT;
+  if (existing !== undefined) {
+    try {
+      const parsed = JSON.parse(existing) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      config = parsed as Record<string, unknown>;
+    } catch { throw new Error('Cannot widen this run: the profile\'s OPENCODE_CONFIG_CONTENT is not a JSON object'); }
+  }
+  // A plain "allow" for everything already covers it; any other value is replaced for this one permission only.
+  if (config.permission === 'allow') return {...env};
+  // A single string such as "ask" applies to every permission; turning it into a per-permission object would silently loosen the others.
+  if (typeof config.permission === 'string') throw new Error('Cannot widen this run: the profile sets one permission for everything, so a single permission cannot be opened on its own');
+  const current = config.permission && typeof config.permission === 'object' && !Array.isArray(config.permission) ? config.permission as Record<string, unknown> : {};
+  return {...env, OPENCODE_CONFIG_CONTENT: JSON.stringify({...config, permission: {...current, [permission]: 'allow'}})};
+}
 
 export interface OpenCodeOptions {
   id?: string;
@@ -40,11 +74,15 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       // Only the owner can turn it on (agents.opencode_auto_approve): the task's `autonomy` is chosen by the delegating client and is an
       // instruction to the agent, never a permission grant, so it must not reach a flag that takes approval away.
       if (options.autoApprove) args.push('--auto');
+      // Permission the owner granted this one run after a denial. It reaches OpenCode only through this run's arguments and environment.
+      let env = options.env;
+      if (task.elevation?.kind === 'opencode-auto') args.push('--auto');
+      else if (task.elevation?.kind === 'opencode-allow') env = withAllowedPermission(env, task.elevation.permission);
       return {
         executable: command.executable,
         args: [...command.prefixArgs, ...args],
         stdin: `${task.prompt}\n`,
-        customEnv: options.env
+        customEnv: env
       };
     },
     compactLine(line: string): string | null {
@@ -56,7 +94,14 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       if (type === 'text' || type === 'error' || type === 'step_finish') return line;
       if (type === 'step_start') return null;
       // A tool event carries the file or command output it produced: keep which tool ran and how it ended, not the payload.
-      if (type === 'tool_use') return JSON.stringify({type, part: {tool: part?.tool, state: {status: part?.state?.status}}});
+      // A tool that failed also keeps its error text and a short note of what it was asked to do: that is how a refused permission is recognized.
+      if (type === 'tool_use') {
+        const state = part?.state as {status?: unknown; error?: unknown; input?: unknown} | undefined;
+        const failed = state?.status === 'error';
+        return JSON.stringify({type, part: {tool: part?.tool, state: {
+          status: state?.status, ...(failed ? {error: String(state?.error ?? '').slice(0, 300), input: summarizeToolInput(part?.tool, state?.input)} : {})
+        }}});
+      }
       return line.length > 2000 ? JSON.stringify({type}) : line;
     },
     async parseResult(raw: RawRun): Promise<AgentResult> {
@@ -65,6 +110,7 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       let turns = 0;
       let finishReason: string | null = null;
       let inputTokens = 0; let outputTokens = 0; let sawTokens = false;
+      const denied: DeniedAction[] = [];
       for (const line of raw.stdout.split(/\r?\n/)) {
         if (!line.trim()) continue;
         let event: Record<string, unknown>;
@@ -75,7 +121,15 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
         } catch { continue; /* A non-JSON line stays in the raw log but cannot change the result. */ }
         const part = event.part as Record<string, unknown> | undefined;
         if (event.type === 'text' && typeof part?.text === 'string') texts.push(part.text);
-        else if (event.type === 'error') {
+        else if (event.type === 'tool_use') {
+          // `permission` set to ask makes a non-interactive run reject the request on the spot and carry on (measured on v2.2.5).
+          const state = part?.state as {status?: unknown; error?: unknown; input?: unknown} | undefined;
+          if (state?.status === 'error' && PERMISSION_REJECTED.test(String(state.error ?? '')) && denied.length < MAX_DENIED) {
+            const tool = String(part?.tool ?? 'tool').slice(0, 60);
+            const note = summarizeToolInput(part?.tool, state.input);
+            if (!denied.some(item => item.action === tool && item.display_name === (note ? `${tool}: ${note}` : tool))) denied.push({action: tool, display_name: note ? `${tool}: ${note}` : tool});
+          }
+        } else if (event.type === 'error') {
           const error = event.error as Record<string, unknown> | undefined;
           errors.push(typeof error?.message === 'string' ? error.message : typeof error?.type === 'string' ? error.type : 'OpenCode reported an error');
         } else if (event.type === 'step_finish') {
@@ -89,7 +143,7 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       // The last text event is the final answer; earlier ones are narration between tool calls.
       const response = texts.at(-1)?.slice(0, MAX_RESPONSE_CHARS).trim() || null;
       const base: AgentResult = {
-        success: false, response, error: null, cliStatus: finishReason, numTurns: turns || null, deniedActions: [],
+        success: false, response, error: null, cliStatus: finishReason, numTurns: turns || null, deniedActions: denied,
         stats: sawTokens ? {usage: {input_tokens: inputTokens, output_tokens: outputTokens}, agy_duration_seconds: null, num_turns: turns || null, steps: turns || null} : undefined
       };
       if (raw.exitCode === 0 && !errors.length && response) return {...base, success: true, numTurns: turns || 1};

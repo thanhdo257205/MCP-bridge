@@ -8,6 +8,9 @@ import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentSta
 const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
 const REQUIRED_FLAGS = ['--json', '--sandbox', '--cd', '--output-last-message', '--ephemeral', '--skip-git-repo-check'];
 const MAX_RESULT_BYTES = 1024 * 1024;
+const MAX_DENIED = 20;
+/** Output a sandboxed Windows or POSIX shell prints when it is not allowed to write: "Access ... is denied", "Permission denied", "Read-only file system". */
+const SANDBOX_REFUSAL = /access\b[^\n]{0,200}\bdenied|permission denied|read-only file system|operation not permitted/i;
 
 export interface CodexOptions {
   id?: string;
@@ -34,6 +37,8 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
       // with "unexpected argument" on codex-cli 0.163.0 and the task never starts.
       if (options.askForApproval) args.unshift('--ask-for-approval', options.askForApproval);
       if (options.model) args.push('-m', options.model);
+      // One extra writable directory for this run, granted by the owner after a denial: `--add-dir` opens exactly the directory it names (measured on 0.163.0).
+      if (task.elevation?.kind === 'codex-add-dir') args.push('--add-dir', task.elevation.dir);
       args.push('-');
       return {executable: command.executable, args, stdin: `${task.prompt}\n`, resultFile, customEnv: options.env};
     },
@@ -49,6 +54,7 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
       const errors: string[] = [];
       const messages: string[] = [];
       const deniedActions: AgentResult['deniedActions'] = [];
+      let reported = 0;
       let turns = 0;
       let cliStatus: string | null = null;
       for (const event of events) {
@@ -62,6 +68,13 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
           if (item.type === 'agent_message' && typeof item.text === 'string') messages.push(item.text);
           if (typeof item.status === 'string' && ['declined', 'denied'].includes(item.status)) {
             deniedActions.push({action: 'command', display_name: String(item.command ?? item.type ?? 'declined action').slice(0, 200)});
+            reported++;
+          }
+          // In `codex exec` a command the sandbox refuses is not "declined": it is a failed command whose output says so (measured on 0.163.0, no
+          // approval event, `on-request` and `never` alike). That is only a guess from text, so it is marked and never fails the task.
+          if (item.type === 'command_execution' && item.status === 'failed' && typeof item.aggregated_output === 'string' && SANDBOX_REFUSAL.test(item.aggregated_output) && deniedActions.length < MAX_DENIED) {
+            const shown = String(item.command ?? 'command').slice(0, 200);
+            if (!deniedActions.some(existing => existing.display_name === shown)) deniedActions.push({action: 'command', display_name: shown, suspected: true});
           }
         }
       }
@@ -75,7 +88,7 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
       const response = lastMessage.trim() ? lastMessage : messages.at(-1) ?? null;
       const result: AgentResult = {success: false, response, error: null, cliStatus, numTurns: turns || null, deniedActions};
       // A denied action is a failure even when the CLI exits 0 with a final message.
-      if (deniedActions.length) return {...result, error: 'Codex reported a denied action; review the approval policy before retrying'};
+      if (reported) return {...result, error: 'Codex reported a denied action; review the approval policy before retrying'};
       if (raw.exitCode === 0 && response?.trim()) return {...result, success: true, numTurns: turns || 1};
       if (raw.signal) return {...result, error: `Codex was terminated (${raw.signal})`};
       const stderrTail = raw.stderr.trim().split(/\r?\n/).filter(Boolean).at(-1);
