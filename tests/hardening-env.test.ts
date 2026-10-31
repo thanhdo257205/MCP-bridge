@@ -16,3 +16,6 @@ test('a mock executable receives only permitted environment values',async()=>{
     }
   }finally{if(previous===undefined)delete process.env[key];else process.env[key]=previous;}
 });
+test('PATHEXT reaches the child so an agent shell can resolve a bare program name like git',()=>{
+  assert.deepEqual(childEnvironment({Path:'bin',PATHEXT:'.COM;.EXE',PSModulePath:'x'}),{Path:'bin',PATHEXT:'.COM;.EXE'});
+});
