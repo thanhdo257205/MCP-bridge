@@ -22,6 +22,28 @@ test('session workspaces are merged into the allowlist for this run but never wr
   assert.deepEqual(sessionOnlyWorkspaces(), [extra], 'an entry already in the file is not session-only');
   assert.equal(await readFile(file, 'utf8'), original, 'the config file is untouched');
 });
+test('a pool strategy from an older config is accepted but reported as having no effect', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-strategy-'));
+  const file = path.join(dir, 'workspaces.json');
+  process.env.ANTIGRAVITY_BRIDGE_CONFIG = file;
+  const pools = (strategy?: string) => ({allowed_workspaces: [], agents: {pools: {smart: {...(strategy ? {strategy} : {}), members: ['a', 'b']}}}});
+  const warnings: string[] = [];
+  const original = console.error;
+  console.error = (...items: unknown[]) => { warnings.push(items.join(' ')); };
+  try {
+    await writeFile(file, JSON.stringify(pools()));
+    await loadConfig();
+    assert.deepEqual(warnings, [], 'a pool without the field says nothing');
+    await writeFile(file, JSON.stringify(pools('round-robin')));
+    assert.deepEqual((await loadConfig()).agents?.pools?.smart.members, ['a', 'b']);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /agents\.pools\."smart"\.strategy has no effect/);
+  } finally {
+    console.error = original;
+  }
+  const example = JSON.parse(await readFile(new URL('../../config/workspaces.example.json', import.meta.url), 'utf8')) as {agents: {pools: Record<string, Record<string, unknown>>}};
+  for (const pool of Object.values(example.agents.pools)) assert.ok(!('strategy' in pool), 'the shipped example does not teach a field that does nothing');
+});
 test('the prompt goes through argv by default (the mode verified with a real agy); stdin is opt-in', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-transport-'));
   const file = path.join(dir, 'workspaces.json');

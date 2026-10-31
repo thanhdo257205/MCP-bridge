@@ -274,7 +274,7 @@ function poolConfig(workspace: string): Config {
     allowed_workspaces: [workspace], executable: 'agy', max_timeout_seconds: 15, default_timeout_seconds: 10,
     max_output_bytes: 262144, max_retained_tasks: 10, max_queued_tasks: 0, max_parallel_worktrees: 2,
     default_autonomy: 'auto', extra_env_passthrough: [], prompt_transport: 'argv',
-    agents: {pools: {'codex-pool': {strategy: 'quota-adaptive', members: ['p1', 'p2'], quota_cooldown_seconds: 10}}}
+    agents: {pools: {'codex-pool': {members: ['p1', 'p2'], quota_cooldown_seconds: 10}}}
   } as unknown as Config;
 }
 /** The health tracker is a module singleton, so a cooldown left by an earlier test would change which profile a pool picks first. */

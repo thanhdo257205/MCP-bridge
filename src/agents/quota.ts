@@ -138,7 +138,7 @@ export class ProfileHealthTracker {
       return pool.hard_task_profile;
     }
 
-    // 'quota-adaptive', 'priority-failover', and the current round-robin stub: first healthy in pool order
+    // The one selection rule a pool has: the first healthy member, in the order of `members`.
     return healthyMembers[0];
   }
 }

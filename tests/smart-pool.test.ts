@@ -104,10 +104,20 @@ test('cooldowns survive a restart, an expired or damaged file means every profil
   }
 });
 
+test('a pool written with the old strategy field still loads and still picks its first healthy member', () => {
+  const members = ['first', 'second'];
+  for (const strategy of [undefined, 'quota-adaptive', 'priority-failover', 'round-robin']) {
+    const pool = poolSchema.parse({...(strategy ? {strategy} : {}), members});
+    const tracker = new ProfileHealthTracker();
+    assert.equal(tracker.selectProfile(pool, false, () => true), 'first', `strategy ${strategy ?? '(none)'} picks in pool order`);
+    tracker.markCooldown('first', 60);
+    assert.equal(tracker.selectProfile(pool, false, () => true), 'second');
+  }
+});
+
 test('ProfileHealthTracker manages cooldown and prefers hard_task_profile for hard tasks', () => {
   const tracker = new ProfileHealthTracker();
   const pool = poolSchema.parse({
-    strategy: 'quota-adaptive',
     members: ['backup-acc', 'vip-acc'],
     hard_task_profile: 'vip-acc',
     quota_cooldown_seconds: 60
@@ -213,7 +223,6 @@ test('TaskManager routes hard task to hard_task_profile and auto-fails over on q
       priority: ['acc-backup', 'acc-vip'],
       pools: {
         'smart-pool': {
-          strategy: 'quota-adaptive',
           members: ['acc-backup', 'acc-vip'],
           hard_task_profile: 'acc-vip',
           quota_cooldown_seconds: 60

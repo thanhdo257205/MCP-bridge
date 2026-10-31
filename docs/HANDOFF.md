@@ -610,8 +610,9 @@ Năm điểm mà tài liệu cũ nói sai hoặc chưa nói, **đã đối chi�
    nhận `DelegateInput` (`src/security/input.ts:9-19`, `.strict()`, **không** có trường `effort`) → nhánh đó không bao
    giờ bật. Effort thật của agent đến từ `readEffort(stateDirectory)` — một cài đặt **toàn bridge do chủ máy chọn**,
    ghi vào `Task.effort` (`src/tasks/manager.ts:251`), không phải thuộc tính của task được delegate.
-2. **Ba `strategy` hành vi như nhau.** `quota-adaptive`, `priority-failover`, `round-robin` đều rơi vào `healthyMembers[0]`
-   (`src/agents/quota.ts:94` vẫn là comment stub). Schema nhận đủ ba nên cấu hình "đã chọn chiến lược" chỉ là chữ.
+2. ~~**Ba `strategy` hành vi như nhau.**~~ **(Đã bỏ enum, 2026-10-31.)** `strategy` là chuỗi tùy chọn không có tác dụng; cấu
+   hình cũ vẫn nạp được và bị cảnh báo. Ghi chú gốc: `quota-adaptive`, `priority-failover`, `round-robin` đều rơi vào
+   `healthyMembers[0]`.
 3. **Cooldown chỉ sống trong RAM.** `globalHealthTracker` là singleton module: restart bridge xóa hết cooldown, dù
    `quota_cooldown_seconds` (mặc định 900) vẫn ghi trong config. Không có file trạng thái cho việc này.
 4. **Pool cạn lúc delegate báo lỗi gây hiểu nhầm.** `selectAgent` rơi khỏi nhánh pool rồi throw `Unknown agent "<pool id>"`

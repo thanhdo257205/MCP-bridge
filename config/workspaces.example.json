@@ -33,7 +33,6 @@
     },
     "pools": {
       "codex-smart-pool": {
-        "strategy": "quota-adaptive",
         "members": ["codex-work", "codex-backup"],
         "hard_task_profile": "codex-work",
         "quota_cooldown_seconds": 900
