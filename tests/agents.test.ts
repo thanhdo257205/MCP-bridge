@@ -72,6 +72,14 @@ test('Windows .cmd shims resolve to a local Node entry without a shell', {skip: 
     assert.deepEqual(resolved.prefixArgs, [await realpath(script)]);
     assert.equal(resolved.source, await realpath(shim));
 
+    const native = path.join(bin, 'native-cli.exe');
+    await writeFile(native, '');
+    const nativeShim = path.join(bin, 'native-cli.cmd');
+    await writeFile(nativeShim, '@ECHO off\r\n"%dp0%\\native-cli.exe"   %*\r\n');
+    const nativeResolved = await resolveCommand(nativeShim);
+    assert.equal(nativeResolved.executable, await realpath(native), 'a shim of a native CLI runs the .exe itself, not Node');
+    assert.deepEqual(nativeResolved.prefixArgs, []);
+
     const outside = path.join(root, 'outside.js');
     await writeFile(outside, '');
     const escaping = path.join(bin, 'escaping.cmd');

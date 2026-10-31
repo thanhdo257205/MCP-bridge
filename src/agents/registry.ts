@@ -3,6 +3,7 @@ import { resolveCommand, type ResolvedCommand } from '../antigravity/process.js'
 import type { PromptTransport } from '../antigravity/invocation.js';
 import { antigravityAdapter } from './antigravity.js';
 import { codexAgent, detectCodex } from './codex.js';
+import { opencodeAgent, opencodeAdapter, detectOpenCode, CAPABILITIES } from './opencode.js';
 import type { AgentRuntime, AgentStatus, PublicAgentStatus } from './types.js';
 
 export interface AntigravityInspection {
@@ -17,8 +18,9 @@ export interface AgentRegistry {
   warnings: string[];
 }
 
-const KNOWN = ['antigravity', 'codex'] as const;
-const DEFAULT_PRIORITY = ['antigravity', 'codex'];
+const KNOWN = ['antigravity', 'codex', 'opencode'] as const;
+const DEFAULT_PRIORITY = ['antigravity', 'codex', 'opencode'];
+// OpenCode is opt-in: list it in agents.enabled. Probing it by default would add an extra CLI to every pool for owners who never asked for it.
 const DEFAULT_ENABLED = ['antigravity', 'codex'];
 
 export async function createAgentRegistry(config: Config, antigravity: AntigravityInspection): Promise<AgentRegistry> {
@@ -67,6 +69,24 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     model: settings.codex_model,
     sandbox: settings.codex_sandbox,
     askForApproval: settings.codex_ask_for_approval
+  }));
+
+  const opencodeEnabled = enabled.includes('opencode');
+  let opencodeStatus: AgentStatus = {
+    id: 'opencode', label: 'OpenCode', available: false, version: null, executable: null,
+    capabilities: CAPABILITIES, warnings: ['Disabled in the bridge config']
+  };
+  let opencodeCommand: ResolvedCommand = {executable: 'opencode', prefixArgs: [], source: 'opencode'};
+  if (opencodeEnabled) {
+    try {
+      opencodeCommand = await resolveCommand(settings.opencode_executable ?? 'opencode');
+      opencodeStatus = await detectOpenCode(opencodeCommand, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+    } catch (error) {
+      opencodeStatus = {...opencodeStatus, warnings: [`OpenCode CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+    }
+  }
+  agents.push(opencodeAgent(opencodeCommand, opencodeStatus, {
+    model: settings.opencode_model,
   }));
 
   if (settings.profiles) {
@@ -135,6 +155,35 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
           id: profileId, label, model: profile.model ?? settings.codex_model,
           sandbox, askForApproval, env: profile.env
         }));
+      } else if (adapterType === 'opencode') {
+        let cmd = opencodeCommand.executable;
+        let prefixArgs = opencodeCommand.prefixArgs;
+        let available = opencodeStatus.available;
+        let version = opencodeStatus.version;
+        if (profile.executable) {
+          try {
+            const resolved = await resolveCommand(profile.executable);
+            cmd = resolved.executable;
+            prefixArgs = resolved.prefixArgs;
+            const detected = await detectOpenCode(resolved, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+            available = detected.available;
+            version = detected.version;
+            profileWarnings.push(...detected.warnings);
+          } catch (error) {
+            available = false;
+            profileWarnings.push(`OpenCode CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`);
+          }
+        }
+        const status: AgentStatus = {
+          id: profileId, label, available: isProfileEnabled && available,
+          version: version || null, executable: cmd || null,
+          capabilities: CAPABILITIES,
+          warnings: isProfileEnabled ? [...opencodeStatus.warnings.filter(w => !w.includes('Disabled')), ...profileWarnings] : profileWarnings
+        };
+        agents.push({
+          adapter: opencodeAdapter({executable: cmd, prefixArgs, source: 'opencode-profile'}, {id: profileId, label, model: profile.model ?? settings.opencode_model, env: profile.env}),
+          status, enabled: isProfileEnabled, prefixArgs
+        });
       }
     }
   }
