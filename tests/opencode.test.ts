@@ -24,7 +24,7 @@ const finish = (reason: string, input = 10, output = 2) => event('step_finish', 
 
 test('opencode invocation puts run flags after the subcommand and sends the prompt on stdin untouched', () => {
   const invocation = opencodeAdapter(command, {model: 'opencode/big-pickle'}).buildInvocation(task());
-  assert.deepEqual(invocation.args, ['run', '--format', 'json', '--model', 'opencode/big-pickle']);
+  assert.deepEqual(invocation.args, ['run', '--standalone', '--format', 'json', '--model', 'opencode/big-pickle']);
   assert.equal(invocation.stdin, 'fix the bug\n- keep the second line\n');
   assert.equal(invocation.transport, undefined);
 });

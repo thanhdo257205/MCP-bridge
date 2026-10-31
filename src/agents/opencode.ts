@@ -4,7 +4,7 @@ import { isQuotaError } from './quota.js';
 
 export const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
 // Verified against opencode v2.2.5: `opencode run` reads the message from stdin and, with `--format json`, writes one JSON event per line.
-const REQUIRED_FLAGS = ['--format', '--model', '--auto'];
+const REQUIRED_FLAGS = ['--format', '--model', '--auto', '--standalone'];
 const MAX_RESPONSE_CHARS = 1024 * 1024;
 
 export interface OpenCodeOptions {
@@ -27,10 +27,15 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       // `run` is the subcommand, so its flags follow it. The message goes over stdin: argv is capped (about 32 KB on Windows),
       // a prompt starting with "-" would be read as a flag, and splitting it into words would lose its line breaks.
       // The working directory is the process cwd, set by the launcher.
-      const args = ['run', '--format', 'json'];
+      // `--standalone` gives the run a private server. Without it `opencode run` hands the task to the shared OpenCode
+      // background service (the one the desktop app keeps running): measured on v2.2.5, cancelling the client then left the
+      // agent working, its shell was a child of the service and not of the run the bridge can reap, and the session showed up
+      // in the owner's OpenCode. With it, killing the run stopped the work and left no process behind.
+      const args = ['run', '--standalone', '--format', 'json'];
       const model = task.model ?? options.model;
       if (model) args.push('--model', model);
-      // Without --auto opencode still writes inside the workspace; --auto also approves what its config would otherwise ask about.
+      // Without --auto opencode still edits files and runs shell commands in the workspace without asking (measured on v2.2.5);
+      // --auto also approves what its config would otherwise ask about, such as paths outside the workspace.
       // Only the owner can turn it on (agents.opencode_auto_approve): the task's `autonomy` is chosen by the delegating client and is an
       // instruction to the agent, never a permission grant, so it must not reach a flag that takes approval away.
       if (options.autoApprove) args.push('--auto');

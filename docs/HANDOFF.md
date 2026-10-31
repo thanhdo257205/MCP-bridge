@@ -796,3 +796,26 @@ Họ model đã đổi (`agy models` trả sáu id khác các đợt trước) n
 
 **Linux:** không chạy local — thay đổi chỉ là một mảng hằng + tài liệu, không có nhánh platform nào; hai job
 `test (ubuntu-latest, …)` là verdict Linux thật. `skills/` và `config/` không đổi nên không phải đăng ký hash skill.
+
+## 7. Live-test OpenCode — 2026-10-31
+
+`opencode` v2.2.5 thật, model free `opencode/big-pickle`, workspace và `BRIDGE_HOME` scratch trong `%TEMP%`, qua `TaskManager`
+thật (không phải mock). Máy có OpenCode Desktop đang chạy, tức đã có một `opencode-cli.exe serve --service` nền.
+
+| Chế độ | Task thường | Hủy task đang chạy | Thư mục làm việc |
+|---|---|---|---|
+| mặc định (`opencode run`, không cờ) | `completed`, `hello.txt` đúng nội dung | **việc không dừng**: `count.txt` 5 → 12 dòng sau khi hủy, cuối cùng 167 dòng; vòng lặp shell là con của `opencode-cli.exe` (service), không phải của process bridge quản lý | đúng workspace |
+| `--standalone` | `completed`, `hello.txt` đúng | **việc dừng**: 5 → 5 dòng, không còn process mới | đúng workspace |
+
+Vì vậy adapter truyền `--standalone` và `detectOpenCode` đòi cờ này. Ba điều rút ra:
+
+- Ở chế độ mặc định, `opencode run` giao việc cho service dùng chung của OpenCode: hủy không dừng agent, shell của agent nằm ngoài
+  cây process mà reaper nhìn thấy, và phiên làm việc hiện trong lịch sử OpenCode của chủ máy. Biến `XDG_*` của profile cũng không
+  thể áp dụng cho một service đã chạy sẵn (chưa đo riêng, suy ra từ cấu trúc).
+- **Không có `--auto`, OpenCode vẫn chạy lệnh shell mà không hỏi** (agent đã chạy vòng lặp shell ở cả hai chế độ). Mô hình quyền của
+  nó nới hơn mặc định của `agy` và Codex `workspace-write`; `--auto` chỉ thêm phần config của OpenCode vốn sẽ hỏi.
+- Lần chạy `--standalone` đầu tiên dùng một script riêng kế thừa biến môi trường `PWD` của shell cha, và agent ghi file vào thư mục
+  cha thay vì workspace. Qua launcher của bridge (lọc môi trường) thì không xảy ra; đây là lỗi của script thử, không phải của adapter.
+
+Chưa đo: profile OpenCode với `XDG_*` riêng ở chế độ `--standalone` (cần tài khoản thứ hai), và một task dài hơn vài giây.
+Test `a finished task records the agent process trees…` có lần đỏ khi máy đang chạy song song một `node --test` khác; chạy lại riêng hai lần đều xanh.
