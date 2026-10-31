@@ -7,7 +7,7 @@ export type Autonomy = 'suggest' | 'auto' | 'full';
 export type Isolation = 'none' | 'worktree';
 export type AgentCapability = 'code' | 'review' | 'test' | 'research' | 'long-run';
 /** The CLI dialect a task is turned into. Owner settings key on this rather than on `id`, so a profile inherits them with its adapter. */
-export type AgentFamily = 'antigravity' | 'codex';
+export type AgentFamily = 'antigravity' | 'codex' | 'opencode';
 
 export interface DeniedAction { action: string; display_name: string; }
 
@@ -66,6 +66,12 @@ export interface AgentAdapter {
   capabilities: AgentCapability[];
   buildInvocation(task: AgentTask): Invocation;
   parseResult(raw: RawRun): Promise<AgentResult>;
+  /**
+   * For a CLI whose stdout is a JSON event stream: the form of one complete stdout line that is kept in the task log, or null to
+   * drop it. Tool events carry whole files and command output, which would fill the output cap long before the answer arrives
+   * and cancel a task that is working; parseResult then reads only what is kept, so it must keep every event it relies on.
+   */
+  compactLine?(line: string): string | null;
 }
 
 export interface AgentRuntime {

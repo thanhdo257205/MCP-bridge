@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { isQuotaError } from './quota.js';
+import { isQuotaError, isStrongQuotaError } from './quota.js';
 import { startProcess, terminateOwned, type ResolvedCommand } from '../antigravity/process.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
@@ -79,7 +79,7 @@ export function codexAdapter(command: ResolvedCommand, options: CodexOptions = {
       if (raw.signal) return {...result, error: `Codex was terminated (${raw.signal})`};
       const stderrTail = raw.stderr.trim().split(/\r?\n/).filter(Boolean).at(-1);
       const finalErr = errors.at(-1) ?? stderrTail?.slice(0, 500) ?? 'Codex did not provide a final message';
-      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isQuotaError(raw.stdout);
+      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isStrongQuotaError(raw.stdout);
       return {...result, error: finalErr, isQuotaExceeded: quotaHit};
     }
   };

@@ -119,14 +119,17 @@ permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệ
 7. **Worktree hoàn tất vẫn nằm lại vô hạn**: sweep chỉ xóa thư mục **rỗng**; nội dung chờ review không bao giờ bị tự
    xóa (đúng chính sách), nên worktree có file mà không ai review thì còn mãi, và branch `bridge/*` không bao giờ bị
    xóa tự động. Chưa có TTL, chưa có nút/CLI "dọn worktree đã merge".
-8. **`pruneWorktrees` có blast radius toàn repo**: `git worktree prune` không chọn từng bản ghi — nó dọn **mọi** bản
-   ghi admin trỏ tới thư mục đã biến mất của repo đó, kể cả worktree do người dùng tạo tay ngoài bridge (và ngược
-   lại, worktree bridge tạo tay ở chỗ khác sẽ bị dọn khi thư mục biến mất). Đã ghi rõ trong README kèm đường thoát
-   `git worktree repair`; chưa cân nhắc thu hẹp (chỉ prune khi đường dẫn nằm trong `.bridge-state/worktrees/`, hoặc
-   xin xác nhận lúc khởi động).
+8. ~~**`pruneWorktrees` có blast radius toàn repo**~~ **(Đã thu hẹp 2026-10-31.)** `git worktree prune` không chọn
+   được từng bản ghi nên không còn được gọi: `pruneWorktrees(repo, worktreesRoot)` xóa từng thư mục
+   `<common-dir>/worktrees/<name>` đúng cách prune làm, chỉ khi thư mục worktree **đã mất**, nằm dưới
+   `.bridge-state/worktrees/` và **không bị `git worktree lock`**. Worktree người dùng tạo tay và bản ghi bị khóa giữ
+   nguyên (`tests/isolation-worktree.test.ts`, test "pruning clears the bridge worktrees…", đã thử bỏ điều kiện phạm vi
+   thì đỏ). Còn mở: một worktree do bridge tạo mà người dùng chuyển ra ngoài `.bridge-state/worktrees/` rồi mất thì
+   bản ghi của nó ở lại; `git worktree prune` thủ công vẫn dọn được.
 9. **`removeWorktree` thực tế chỉ chạy ở một nhánh hẹp** (launch chưa kịp spawn). Worktree của task hoàn tất được
    giữ lại có chủ đích, nên đường EBUSY của nó chỉ được chứng minh bằng test mô phỏng, chưa bằng production.
-10. **Chưa commit/push/release đợt 2**; chưa xin xác nhận của người dùng cho lần thay đổi này (lần chấp nhận trước chỉ
+10. ~~**Chưa commit/push/release đợt 2**~~ **(Lỗi thời: đợt 2 đã vào `main` và phát hành từ lâu.)** Phần còn đúng là việc
+    chốt số phận `test-results/`. Ghi chú gốc: chưa xin xác nhận của người dùng cho lần thay đổi này (lần chấp nhận trước chỉ
     covering thay đổi đã merge). Scripts kiểm chứng đang ở `test-results/` và **bị gitignore**:
     `verify-reap.mjs` + `probe-cwd.ps1` là đường tái hiện lỗi (đừng xóa), `ui-cleanup-check.mjs` là đường dựng một
     bridge sống để xem dòng `cleanup` trong UI, `trial-handoff.mjs` + `trial-readback.mjs` là hai phiên trao đổi
@@ -411,15 +414,17 @@ chứng là Chrome, và người sau sửa trang này phải xem lại bằng Ch
    Đã ghi cả trong skill, README và tool description.
 2. Plan không có role/priority: role (Tech Lead, Reviewer, Tester…) chỉ là chữ trong `task`, bridge không hiểu ngữ
    nghĩa. Bảng role của kế hoạch thuộc Phase 4.
-3. `fallback: true` (chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+3. ~~`fallback: true`~~ **Quyết định không làm (2026-10-31)** — xem `docs/SMART-ROUTER-PLAN.md`: failover có tên là pool.
 4. Ngân sách theo **mission** chưa có; usage vẫn chỉ theo task và theo ngày, nên một plan 12 bước không có trần chi phí.
 5. Trang UI chỉ đọc + dừng, **không có nút dispatch** — có chủ đích: khởi động bước là quyết định của client MCP.
 6. Chưa live-test plan có bước chạy bằng `codex` vì CLI đó trên máy này hết auth (401 `token_revoked` / 402
    `deactivated_workspace`); mọi bước live đều là `agy`. Cần `codex login` rồi chạy lại `scripts/live.ts`.
    **(Đã hết hiệu lực 2026-10-28: `codex` 0.163.0 chạy lại bình thường, một task codex thật đã live-xanh — xem mục 6.3.
    Phần còn đúng: các **bước mission** vẫn chưa chạy bằng codex.)**
-7. Retention mission (20) đuổi bản ghi **kẻ trước, không hỏi**: plan cũ bị đuổi thì bước của nó thành `lost` mãi mãi.
-   Chưa có cảnh báo chủ máy, chưa có cách "ghim" một plan.
+7. Retention mission (20) đuổi bản ghi: plan bị đuổi thì bước của nó thành `lost` mãi mãi. **(Đã đổi 2026-10-31.)** Plan đã xong
+   hoặc đã hủy (không còn bước `ready`/`pending`) bị đuổi **trước**, kể cả khi nó mới hơn một plan còn việc; chỉ khi mọi plan
+   đều còn việc thì plan cũ nhất mới bị đuổi, và log ghi `WARNING: dropped mission record … with N step(s) not yet
+   dispatched`. Vẫn chưa có cách "ghim" một plan và chưa có cảnh báo trên UI.
 
 ### 5.7 Quy tắc cho người tiếp theo (mission)
 
@@ -550,20 +555,24 @@ bridge, và không làm task fail.
 
 ### 6.4 Rủi ro đã chấp nhận, ghi lại chứ không sửa code
 
-1. **Relaunch failover là fire-and-forget.** `return this.launch(entry)` nằm trong callback `child.once('close')`; nếu
-   `launch` throw thì không ai bắt promise đó và task ở trạng thái `running` mà không có process. Khá khó tới được vì
-   `shutdown()` hủy các entry trước và `entry.stop` bỏ qua nhánh quota — nhưng đó là khoảng trống thật.
-2. **Cây process của attempt bị bỏ không được reap** — chỉ cây của child cuối cùng. Hệ quả quan sát được: worktree
-   removal gặp `EBUSY` và báo về (không im lặng), và startup sweep vẫn bắt lại được các tiến trình lạc.
-3. **`QUOTA_ERROR_PATTERNS` khớp rộng.** `/\b429\b/` và `/\boverloaded\b/i` quét cả stdout lẫn stderr của agent, nên một
-   task **không** hết quota (agent chỉ kể lại chữ đó) vẫn bị đánh cooldown và failover. Chưa siết vì cần mẫu lỗi thật
-   từ phía `agy`; `markCooldown` mặc định 900 s, tức một lần khớp nhầm loại profile đó khỏi pool 15 phút.
+1. ~~**Relaunch failover là fire-and-forget.**~~ **(Đã sửa 2026-10-31.)** Lần relaunch giờ được `await` trong try/catch: nếu
+   `launch` throw, task đi qua bước kết thúc bình thường với `failed` và lỗi `Failover to "<id>" could not start: …`
+   (test `a failover whose retry cannot start ends the task and frees the lane…`, đã thử bỏ bản sửa thì đỏ).
+2. ~~**Cây process của attempt bị bỏ không được reap**~~ **(Đã sửa 2026-10-31.)** Failover giờ dừng watcher và giải phóng cây
+   của attempt bị bỏ **trước khi** launch retry (trần `REAP_BUDGET_MS`, cùng mức với lần giải phóng cuối); kết quả nằm ở
+   `attempts[].cleanup`. Ghi chú gốc: chỉ cây của child cuối cùng được reap, nên worktree removal gặp `EBUSY`.
+   Còn lại: lần chờ này cộng thêm tới vài giây vào độ trễ failover khi máy chậm; chưa đo trên `agy`/`codex` thật.
+3. **`QUOTA_ERROR_PATTERNS` khớp rộng — đã thu hẹp một phần (2026-10-31).** Stdout, nơi có lời của chính agent, giờ chỉ bị
+   quét bằng `STRONG_QUOTA_PATTERNS`; `429` phải đi kèm `http|status|code|error` hoặc `Too Many`. stderr và trường lỗi
+   của CLI vẫn dùng bộ đầy đủ (kể cả `overloaded`, `rate limit`). **Chưa đối chiếu với lỗi quota thật của `agy`/`codex`**:
+   nếu một CLI chỉ báo hết quota trên stdout bằng cụm không nằm trong danh sách mạnh thì failover sẽ không kích hoạt.
+   `markCooldown` mặc định 900 s; cooldown nay được lưu ở `.bridge-state/cooldowns.json` nên restart không xóa nó.
 4. **Env của profile đi thẳng vào child env**, không qua `childEnvironment` (bộ lọc strip secrets) — chủ đích, vì nó
    chỉ do chủ máy viết trong `workspaces.json`. Hệ quả: file đó là đường tin cậy, **đừng** nhét token vào `env`.
 
 ### 6.5 Việc còn mở của đợt này
 
-1. `tests/smart-pool.test.ts:131` gán pid **ngẫu nhiên 1000–9000** cho child giả. Đã kiểm lại đường nguy hiểm:
+1. ~~`tests/smart-pool.test.ts:131` gán pid ngẫu nhiên~~ **(Đã đổi sang `900_000 + n`, 2026-10-31.)** Ghi chú gốc: gán pid **ngẫu nhiên 1000–9000** cho child giả. Đã kiểm lại đường nguy hiểm:
    `reapOwnedTree` chỉ giết **root** là con của pid đã ghi, `alive(pid)` true thì trả về bất động, và `verify` đọc lại
    đúng các pid sắp giết — nên số ngẫu nhiên không với tới tiến trình lạ. Vẫn nên đổi sang pid cao như
    `tests/agent-profiles.test.ts` (`900_000 + n`) để không phải dựa vào lập luận đó.
@@ -572,7 +581,7 @@ bridge, và không làm task fail.
    hết quota thật. Hành vi đó hiện chỉ do hai test `fakeProfile()` chứng minh. Tương tự, chưa live-test plan mission có
    bước chạy bằng `codex`. (Trước 2026-10-27 `codex` trên máy này hết auth — 401 `token_revoked` / 402
    `deactivated_workspace` — nay đã dùng lại được, nên các mục cũ trong HANDOFF nói "codex không test được" là **hết hiệu lực**.)
-3. `fallback: true` (tự chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+3. ~~`fallback: true`~~ **Quyết định không làm (2026-10-31)** — xem `docs/SMART-ROUTER-PLAN.md`: failover có tên là pool.
 4. Ngân sách theo pool/profile chưa có; usage vẫn chỉ theo task và theo ngày.
 
 ### 6.6 Quy tắc cho người tiếp theo
@@ -605,8 +614,9 @@ Năm điểm mà tài liệu cũ nói sai hoặc chưa nói, **đã đối chi�
    nhận `DelegateInput` (`src/security/input.ts:9-19`, `.strict()`, **không** có trường `effort`) → nhánh đó không bao
    giờ bật. Effort thật của agent đến từ `readEffort(stateDirectory)` — một cài đặt **toàn bridge do chủ máy chọn**,
    ghi vào `Task.effort` (`src/tasks/manager.ts:251`), không phải thuộc tính của task được delegate.
-2. **Ba `strategy` hành vi như nhau.** `quota-adaptive`, `priority-failover`, `round-robin` đều rơi vào `healthyMembers[0]`
-   (`src/agents/quota.ts:94` vẫn là comment stub). Schema nhận đủ ba nên cấu hình "đã chọn chiến lược" chỉ là chữ.
+2. ~~**Ba `strategy` hành vi như nhau.**~~ **(Đã bỏ enum, 2026-10-31.)** `strategy` là chuỗi tùy chọn không có tác dụng; cấu
+   hình cũ vẫn nạp được và bị cảnh báo. Ghi chú gốc: `quota-adaptive`, `priority-failover`, `round-robin` đều rơi vào
+   `healthyMembers[0]`.
 3. **Cooldown chỉ sống trong RAM.** `globalHealthTracker` là singleton module: restart bridge xóa hết cooldown, dù
    `quota_cooldown_seconds` (mặc định 900) vẫn ghi trong config. Không có file trạng thái cho việc này.
 4. **Pool cạn lúc delegate báo lỗi gây hiểu nhầm.** `selectAgent` rơi khỏi nhánh pool rồi throw `Unknown agent "<pool id>"`
@@ -739,7 +749,9 @@ Vài thứ chỉ ra khi đo, không có cách nào khác để biết:
 - **`agy` trên máy này là native exe**, không phải shim npm: `%LOCALAPPDATA%\agy\bin\agy.exe` → `prefixArgs` rỗng.
   `agy models` hiện trả sáu id (`gemini-3.8-flash-{high,medium,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
   `gpt-oss-120b-medium`), tức là họ model đã đổi so với các đợt trước — `VERIFIED_AGY_VERSIONS` đã cập nhật ở mục 6.10,
-  còn họ model thì chưa có test nào khóa tên id cụ thể.
+  còn họ model thì chưa có test nào khóa tên id cụ thể. (2026-10-31: không thêm — `tests/models.test.ts` đã ghim cách parse
+  trên một mẫu `agy models`, còn việc "id này có thật" chỉ kiểm được bằng `agy models` sau khi đăng nhập, mà lần thử hôm
+  nay `agy` báo `Please sign in to view available models`. Một test đơn vị không phát hiện được CLI đổi họ model.)
 - **Test argv phải tự xóa `BRIDGE_AGY_PERMISSIONS`.** `permissionState` đọc env trước file, nên nếu shell của người chạy để
   leftover một mức nào đó thì argv trong test do env quyết định, không phải do đoạn code đang bị test.
 
@@ -784,3 +796,26 @@ Họ model đã đổi (`agy models` trả sáu id khác các đợt trước) n
 
 **Linux:** không chạy local — thay đổi chỉ là một mảng hằng + tài liệu, không có nhánh platform nào; hai job
 `test (ubuntu-latest, …)` là verdict Linux thật. `skills/` và `config/` không đổi nên không phải đăng ký hash skill.
+
+## 7. Live-test OpenCode — 2026-10-31
+
+`opencode` v2.2.5 thật, model free `opencode/big-pickle`, workspace và `BRIDGE_HOME` scratch trong `%TEMP%`, qua `TaskManager`
+thật (không phải mock). Máy có OpenCode Desktop đang chạy, tức đã có một `opencode-cli.exe serve --service` nền.
+
+| Chế độ | Task thường | Hủy task đang chạy | Thư mục làm việc |
+|---|---|---|---|
+| mặc định (`opencode run`, không cờ) | `completed`, `hello.txt` đúng nội dung | **việc không dừng**: `count.txt` 5 → 12 dòng sau khi hủy, cuối cùng 167 dòng; vòng lặp shell là con của `opencode-cli.exe` (service), không phải của process bridge quản lý | đúng workspace |
+| `--standalone` | `completed`, `hello.txt` đúng | **việc dừng**: 5 → 5 dòng, không còn process mới | đúng workspace |
+
+Vì vậy adapter truyền `--standalone` và `detectOpenCode` đòi cờ này. Ba điều rút ra:
+
+- Ở chế độ mặc định, `opencode run` giao việc cho service dùng chung của OpenCode: hủy không dừng agent, shell của agent nằm ngoài
+  cây process mà reaper nhìn thấy, và phiên làm việc hiện trong lịch sử OpenCode của chủ máy. Biến `XDG_*` của profile cũng không
+  thể áp dụng cho một service đã chạy sẵn (chưa đo riêng, suy ra từ cấu trúc).
+- **Không có `--auto`, OpenCode vẫn chạy lệnh shell mà không hỏi** (agent đã chạy vòng lặp shell ở cả hai chế độ). Mô hình quyền của
+  nó nới hơn mặc định của `agy` và Codex `workspace-write`; `--auto` chỉ thêm phần config của OpenCode vốn sẽ hỏi.
+- Lần chạy `--standalone` đầu tiên dùng một script riêng kế thừa biến môi trường `PWD` của shell cha, và agent ghi file vào thư mục
+  cha thay vì workspace. Qua launcher của bridge (lọc môi trường) thì không xảy ra; đây là lỗi của script thử, không phải của adapter.
+
+Chưa đo: profile OpenCode với `XDG_*` riêng ở chế độ `--standalone` (cần tài khoản thứ hai), và một task dài hơn vài giây.
+Test `a finished task records the agent process trees…` có lần đỏ khi máy đang chạy song song một `node --test` khác; chạy lại riêng hai lần đều xanh.

@@ -253,6 +253,31 @@ test('retention drops the oldest plan with nothing in flight and keeps one that 
   }
 });
 
+test('retention drops a finished plan before an older one whose work is not done, and says so when it cannot', async () => {
+  const {missions, manager, workspace} = await harness();
+  const unfinished = await missions.create(plan(workspace, [['a', []], ['b', ['a']]]));
+  const finished = await missions.create(plan(workspace, [['a', []]]));
+  const {task} = await missions.dispatch(finished.mission_id, 'a');
+  await manager.wait(task.task_id);
+  const warnings: string[] = [];
+  const original = console.error;
+  console.error = (...items: unknown[]) => { warnings.push(items.join(' ')); };
+  try {
+    for (let i = 0; i < MAX_RETAINED_MISSIONS - 1; i++) await missions.create(plan(workspace, [['a', []]]));
+    const ids = () => missions.list().map(m => m.mission_id);
+    assert.equal(ids().includes(finished.mission_id), false, 'the plan with nothing left to dispatch makes room first');
+    assert.equal(ids().includes(unfinished.mission_id), true, 'an older plan that still has steps to dispatch is kept');
+    assert.match(warnings.join('\n'), /Dropped the oldest finished mission record/);
+    // With only unfinished plans left, the oldest still has to go, and the log says that work was lost.
+    warnings.length = 0;
+    await missions.create(plan(workspace, [['a', []]]));
+    assert.equal(ids().includes(unfinished.mission_id), false);
+    assert.match(warnings.join('\n'), /WARNING: dropped mission record .* with 2 step\(s\) not yet dispatched/);
+  } finally {
+    console.error = original;
+  }
+});
+
 test('a restart restores plans with task-derived states and dispatches nothing by itself', async () => {
   const {workspace, config, runtime, manager, missions} = await harness();
   const {mission_id} = await missions.create(plan(workspace, [['a', []], ['b', ['a']]]));

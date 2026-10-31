@@ -8,7 +8,7 @@ export const codexSandboxSchema = z.enum(['workspace-write', 'danger-full-access
 export const codexApprovalSchema = z.enum(['on-request', 'never']);
 
 export const agentProfileSchema = z.object({
-  adapter: z.enum(['codex', 'antigravity']),
+  adapter: z.enum(['codex', 'antigravity', 'opencode']),
   label: z.string().min(1).max(100).optional(),
   env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).optional(),
   codex_sandbox: codexSandboxSchema.optional(),
@@ -19,7 +19,8 @@ export const agentProfileSchema = z.object({
 export type AgentProfile = z.infer<typeof agentProfileSchema>;
 
 export const poolSchema = z.object({
-  strategy: z.enum(['quota-adaptive', 'priority-failover', 'round-robin']).default('quota-adaptive'),
+  /** Has no effect: the three values it used to name all picked the first healthy member. Still accepted so a config written for it keeps loading. */
+  strategy: z.string().min(1).max(64).optional(),
   members: z.array(z.string().min(1).max(64)).min(1).max(50),
   hard_task_profile: z.string().min(1).max(64).optional(),
   quota_cooldown_seconds: z.number().int().min(10).max(86400).default(900)
@@ -45,7 +46,11 @@ const agentsSchema = z.object({
   priority: z.array(z.string().min(1).max(64)).max(50).optional(),
   enabled: z.array(z.string().min(1).max(64)).max(50).optional(),
   codex_executable: z.string().min(1).max(4096).optional(),
-  codex_model: z.string().min(1).max(200).optional()
+  codex_model: z.string().min(1).max(200).optional(),
+  opencode_executable: z.string().min(1).max(4096).optional(),
+  opencode_model: z.string().min(1).max(200).optional(),
+  /** Passes `--auto` (approve every permission opencode's own config does not deny). Owner-only, like the codex sandbox settings: no task can ask for it. */
+  opencode_auto_approve: z.boolean().optional()
 }).strict();
 
 const schema = z.object({
@@ -91,6 +96,12 @@ export async function loadConfig(): Promise<Config> {
   if (!explicit) await mkdir(path.dirname(filename), {recursive: true}).then(() => writeFile(filename, JSON.stringify({allowed_workspaces: [], ...DEFAULT_LIMITS, executable: 'agy'}, null, 2) + '\n', {flag: 'wx'})).catch(() => {});
   const config = schema.parse(JSON.parse(await readFile(filename, 'utf8')));
   if (config.default_timeout_seconds > config.max_timeout_seconds) throw new Error('Default timeout exceeds maximum');
+  for (const [id, pool] of Object.entries(config.agents?.pools ?? {})) {
+    if (pool.strategy !== undefined) console.error(`[bridge] WARNING: agents.pools."${id}".strategy has no effect and can be removed: a pool always picks its first healthy member, in the order of "members"`);
+  }
+  for (const [id, profile] of Object.entries(config.agents?.profiles ?? {})) {
+    if (profile.adapter === 'antigravity' && profile.model !== undefined) console.error(`[bridge] WARNING: agents.profiles."${id}".model is ignored: an antigravity profile runs with the model chosen in the web UI Settings`);
+  }
   sessionOnly = sessionWorkspaces.filter(directory => !config.allowed_workspaces.includes(directory));
   return {...config, allowed_workspaces: [...config.allowed_workspaces, ...sessionOnly]};
 }

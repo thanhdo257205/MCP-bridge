@@ -11,10 +11,12 @@
   "max_parallel_worktrees": 2,
   "default_autonomy": "auto",
   "agents": {
-    "priority": ["antigravity", "codex"],
-    "enabled": ["antigravity", "codex", "codex-work", "codex-backup"],
+    "priority": ["antigravity", "codex", "opencode"],
+    "enabled": ["antigravity", "codex", "opencode", "codex-work", "codex-backup", "opencode-work"],
     "codex_sandbox": "workspace-write",
     "codex_ask_for_approval": "on-request",
+    "opencode_executable": "opencode",
+    "opencode_model": "opencode/big-pickle",
     "profiles": {
       "codex-work": {
         "adapter": "codex",
@@ -29,11 +31,19 @@
         "env": {
           "CODEX_HOME": "C:/Users/name/.codex-backup"
         }
+      },
+      "opencode-work": {
+        "adapter": "opencode",
+        "label": "OpenCode (Work)",
+        "env": {
+          "XDG_DATA_HOME": "C:/Users/name/.opencode-work/data",
+          "XDG_CONFIG_HOME": "C:/Users/name/.opencode-work/config"
+        },
+        "model": "opencode/big-pickle"
       }
     },
     "pools": {
       "codex-smart-pool": {
-        "strategy": "quota-adaptive",
         "members": ["codex-work", "codex-backup"],
         "hard_task_profile": "codex-work",
         "quota_cooldown_seconds": 900

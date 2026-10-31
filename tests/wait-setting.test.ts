@@ -29,7 +29,7 @@ test('wait setting: round trip, validation, and anything unreadable means "not s
 });
 
 test('setup prints a Codex tool timeout that follows the wait length',()=>{
-  const base:SetupInput={clients:['codex'],mcpUrl:'http://127.0.0.1:3000/mcp',shells:['bash'],bin:'agy-mcp-bridge'};
+  const base:SetupInput={clients:['codex'],mcpUrl:'http://127.0.0.1:3000/mcp',shells:['bash'],bin:'agy-mcp-bridge',stdio:{command:'node',args:['stdio.js']}};
   assert.match(renderSetup(base),/tool_timeout_sec = 115/);
   assert.match(renderSetup({...base,waitSeconds:600}),/tool_timeout_sec = 660/);
 });

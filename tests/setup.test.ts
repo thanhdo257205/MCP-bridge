@@ -2,7 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderSetup, type SetupInput } from '../src/setup.js';
 
-const base: SetupInput = {clients: ['codex', 'claude'], mcpUrl: 'http://127.0.0.1:3000/mcp', shells: ['bash'], bin: 'agy-mcp-bridge'};
+const base: SetupInput = {
+  clients: ['codex', 'claude'], mcpUrl: 'http://127.0.0.1:3000/mcp', shells: ['bash'], bin: 'agy-mcp-bridge',
+  stdio: {command: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\bridge\\dist\\src\\stdio.js']}
+};
 
 test('setup: prints both clients, no credentials, and the skill hint', () => {
   const text = renderSetup(base);
@@ -34,4 +37,21 @@ test('setup: explains the local trust model and never contains a credential', ()
   assert.match(renderSetup(base), /any local process can use it/);
   assert.ok(!/Bearer [A-Za-z0-9_-]{20,}/.test(renderSetup(base)));
   assert.match(renderSetup({...base, mcpUrl: 'http://127.0.0.1:3555/mcp'}), /127\.0\.0\.1:3555\/mcp/);
+});
+
+test('setup: Freebuff is printed as a stdio MCP client, never as an agent the bridge can delegate to', () => {
+  const text = renderSetup({...base, clients: ['freebuff']});
+  // The file Freebuff reads, an absolute command for THIS installation, and the MCP key it expects.
+  assert.match(text, /\.agents\/mcp\.json/);
+  assert.match(text, /"mcpServers"/);
+  assert.match(text, /"antigravity"/);
+  assert.ok(text.includes('C:\\\\Program Files\\\\nodejs\\\\node.exe'), 'the interpreter that runs this installation, JSON-escaped');
+  assert.ok(text.includes('C:\\\\bridge\\\\dist\\\\src\\\\stdio.js'), 'the stdio entry, JSON-escaped');
+  // Why it cannot be a worker, and the one consequence of stdio that the owner must know.
+  assert.match(text, /no headless mode/);
+  assert.match(text, /cannot delegate a task to it/);
+  assert.match(text, /closing Freebuff ends it/);
+  assert.match(text, /setup freebuff --apply/);
+  assert.doesNotMatch(text, /codex mcp add/);
+  assert.doesNotMatch(text, /claude mcp add/);
 });

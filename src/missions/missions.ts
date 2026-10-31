@@ -382,21 +382,28 @@ export class MissionManager {
     try { return this.tasks.summary(id); } catch { return null; }
   }
 
-  /** Retention only ever releases a mission with no task in flight, so a plan cannot vanish under a running agent. */
+  /**
+   * Retention only ever releases a mission with no task in flight, so a plan cannot vanish under a running agent.
+   * Among those, a plan with nothing left to dispatch (canceled, or no step still ready or waiting) goes before one
+   * whose work is unfinished: dropping a plan turns its remaining steps into `lost`, which never unlocks them.
+   */
   private makeRoom(): string[] {
     const evicted: string[] = [];
+    const unfinishedOf = (mission: Mission, states: Map<string, StepState>): number =>
+      mission.status === 'canceled' ? 0 : [...states.values()].filter(state => state === 'ready' || state === 'pending').length;
     while (this.missions.size > MAX_RETAINED_MISSIONS) {
       const candidates = [...this.missions.values()]
-        .filter(mission => {
-          const states = this.states(mission);
-          return ![...states.values()].some(state => state === 'queued' || state === 'running');
-        })
-        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+        .map(mission => ({mission, states: this.states(mission)}))
+        .filter(({states}) => ![...states.values()].some(state => state === 'queued' || state === 'running'))
+        .map(({mission, states}) => ({mission, unfinished: unfinishedOf(mission, states)}))
+        .sort((a, b) => Number(a.unfinished > 0) - Number(b.unfinished > 0) || Date.parse(a.mission.created_at) - Date.parse(b.mission.created_at));
       if (!candidates.length) return evicted;
-      const [oldest] = candidates;
+      const [{mission: oldest, unfinished}] = candidates;
       this.missions.delete(oldest.mission_id);
       evicted.push(oldest.mission_id);
-      console.error(`[bridge] Dropped the oldest mission record ${oldest.mission_id} to keep ${MAX_RETAINED_MISSIONS} missions`);
+      console.error(unfinished > 0
+        ? `[bridge] WARNING: dropped mission record ${oldest.mission_id} with ${unfinished} step(s) not yet dispatched; every retained plan has unfinished work, so the oldest made room for a new one (limit ${MAX_RETAINED_MISSIONS})`
+        : `[bridge] Dropped the oldest finished mission record ${oldest.mission_id} to keep ${MAX_RETAINED_MISSIONS} missions`);
     }
     return evicted;
   }

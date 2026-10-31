@@ -1,6 +1,6 @@
 # Kế hoạch: MCP Bridge đa agent (Orchestrator + Agent Router)
 
-Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 hoàn tất (2026-10-27), chờ duyệt PR.
+Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 hoàn tất (2026-10-27, đã merge qua PR #31).
 Cập nhật: 2026-10-27.
 
 ## 1. Mục tiêu
@@ -98,7 +98,7 @@ Thứ tự mặc định do người dùng cấu hình, ví dụ:
 
 - Adapter không có trong `enabled` hoặc không detect được sẽ bị bỏ qua.
 - Nếu task chỉ định `agent` mà agent đó không sẵn sàng: trả lỗi rõ ràng, không
-  âm thầm đổi sang agent khác. Cờ `fallback: true` chưa triển khai; dự kiến ở Phase 2.
+  âm thầm đổi sang agent khác. Cờ `fallback: true` **sẽ không triển khai**: muốn failover thì đặt tên một pool (`docs/SMART-ROUTER-PLAN.md`).
 
 ### 2.4 Cách ly song song
 
@@ -167,7 +167,7 @@ Kết quả: `npm test` xanh (125 pass, 3 skip do thiếu môi trường); test 
 đều có test tự động; đã xác minh `resolveCommand` với Codex npm thật
 (`codex-cli 0.163.0`, shim `.cmd`). Chưa chạy lại `test:live` với Codex thật.
 
-### Phase 2 — Mission daemon + Orchestrator skill (hoàn tất 2026-10-27, chờ duyệt PR)
+### Phase 2 — Mission daemon + Orchestrator skill (hoàn tất 2026-10-27, đã merge qua PR #31)
 
 Bốn quyết định đã chốt với chủ dự án trước khi viết code:
 
