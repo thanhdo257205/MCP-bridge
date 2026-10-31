@@ -19,6 +19,7 @@ import { MAX_ABSOLUTE_LIMIT_SECONDS, MIN_ABSOLUTE_LIMIT_SECONDS, isAbsoluteLimit
 import { MAX_SETTING_WAIT_SECONDS, MIN_WAIT_SECONDS, clientToolTimeoutSeconds, isWaitSeconds, writeWait } from '../wait-setting.js';
 import { PERMISSION_LEVELS, isPermissionLevel, needsAcknowledgement, permissionState, writePermission } from '../permissions.js';
 import { inside } from '../security/workspace.js';
+import { handleReviewRoutes } from './review-routes.js';
 
 export interface UiContext {
   manager: TaskManager; missions: MissionManager; environment: Record<string, unknown>;
@@ -151,6 +152,7 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       await writeBudget(ctx.manager.stateDirectory, next as {task_tokens: number | null; day_tokens: number | null});
       json(res, 200, await budgetState(ctx.manager.stateDirectory, tzOffset)); return true;
     }
+    if (await handleReviewRoutes(req, res, ctx, pathname, method)) return true;
     const detail = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})$`));
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
     const changes = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/changes$`));

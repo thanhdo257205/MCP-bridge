@@ -9,7 +9,22 @@ export type AgentCapability = 'code' | 'review' | 'test' | 'research' | 'long-ru
 /** The CLI dialect a task is turned into. Owner settings key on this rather than on `id`, so a profile inherits them with its adapter. */
 export type AgentFamily = 'antigravity' | 'codex' | 'opencode';
 
-export interface DeniedAction { action: string; display_name: string; }
+/**
+ * `suspected` marks a denial the bridge only inferred from text (a failed command whose output says "access denied"), as opposed to one the CLI
+ * itself reported. It is shown as a guess and never changes the status of the task.
+ */
+export interface DeniedAction { action: string; display_name: string; suspected?: boolean; }
+
+/**
+ * Extra permission the owner gave ONE run, chosen in the web UI after a task was denied something. It lives on the new task's record and in that
+ * run's arguments or environment; it is never written to a setting, so the next task starts from the owner's own configuration again.
+ * Each kind is the narrowest the CLI offers for its case (docs/APPROVAL-QUEUE-PLAN.md section 5.2).
+ */
+export type Elevation =
+  | {kind: 'agy-level'; level: 'accept-edits' | 'auto' | 'full'}
+  | {kind: 'codex-add-dir'; dir: string}
+  | {kind: 'opencode-allow'; permission: 'bash' | 'edit'}
+  | {kind: 'opencode-auto'};
 
 export interface AgentStatus {
   id: string; label: string; available: boolean; version: string | null;
@@ -23,6 +38,8 @@ export interface AgentTask {
   extraArgs?: string[];
   /** Output mode for adapters that support more than one (Antigravity). */
   promptTransport?: PromptTransport;
+  /** Extra permission for this one run, granted by the owner (see Elevation). Antigravity's is applied by the manager, through its permission level. */
+  elevation?: Elevation;
 }
 
 export interface Invocation {
