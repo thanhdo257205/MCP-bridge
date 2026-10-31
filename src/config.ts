@@ -95,6 +95,9 @@ export async function loadConfig(): Promise<Config> {
   for (const [id, pool] of Object.entries(config.agents?.pools ?? {})) {
     if (pool.strategy !== undefined) console.error(`[bridge] WARNING: agents.pools."${id}".strategy has no effect and can be removed: a pool always picks its first healthy member, in the order of "members"`);
   }
+  for (const [id, profile] of Object.entries(config.agents?.profiles ?? {})) {
+    if (profile.adapter === 'antigravity' && profile.model !== undefined) console.error(`[bridge] WARNING: agents.profiles."${id}".model is ignored: an antigravity profile runs with the model chosen in the web UI Settings`);
+  }
   sessionOnly = sessionWorkspaces.filter(directory => !config.allowed_workspaces.includes(directory));
   return {...config, allowed_workspaces: [...config.allowed_workspaces, ...sessionOnly]};
 }

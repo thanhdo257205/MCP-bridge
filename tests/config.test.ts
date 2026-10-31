@@ -44,6 +44,27 @@ test('a pool strategy from an older config is accepted but reported as having no
   const example = JSON.parse(await readFile(new URL('../../config/workspaces.example.json', import.meta.url), 'utf8')) as {agents: {pools: Record<string, Record<string, unknown>>}};
   for (const pool of Object.values(example.agents.pools)) assert.ok(!('strategy' in pool), 'the shipped example does not teach a field that does nothing');
 });
+test('a model set on an antigravity profile is reported as ignored, one set on a codex profile is not', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-profile-model-'));
+  const file = path.join(dir, 'workspaces.json');
+  process.env.ANTIGRAVITY_BRIDGE_CONFIG = file;
+  const warnings: string[] = [];
+  const original = console.error;
+  console.error = (...items: unknown[]) => { warnings.push(items.join(' ')); };
+  try {
+    await writeFile(file, JSON.stringify({allowed_workspaces: [], agents: {profiles: {
+      work: {adapter: 'codex', model: 'gpt-5'}, agy2: {adapter: 'antigravity'}
+    }}}));
+    await loadConfig();
+    assert.deepEqual(warnings, [], 'a codex model and an antigravity profile without one say nothing');
+    await writeFile(file, JSON.stringify({allowed_workspaces: [], agents: {profiles: {agy2: {adapter: 'antigravity', model: 'gemini-3.8-flash-high'}}}}));
+    await loadConfig();
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /agents\.profiles\."agy2"\.model is ignored/);
+  } finally {
+    console.error = original;
+  }
+});
 test('the prompt goes through argv by default (the mode verified with a real agy); stdin is opt-in', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'bridge-config-transport-'));
   const file = path.join(dir, 'workspaces.json');
