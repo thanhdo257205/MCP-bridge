@@ -69,9 +69,17 @@ export function childEnvironment(parent:NodeJS.ProcessEnv, extra:string[]=[]):No
   return Object.fromEntries(Object.entries(parent).filter(([key,value])=>value!==undefined&&
     (explicit.has(key.toUpperCase())||(base.test(key)&&!/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))));
 }
+/**
+ * A parent that starts the bridge with a trimmed environment (an MCP client's stdio launcher keeps only a handful of variables)
+ * leaves PATHEXT unset, and then PowerShell cannot resolve `git` to git.exe. A value the parent did set wins over this default.
+ */
+export function withWindowsDefaults(env:NodeJS.ProcessEnv,platform:NodeJS.Platform=process.platform):NodeJS.ProcessEnv{
+  if(platform!=='win32'||Object.keys(env).some(key=>key.toUpperCase()==='PATHEXT'))return env;
+  return {...env,PATHEXT:'.COM;.EXE;.BAT;.CMD'};
+}
 export interface ProcessOptions {extraEnvPassthrough?:string[];stdin?:string;customEnv?:Record<string,string>;}
 export function startProcess(executable: string, args: string[], cwd: string, options:ProcessOptions={}): ChildProcess {
-  const env = {...childEnvironment(process.env,options.extraEnvPassthrough),...(options.customEnv??{})};
+  const env = withWindowsDefaults({...childEnvironment(process.env,options.extraEnvPassthrough),...(options.customEnv??{})});
   const child = spawn(executable, args, {
     cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe']

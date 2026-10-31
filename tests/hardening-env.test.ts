@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {once} from 'node:events';
-import {childEnvironment,startProcess} from '../src/antigravity/process.js';
+import {childEnvironment,startProcess,withWindowsDefaults} from '../src/antigravity/process.js';
 test('environment policy matches case-insensitively and only forwards sensitive names by explicit opt-in',()=>{
   const env={Path:'bin',home:'home',LC_ALL:'C',XDG_CONFIG_HOME:'config',HTTP_PROXY:'proxy',NODE_OPTIONS:'unsafe',LC_SECRET:'hidden',MY_API_KEY:'hidden',OTHER:'hidden'};
   assert.deepEqual(childEnvironment(env),{Path:'bin',home:'home',LC_ALL:'C',XDG_CONFIG_HOME:'config',HTTP_PROXY:'proxy'});
@@ -18,4 +18,9 @@ test('a mock executable receives only permitted environment values',async()=>{
 });
 test('PATHEXT reaches the child so an agent shell can resolve a bare program name like git',()=>{
   assert.deepEqual(childEnvironment({Path:'bin',PATHEXT:'.COM;.EXE',PSModulePath:'x'}),{Path:'bin',PATHEXT:'.COM;.EXE'});
+});
+test('a parent without PATHEXT still gives a Windows child one, and one the parent set is kept',()=>{
+  assert.deepEqual(withWindowsDefaults({Path:'bin'},'win32'),{Path:'bin',PATHEXT:'.COM;.EXE;.BAT;.CMD'});
+  assert.deepEqual(withWindowsDefaults({Path:'bin',Pathext:'.EXE'},'win32'),{Path:'bin',Pathext:'.EXE'});
+  assert.deepEqual(withWindowsDefaults({PATH:'bin'},'linux'),{PATH:'bin'});
 });
