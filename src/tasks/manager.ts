@@ -1,12 +1,14 @@
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
-import { validateWorkspace } from '../security/workspace.js';
+import { inside, validateWorkspace } from '../security/workspace.js';
+import { appendDecision } from '../decisions.js';
+import { applyWorktreeChanges, repositoryRoot } from '../isolation/apply.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
@@ -35,6 +37,11 @@ export interface Task {
   /** Repository root the worktree was added to; a startup sweep needs it to drop the git admin record too. */
   worktree_toplevel?: string | null;
   scope: ScopeReport | null;
+  /** When the owner brought this task's changes into the workspace, and which files (absent until then). */
+  applied_at?: string | null;
+  applied_files?: string[];
+  /** When the owner threw the worktree away without or after applying it. */
+  discarded_at?: string | null;
   /** Processes the agent left holding the worktree directory after it exited (null when nothing was found). */
   cleanup?: TreeReport | null;
   exit_code: number | null; signal: string | null; stdout: string; stderr: string;
@@ -700,6 +707,76 @@ export class TaskManager {
     entry.pending = undefined;
     await this.persist(entry.task);
     entry.finish?.();
+  }
+
+  /**
+   * The owner's decisions about a finished worktree task (never an MCP client's): bring its changes into the workspace, or throw the
+   * worktree away. One at a time, so two clicks cannot interleave two git operations on the same repository.
+   */
+  private decisionQueue: Promise<unknown> = Promise.resolve();
+  private enqueueDecision<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.decisionQueue.then(work);
+    this.decisionQueue = run.catch(() => undefined);
+    return run;
+  }
+  private async reviewableTask(id: string): Promise<Task> {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error('Unknown or expired task_id');
+    const task = entry.task;
+    if (task.isolation !== 'worktree' || !task.worktree) throw new Error('This task did not run in a worktree');
+    if (task.status === 'queued' || task.status === 'running') throw new Error('The task is still running');
+    if (task.discarded_at) throw new Error('This task worktree was already discarded');
+    const [root, canonical] = await Promise.all([
+      realpath(path.join(this.runtime.stateDirectory, 'worktrees')).catch(() => null),
+      realpath(task.worktree).catch(() => null)
+    ]);
+    if (!canonical) throw new Error('The task worktree no longer exists');
+    if (!root || !inside(root, canonical)) throw new Error('The task worktree is not under the bridge state directory');
+    return task;
+  }
+  private recordDecision(id: string, action: 'apply' | 'discard', ok: boolean, detail: string): Promise<void> {
+    return appendDecision(this.runtime.stateDirectory, {at: new Date().toISOString(), task_id: id, action, ok, detail});
+  }
+  applyTask(id: string): Promise<{task: TaskSummary; files: string[]}> {
+    return this.enqueueDecision(async () => {
+      const task = await this.reviewableTask(id);
+      const refuse = async (reason: string): Promise<never> => { await this.recordDecision(id, 'apply', false, reason); throw new Error(reason); };
+      if (task.status !== 'completed') return refuse(`Only a completed task can be applied (this one is ${task.status})`);
+      if (task.applied_at) throw new Error('This task was already applied');
+      if (task.scope?.out_of_scope.length) return refuse(`The task changed files outside its owned paths (${task.scope.out_of_scope.slice(0, 5).join(', ')}); review them in the worktree`);
+      let workspace: string;
+      try { workspace = await validateWorkspace(task.workspace, this.config.allowed_workspaces); }
+      catch (error) { return refuse(`The workspace is no longer allowed: ${error instanceof Error ? error.message : 'invalid'}`); }
+      let toplevel: string;
+      try { toplevel = await repositoryRoot(workspace); }
+      catch (error) { return refuse(error instanceof Error ? error.message : 'The workspace is not a git repository'); }
+      const result = await applyWorktreeChanges({worktree: task.worktree!, toplevel, workspace, owns: task.owns});
+      if (!result.applied) return refuse(result.reason);
+      task.applied_at = new Date().toISOString();
+      task.applied_files = result.files.slice(0, 100);
+      await this.persist(task);
+      await this.recordDecision(id, 'apply', true, `${result.files.length} file(s): ${result.files.slice(0, 5).join(', ')}`);
+      return {task: this.summary(id), files: result.files};
+    });
+  }
+  discardTask(id: string): Promise<TaskSummary> {
+    return this.enqueueDecision(async () => {
+      const task = await this.reviewableTask(id);
+      let toplevel: string;
+      try { toplevel = await repositoryRoot(await validateWorkspace(task.workspace, this.config.allowed_workspaces)); }
+      catch (error) { const reason = error instanceof Error ? error.message : 'The workspace is not usable'; await this.recordDecision(id, 'discard', false, reason); throw new Error(reason); }
+      const worktree: Worktree = {root: task.worktree!, workspace: task.worktree!, toplevel, branch: task.branch ?? '', prefix: '', base: ''};
+      const removal = await removeWorktree(worktree);
+      if (!removal.removed) {
+        const reason = removal.reason ?? 'The worktree could not be removed';
+        await this.recordDecision(id, 'discard', false, reason);
+        throw new Error(reason);
+      }
+      task.discarded_at = new Date().toISOString();
+      await this.persist(task);
+      await this.recordDecision(id, 'discard', true, task.applied_at ? 'worktree removed after its changes were applied' : 'worktree removed without applying its changes');
+      return this.summary(id);
+    });
   }
 
   get(id: string): Task {

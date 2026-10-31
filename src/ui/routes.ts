@@ -8,6 +8,7 @@ import type { MissionManager } from '../missions/missions.js';
 import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
+import { readDecisions } from '../decisions.js';
 import { validModelId, writeModel } from '../models.js';
 import { readProgress, writeProgress } from '../progress.js';
 import { readUsage, summarizeUsage } from '../usage.js';
@@ -153,6 +154,20 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
     if (detail && method === 'GET') { json(res, 200, ctx.manager.detail(detail[1])); return true; }
     const changes = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/changes$`));
     if (changes && method === 'GET') { json(res, 200, await changesFor(ctx, changes[1])); return true; }
+    // Applying a finished task's changes edits the owner's workspace, so like stopping a plan it is a decision for a person at the page.
+    const apply = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/apply$`));
+    if (apply && method === 'POST') {
+      const body = await readJson(req);
+      if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
+      json(res, 200, await ctx.manager.applyTask(apply[1])); return true;
+    }
+    const discard = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/discard$`));
+    if (discard && method === 'POST') {
+      const body = await readJson(req);
+      if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
+      json(res, 200, {task: await ctx.manager.discardTask(discard[1])}); return true;
+    }
+    if (pathname === '/ui/api/decisions' && method === 'GET') { json(res, 200, {decisions: await readDecisions(ctx.manager.stateDirectory)}); return true; }
     const cancel = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/cancel$`));
     if (cancel && method === 'POST') { await ctx.manager.cancel(cancel[1]); json(res, 200, ctx.manager.detail(cancel[1])); return true; }
     if (pathname === '/ui/api/missions' && method === 'GET') { json(res, 200, {missions: ctx.missions.list(), ...ctx.missions.overview()}); return true; }

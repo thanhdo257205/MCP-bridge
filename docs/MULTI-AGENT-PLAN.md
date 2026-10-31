@@ -239,6 +239,19 @@ ngân sách token theo mission — usage vẫn chỉ được ghi và tổng h�
 - Hàng đợi duyệt cho hành động ngoài chính sách.
 - Nhật ký quyết định, diff theo task, nút hợp nhất nhánh.
 
+**Đã làm (lát cắt 1: duyệt kết quả worktree).** Trang Task có panel "Duyệt kết quả worktree" cho task chạy trong worktree:
+
+- `Áp dụng vào workspace` ghi thay đổi của worktree vào workspace gốc dưới dạng **chưa commit** (`git apply`; bridge không tạo commit,
+  không đổi nhánh). Bị từ chối, kèm lý do, khi: task chưa `completed`, có file ngoài `owns`, workspace không còn trong allowlist,
+  workspace đang có sửa đổi chưa commit trên cùng file, patch không còn khớp (workspace đã đi tiếp), hoặc thay đổi có symlink/submodule.
+- `Bỏ worktree` xóa thư mục và nhánh `bridge/<id>` của task (giữ nguyên workspace).
+- Nhật ký quyết định ở `<state>/decisions.jsonl` (mỗi dòng: thời điểm, task, apply/discard, ok, chi tiết), hiện trong panel và ở `GET /ui/api/decisions`.
+- Chỉ chủ bridge làm được việc này qua web UI (`POST /ui/api/tasks/<id>/apply|discard` với `confirm: true`). Không có tool MCP tương ứng, nên một
+  agent hay client không tự áp dụng kết quả của chính nó.
+
+Chưa làm của Phase 4: trang Settings cho agent ưu tiên / số task song song / autonomy mặc định (hiện là file cấu hình), hàng đợi duyệt hành động
+ngoài chính sách, nút hợp nhất theo nhánh (commit) và diff nội dung từng file.
+
 ### Phase 5 — Tích hợp và hardening
 
 - Merge nhánh trung gian, kiểm tra xung đột, chạy test trên nhánh tích hợp.
