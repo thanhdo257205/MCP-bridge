@@ -119,14 +119,17 @@ permission, không tự merge worktree, hard-deny deploy/publish/xóa dữ liệ
 7. **Worktree hoàn tất vẫn nằm lại vô hạn**: sweep chỉ xóa thư mục **rỗng**; nội dung chờ review không bao giờ bị tự
    xóa (đúng chính sách), nên worktree có file mà không ai review thì còn mãi, và branch `bridge/*` không bao giờ bị
    xóa tự động. Chưa có TTL, chưa có nút/CLI "dọn worktree đã merge".
-8. **`pruneWorktrees` có blast radius toàn repo**: `git worktree prune` không chọn từng bản ghi — nó dọn **mọi** bản
-   ghi admin trỏ tới thư mục đã biến mất của repo đó, kể cả worktree do người dùng tạo tay ngoài bridge (và ngược
-   lại, worktree bridge tạo tay ở chỗ khác sẽ bị dọn khi thư mục biến mất). Đã ghi rõ trong README kèm đường thoát
-   `git worktree repair`; chưa cân nhắc thu hẹp (chỉ prune khi đường dẫn nằm trong `.bridge-state/worktrees/`, hoặc
-   xin xác nhận lúc khởi động).
+8. ~~**`pruneWorktrees` có blast radius toàn repo**~~ **(Đã thu hẹp 2026-10-31.)** `git worktree prune` không chọn
+   được từng bản ghi nên không còn được gọi: `pruneWorktrees(repo, worktreesRoot)` xóa từng thư mục
+   `<common-dir>/worktrees/<name>` đúng cách prune làm, chỉ khi thư mục worktree **đã mất**, nằm dưới
+   `.bridge-state/worktrees/` và **không bị `git worktree lock`**. Worktree người dùng tạo tay và bản ghi bị khóa giữ
+   nguyên (`tests/isolation-worktree.test.ts`, test "pruning clears the bridge worktrees…", đã thử bỏ điều kiện phạm vi
+   thì đỏ). Còn mở: một worktree do bridge tạo mà người dùng chuyển ra ngoài `.bridge-state/worktrees/` rồi mất thì
+   bản ghi của nó ở lại; `git worktree prune` thủ công vẫn dọn được.
 9. **`removeWorktree` thực tế chỉ chạy ở một nhánh hẹp** (launch chưa kịp spawn). Worktree của task hoàn tất được
    giữ lại có chủ đích, nên đường EBUSY của nó chỉ được chứng minh bằng test mô phỏng, chưa bằng production.
-10. **Chưa commit/push/release đợt 2**; chưa xin xác nhận của người dùng cho lần thay đổi này (lần chấp nhận trước chỉ
+10. ~~**Chưa commit/push/release đợt 2**~~ **(Lỗi thời: đợt 2 đã vào `main` và phát hành từ lâu.)** Phần còn đúng là việc
+    chốt số phận `test-results/`. Ghi chú gốc: chưa xin xác nhận của người dùng cho lần thay đổi này (lần chấp nhận trước chỉ
     covering thay đổi đã merge). Scripts kiểm chứng đang ở `test-results/` và **bị gitignore**:
     `verify-reap.mjs` + `probe-cwd.ps1` là đường tái hiện lỗi (đừng xóa), `ui-cleanup-check.mjs` là đường dựng một
     bridge sống để xem dòng `cleanup` trong UI, `trial-handoff.mjs` + `trial-readback.mjs` là hai phiên trao đổi
@@ -550,20 +553,22 @@ bridge, và không làm task fail.
 
 ### 6.4 Rủi ro đã chấp nhận, ghi lại chứ không sửa code
 
-1. **Relaunch failover là fire-and-forget.** `return this.launch(entry)` nằm trong callback `child.once('close')`; nếu
-   `launch` throw thì không ai bắt promise đó và task ở trạng thái `running` mà không có process. Khá khó tới được vì
-   `shutdown()` hủy các entry trước và `entry.stop` bỏ qua nhánh quota — nhưng đó là khoảng trống thật.
+1. ~~**Relaunch failover là fire-and-forget.**~~ **(Đã sửa 2026-10-31.)** Lần relaunch giờ được `await` trong try/catch: nếu
+   `launch` throw, task đi qua bước kết thúc bình thường với `failed` và lỗi `Failover to "<id>" could not start: …`
+   (test `a failover whose retry cannot start ends the task and frees the lane…`, đã thử bỏ bản sửa thì đỏ).
 2. **Cây process của attempt bị bỏ không được reap** — chỉ cây của child cuối cùng. Hệ quả quan sát được: worktree
    removal gặp `EBUSY` và báo về (không im lặng), và startup sweep vẫn bắt lại được các tiến trình lạc.
-3. **`QUOTA_ERROR_PATTERNS` khớp rộng.** `/\b429\b/` và `/\boverloaded\b/i` quét cả stdout lẫn stderr của agent, nên một
-   task **không** hết quota (agent chỉ kể lại chữ đó) vẫn bị đánh cooldown và failover. Chưa siết vì cần mẫu lỗi thật
-   từ phía `agy`; `markCooldown` mặc định 900 s, tức một lần khớp nhầm loại profile đó khỏi pool 15 phút.
+3. **`QUOTA_ERROR_PATTERNS` khớp rộng — đã thu hẹp một phần (2026-10-31).** Stdout, nơi có lời của chính agent, giờ chỉ bị
+   quét bằng `STRONG_QUOTA_PATTERNS`; `429` phải đi kèm `http|status|code|error` hoặc `Too Many`. stderr và trường lỗi
+   của CLI vẫn dùng bộ đầy đủ (kể cả `overloaded`, `rate limit`). **Chưa đối chiếu với lỗi quota thật của `agy`/`codex`**:
+   nếu một CLI chỉ báo hết quota trên stdout bằng cụm không nằm trong danh sách mạnh thì failover sẽ không kích hoạt.
+   `markCooldown` mặc định 900 s; cooldown nay được lưu ở `.bridge-state/cooldowns.json` nên restart không xóa nó.
 4. **Env của profile đi thẳng vào child env**, không qua `childEnvironment` (bộ lọc strip secrets) — chủ đích, vì nó
    chỉ do chủ máy viết trong `workspaces.json`. Hệ quả: file đó là đường tin cậy, **đừng** nhét token vào `env`.
 
 ### 6.5 Việc còn mở của đợt này
 
-1. `tests/smart-pool.test.ts:131` gán pid **ngẫu nhiên 1000–9000** cho child giả. Đã kiểm lại đường nguy hiểm:
+1. ~~`tests/smart-pool.test.ts:131` gán pid ngẫu nhiên~~ **(Đã đổi sang `900_000 + n`, 2026-10-31.)** Ghi chú gốc: gán pid **ngẫu nhiên 1000–9000** cho child giả. Đã kiểm lại đường nguy hiểm:
    `reapOwnedTree` chỉ giết **root** là con của pid đã ghi, `alive(pid)` true thì trả về bất động, và `verify` đọc lại
    đúng các pid sắp giết — nên số ngẫu nhiên không với tới tiến trình lạ. Vẫn nên đổi sang pid cao như
    `tests/agent-profiles.test.ts` (`900_000 + n`) để không phải dựa vào lập luận đó.

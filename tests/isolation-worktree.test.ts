@@ -116,10 +116,39 @@ test('the sweep drops the git admin record with the directory it removes', async
   assert.deepEqual(report.retained, [], 'a missing directory is not a leftover held for review');
   assert.deepEqual(report.prunable, [worktree.toplevel], 'the record left inside the repository is named so it can be cleared');
 
-  const pruned = await pruneWorktrees(worktree.toplevel);
+  const pruned = await pruneWorktrees(worktree.toplevel, worktrees);
   assert.equal(pruned.pruned, 1, `git still lists the deleted worktree until it is pruned (${JSON.stringify(pruned)})`);
   assert.equal(pruned.reason, '');
-  assert.deepEqual((await pruneWorktrees(worktree.toplevel)).pruned, 0, 'a second prune finds nothing left to clear');
+  assert.deepEqual((await pruneWorktrees(worktree.toplevel, worktrees)).pruned, 0, 'a second prune finds nothing left to clear');
+});
+
+test('pruning clears the bridge worktrees whose directory is gone and leaves every other record alone', async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), 'agy-prune-scope-'));
+  const state = path.join(repo, 'state');
+  const worktrees = path.join(state, 'worktrees');
+  await mkdir(worktrees, {recursive: true});
+  await git(repo, ['init', '-b', 'main']);
+  await writeFile(path.join(repo, 'tracked.txt'), 'base\n');
+  await git(repo, ['add', 'tracked.txt']);
+  await git(repo, ['-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', '-m', 'base']);
+
+  const bridge = await createWorktree({workspace: repo, stateDirectory: state, taskId: randomUUID()});
+  // A worktree the user made by hand, on a drive that is unmounted right now.
+  const byHand = path.join(await mkdtemp(path.join(tmpdir(), 'agy-prune-hand-')), 'checkout');
+  await git(repo, ['worktree', 'add', '-b', 'by-hand', byHand]);
+  // A bridge-side worktree someone locked on purpose.
+  const lockedPath = path.join(worktrees, randomUUID());
+  await git(repo, ['worktree', 'add', '-b', 'locked-one', lockedPath]);
+  await git(repo, ['worktree', 'lock', lockedPath]);
+  for (const gone of [bridge.root, byHand, lockedPath]) await rm(gone, {recursive: true, force: true});
+
+  const result = await pruneWorktrees(repo, worktrees);
+  assert.equal(result.reason, '');
+  assert.equal(result.pruned, 1, 'only the unlocked bridge worktree is cleared');
+  const listed = (await git(repo, ['worktree', 'list', '--porcelain'])).replace(/\\/g, '/');
+  assert.ok(!listed.includes(bridge.root.replace(/\\/g, '/')), 'the bridge worktree record is gone');
+  assert.ok(listed.includes(byHand.replace(/\\/g, '/')), 'a worktree made by hand keeps its record');
+  assert.ok(listed.includes(lockedPath.replace(/\\/g, '/')), 'a locked record is never touched');
 });
 
 test('a repository whose directory went without git is queued for pruning', async () => {

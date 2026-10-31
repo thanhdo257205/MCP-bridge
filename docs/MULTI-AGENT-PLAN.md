@@ -1,6 +1,6 @@
 # Kế hoạch: MCP Bridge đa agent (Orchestrator + Agent Router)
 
-Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 hoàn tất (2026-10-27), chờ duyệt PR.
+Trạng thái: Phase 1 hoàn tất (2026-10-26); Phase 2 hoàn tất (2026-10-27, đã merge qua PR #31).
 Cập nhật: 2026-10-27.
 
 ## 1. Mục tiêu
@@ -167,7 +167,7 @@ Kết quả: `npm test` xanh (125 pass, 3 skip do thiếu môi trường); test 
 đều có test tự động; đã xác minh `resolveCommand` với Codex npm thật
 (`codex-cli 0.163.0`, shim `.cmd`). Chưa chạy lại `test:live` với Codex thật.
 
-### Phase 2 — Mission daemon + Orchestrator skill (hoàn tất 2026-10-27, chờ duyệt PR)
+### Phase 2 — Mission daemon + Orchestrator skill (hoàn tất 2026-10-27, đã merge qua PR #31)
 
 Bốn quyết định đã chốt với chủ dự án trước khi viết code:
 

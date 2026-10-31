@@ -49,7 +49,7 @@ export async function createRuntime() {
   for (const removed of sweep.removed) console.error(`[bridge] Removed a stale empty worktree directory: ${removed}`);
   for (const kept of sweep.retained) console.error(`[bridge] Kept worktree directory ${kept.path}: ${kept.reason}`);
   for (const repo of sweep.prunable) {
-    const prune = await pruneWorktrees(repo);
+    const prune = await pruneWorktrees(repo, path.join(paths.stateDirectory, 'worktrees'));
     if (prune.pruned) console.error(`[bridge] Pruned ${prune.pruned} stale worktree record(s) in ${repo}`);
     else if (prune.reason) console.error(`[bridge] WARNING: stale worktree records in ${repo} could not be pruned: ${prune.reason}`);
   }

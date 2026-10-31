@@ -106,7 +106,13 @@ Bảng dưới ghi lại **chỗ tài liệu này nói một đường, code là
 | (chưa bàn) | Task chạy bằng pool vẫn báo `task.agent` là **profile thật** chứ không phải id pool, và khi pool **hết sạch thành viên lành ngay lúc delegate** thì `selectAgent` rơi xuống nhánh "agent lạ" và báo `Unknown agent "<id-pool>"` — message gây hiểu nhầm, vì pool có tồn tại, chỉ hết tài khoản lành |
 | (chưa bàn) | Với task `isolation: worktree`, retry **dùng lại đúng worktree đó** (`entry.worktreeInfo` đã cache): sửa dở của attempt bị bỏ vẫn còn trong diff, và `scope` cuối cùng là của **tổng** hai attempt cộng lại |
 
+Đã xử lý sau bảng này (2026-10-31): hàng §1.2 "cooldown" — tracker giờ lưu `.bridge-state/cooldowns.json` và nạp lại lúc
+khởi động (file thiếu/hỏng/hết hạn = mọi profile khỏe); hàng §1.2 "bắt lỗi" — stdout chỉ còn bị quét bằng
+`STRONG_QUOTA_PATTERNS` (`insufficient_quota`, `quota exceeded`, `credits exhausted`, `check your plan and billing`,
+`exceeded your current quota`, `resource_exhausted`), còn `429` phải đi kèm `http|status|code|error` hoặc `Too Many`;
+hàng "chưa bàn" thứ nhất — pool hết thành viên lành báo `Pool "<id>" has no healthy member right now (members: …)`.
+
 Còn mở, xếp theo thứ tự đáng làm: (1) một chiến lược pool thật thay vì stub, hoặc bỏ hẳn enum khỏi schema;
-(2) nói cho client biết "pool hết thành viên lành" thay vì `Unknown agent`; (3) nối `effort` (hoặc bỏ điều kiện chết);
-(4) persistence cooldown qua restart; (5) live-test đốt quota thật bằng hai profile đăng nhập thật — hiện hai test
+(2) ~~nói cho client biết "pool hết thành viên lành"~~ xong; (3) nối `effort` (hoặc bỏ điều kiện chết);
+(4) ~~persistence cooldown qua restart~~ xong; (5) live-test đốt quota thật bằng hai profile đăng nhập thật — hiện hai test
 `fakeProfile()` là bằng chứng duy nhất; (6) `fallback: true` khi agent được chỉ định không sẵn sàng (mòn từ Phase 1).
