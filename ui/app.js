@@ -397,6 +397,58 @@ function changesBody(task) {
     d.truncated ? h('div', {class: 'callout warn', text: 'Chỉ hiện 500 mục đầu tiên của mỗi nhóm.'}) : null
   ];
 }
+/* ---------- Review a finished worktree task: apply its changes, or throw the worktree away. Both are the owner's decision, never an agent's. ---------- */
+async function loadDecisions() {
+  try { state.decisions = (await api('decisions')).decisions; } catch { /* keep the list already on screen */ }
+  patch();
+}
+async function applyTask(task) {
+  if (!confirm(`Áp dụng thay đổi của task này vào workspace?\n\n${task.workspace}\n\nCác file được ghi thẳng vào thư mục làm việc ở dạng CHƯA COMMIT; bridge không tạo commit nào. Muốn bỏ thì dùng git restore.\nBị từ chối nếu workspace đang có sửa đổi chưa commit trên cùng file, hoặc thay đổi không còn khớp.`)) return;
+  try {
+    const result = await api(`tasks/${task.task_id}/apply`, {method: 'POST', body: {confirm: true}});
+    notify(`Đã áp dụng ${result.files.length} file vào workspace (chưa commit)`);
+    await refresh(true);
+  } catch (error) { notify(error.message); }
+  await loadDecisions();
+}
+async function discardTask(task) {
+  const note = task.applied_at ? 'Thay đổi đã được áp dụng vào workspace trước đó, nên không mất gì.' : 'Thay đổi của task CHƯA được áp dụng và sẽ mất cùng worktree.';
+  if (!confirm(`Bỏ worktree và nhánh ${task.branch || ''} của task này?\n\n${note}`)) return;
+  try { await api(`tasks/${task.task_id}/discard`, {method: 'POST', body: {confirm: true}}); notify('Đã bỏ worktree'); await refresh(true); }
+  catch (error) { notify(error.message); }
+  await loadDecisions();
+}
+/** Why the apply button is off, or null when it is available. Mirrors the checks the bridge repeats on the server. */
+function applyBlock(task) {
+  if (task.discarded_at) return 'Worktree đã bị bỏ.';
+  if (task.applied_at) return 'Đã áp dụng.';
+  if (task.status !== 'completed') return `Chỉ áp dụng được task đã hoàn tất (task này: ${task.status}).`;
+  if (task.scope && task.scope.out_of_scope.length) return `Task sửa file ngoài phạm vi được giao (${task.scope.out_of_scope.slice(0, 3).join(', ')}); xem trong worktree.`;
+  return null;
+}
+function reviewBody(task) {
+  const block = applyBlock(task);
+  const mine = (state.decisions || []).filter(item => item.task_id === task.task_id);
+  return [
+    h('p', {class: 'muted', text: 'Kết quả nằm trong worktree riêng, chưa đụng tới workspace của bạn. Áp dụng ghi thay đổi vào workspace dạng chưa commit; bỏ worktree xóa thư mục và nhánh của task.'}),
+    task.applied_at ? h('div', {class: 'callout good', text: `Đã áp dụng lúc ${clock(task.applied_at)}: ${(task.applied_files || []).join(', ') || '(không rõ file)'}. Xem git status trong workspace rồi commit hoặc git restore.`}) : null,
+    task.discarded_at ? h('div', {class: 'callout', text: `Đã bỏ worktree lúc ${clock(task.discarded_at)}.`}) : null,
+    h('div', {class: 'chips'},
+      h('button', {class: 'btn primary small', disabled: Boolean(block), title: block || 'Ghi thay đổi vào workspace', onclick: () => applyTask(task), text: 'Áp dụng vào workspace'}),
+      h('button', {class: 'btn danger small', disabled: Boolean(task.discarded_at), onclick: () => discardTask(task), text: 'Bỏ worktree'})),
+    block && !task.applied_at && !task.discarded_at ? h('p', {class: 'muted', text: block}) : null,
+    mine.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Nhật ký quyết định'}),
+      h('ul', {class: 'change-list'}, mine.map(item => h('li', {class: 'change-row'},
+        h('span', {class: `change-kind ${item.ok ? 'added' : 'deleted'}`, text: item.action === 'apply' ? 'Áp dụng' : 'Bỏ'}),
+        h('span', {class: 'change-path', text: `${item.ok ? '' : 'Bị từ chối: '}${item.detail}`}),
+        h('span', {class: 'change-count mono', text: clock(item.at)}))))) : null
+  ];
+}
+function reviewPanel(task) {
+  const el = details('review', 'Duyệt kết quả worktree', ...reviewBody(task));
+  el.addEventListener('toggle', () => { if (el.open && !state.decisions) void loadDecisions(); });
+  return el;
+}
 function changesPanel(task) {
   const el = details('changes', 'Thay đổi trong workspace', ...changesBody(task));
   el.addEventListener('toggle', () => { if (el.open && (!state.changes || state.changes.task_id !== task.task_id)) loadChanges(task.task_id); });
@@ -501,6 +553,7 @@ function detailView() {
 
   return h('article', {class: 'card detail'}, head, progress, h('div', {class: 'convo'}, asked, replied),
     changesPanel(task),
+    task.isolation === 'worktree' && task.status !== 'running' && task.status !== 'queued' ? reviewPanel(task) : null,
     details('steps', `Các bước ${agentName} báo cáo`, h('div', {id: 'steps-body'}, stepsBody(state.detail?.activity))),
     details('logs', `Log của tiến trình ${agentName}`, logs),
     collapsible('more:fact', 'Xem thêm thông số task', facts),
@@ -821,7 +874,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();

@@ -236,10 +236,10 @@ export async function pruneWorktrees(repo: string): Promise<{pruned: number; rea
   }
 }
 
-function normalizeOwn(own: string): string {
+export function normalizeOwn(own: string): string {
   return path.posix.normalize(own.replace(/\\/g, '/')).replace(/^\.\//, '').replace(/\/+$/, '');
 }
-function isOwned(relative: string, owns: string[]): boolean {
+export function isOwned(relative: string, owns: string[]): boolean {
   return owns.some(own => relative === own || relative.startsWith(`${own}/`));
 }
 

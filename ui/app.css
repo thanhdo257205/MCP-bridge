@@ -126,6 +126,7 @@ button { cursor: pointer; }
 .callout { padding: 10px 12px; border-radius: 10px; font-weight: 550; overflow-wrap: anywhere; }
 .callout.bad { background: var(--bad-soft); color: var(--bad); }
 .callout.warn { background: var(--warn-soft); color: var(--warn); }
+.callout.good { background: var(--ok-soft); color: var(--ok); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { padding: 2px 9px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); font-size: 12.5px; font-family: var(--mono); }
 .typing { display: flex; align-items: center; gap: 10px; color: var(--muted); }
