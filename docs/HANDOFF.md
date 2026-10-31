@@ -556,8 +556,10 @@ bridge, và không làm task fail.
 1. ~~**Relaunch failover là fire-and-forget.**~~ **(Đã sửa 2026-10-31.)** Lần relaunch giờ được `await` trong try/catch: nếu
    `launch` throw, task đi qua bước kết thúc bình thường với `failed` và lỗi `Failover to "<id>" could not start: …`
    (test `a failover whose retry cannot start ends the task and frees the lane…`, đã thử bỏ bản sửa thì đỏ).
-2. **Cây process của attempt bị bỏ không được reap** — chỉ cây của child cuối cùng. Hệ quả quan sát được: worktree
-   removal gặp `EBUSY` và báo về (không im lặng), và startup sweep vẫn bắt lại được các tiến trình lạc.
+2. ~~**Cây process của attempt bị bỏ không được reap**~~ **(Đã sửa 2026-10-31.)** Failover giờ dừng watcher và giải phóng cây
+   của attempt bị bỏ **trước khi** launch retry (trần `REAP_BUDGET_MS`, cùng mức với lần giải phóng cuối); kết quả nằm ở
+   `attempts[].cleanup`. Ghi chú gốc: chỉ cây của child cuối cùng được reap, nên worktree removal gặp `EBUSY`.
+   Còn lại: lần chờ này cộng thêm tới vài giây vào độ trễ failover khi máy chậm; chưa đo trên `agy`/`codex` thật.
 3. **`QUOTA_ERROR_PATTERNS` khớp rộng — đã thu hẹp một phần (2026-10-31).** Stdout, nơi có lời của chính agent, giờ chỉ bị
    quét bằng `STRONG_QUOTA_PATTERNS`; `429` phải đi kèm `http|status|code|error` hoặc `Too Many`. stderr và trường lỗi
    của CLI vẫn dùng bộ đầy đủ (kể cả `overloaded`, `rate limit`). **Chưa đối chiếu với lỗi quota thật của `agy`/`codex`**:

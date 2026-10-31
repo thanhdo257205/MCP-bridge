@@ -409,6 +409,33 @@ test('a failover whose retry cannot start ends the task and frees the lane inste
   }
 });
 
+test('a failover releases the process tree the abandoned attempt left before the retry starts', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-reap-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const events: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}));
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), () => { events.push('launch p2'); });
+  const reapTree = async (pid: number) => {
+    events.push(`reap ${pid}`);
+    return {checked: true, reaped: pid === 900_001 ? [4242] : [], skipped: []};
+  };
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1', reapTree});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const done = await manager.wait(started.task_id);
+    assert.equal(done.status, 'completed');
+    assert.equal(events[0], 'reap 900001', 'the first attempt is released before anything else happens');
+    assert.ok(events.indexOf('reap 900001') < events.indexOf('launch p2'), 'and before the retry is launched');
+    assert.deepEqual(done.attempts?.[0].cleanup?.reaped, [4242], 'what was released is kept on the abandoned attempt');
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a pool with no healthy member says so instead of calling the pool an unknown agent', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'agy-pool-empty-'));
   const workspace = path.join(root, 'workspace'); await mkdir(workspace);
