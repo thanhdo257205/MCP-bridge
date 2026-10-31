@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cpSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freebuffConfigPath, planFreebuffConfig, readFreebuffConfig, writeFreebuffConfig, type FreebuffPlan } from '../src/freebuff-config.js';
+import { freebuffConfigPath, isTransientInstall, planFreebuffConfig, readFreebuffConfig, writeFreebuffConfig, type FreebuffPlan } from '../src/freebuff-config.js';
 
 const command = {command: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\bridge\\dist\\src\\stdio.js']};
 const wanted = {command: command.command, args: command.args};
@@ -124,4 +124,40 @@ test('cli: setup freebuff prints without writing, and --apply writes only after 
 
   assert.match(run(['setup', 'freebuff', '--apply', '--project', project, '--yes'], env).stdout, /Nothing to do/);
   assert.equal(run(['setup', 'codex', '--apply', '--project', project, '--yes'], env).status, 1, '--project is Freebuff-only');
+});
+
+test('freebuff config: only a path inside the npx cache counts as a transient install', () => {
+  const windows = (...parts: string[]) => parts.join(String.fromCharCode(92));
+  for (const transient of [windows('C:', 'Users', 'u', 'AppData', 'Local', 'npm-cache', '_npx', '1a2b3c', 'node_modules', 'agy-mcp-bridge', ''), '/home/u/.npm/_npx/1a2b3c/node_modules/agy-mcp-bridge/']) {
+    assert.equal(isTransientInstall(transient), true, transient);
+  }
+  for (const stable of [windows('C:', 'Users', 'u', 'AppData', 'Roaming', 'npm', 'node_modules', 'agy-mcp-bridge', ''), '/usr/local/lib/node_modules/agy-mcp-bridge/', windows('C:', 'work', 'MCP-bridge', ''), '/home/u/my_npx_tools/agy-mcp-bridge/']) {
+    assert.equal(isTransientInstall(stable), false, stable);
+  }
+});
+
+test('cli: setup freebuff --apply refuses to write a path into a temporary npx copy, and printing warns about it', async () => {
+  // A copy of the packaged CLI under .../_npx/<hash>/node_modules/<name>/, the way npx lays a package out.
+  const base = await mkdtemp(path.join(tmpdir(), 'agy-npx-copy-'));
+  const copy = path.join(base, '_npx', 'abc123', 'node_modules', 'agy-mcp-bridge');
+  await mkdir(path.join(copy, 'dist'), {recursive: true});
+  for (const part of ['src', 'scripts']) cpSync(path.join(root, 'dist', part), path.join(copy, 'dist', part), {recursive: true});
+  cpSync(path.join(root, 'package.json'), path.join(copy, 'package.json'));
+  symlinkSync(path.join(root, 'node_modules'), path.join(copy, 'node_modules'), 'junction');
+  const copiedCli = path.join(copy, 'dist', 'src', 'cli.js');
+  const home = await mkdtemp(path.join(tmpdir(), 'agy-cli-home-'));
+  const project = await mkdtemp(path.join(tmpdir(), 'agy-cli-project-'));
+  const env = {...process.env, BRIDGE_NO_UPDATE_CHECK: '1', BRIDGE_HOME: home};
+  const exec = (args: string[]) => spawnSync(process.execPath, [copiedCli, ...args], {encoding: 'utf8', input: '', env});
+
+  const applied = exec(['setup', 'freebuff', '--apply', '--project', project, '--yes']);
+  assert.equal(applied.status, 1);
+  assert.match(applied.stderr, /temporary npx cache/);
+  assert.match(applied.stderr, /npm install -g/);
+  assert.equal(existsSync(path.join(project, '.agents', 'mcp.json')), false, 'nothing was written');
+
+  const printed = exec(['setup', 'freebuff']);
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.match(printed.stderr, /temporary npx cache/);
+  assert.match(printed.stdout, /stdio\.js/, 'the command is still printed so the owner can see it');
 });
