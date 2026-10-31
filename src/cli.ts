@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +10,7 @@ import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
 import { DEFAULT_TOOL_TIMEOUT_SECONDS, codexConfigPath, planCodexConfig, readCodexConfig, writeCodexConfig } from './codex-config.js';
+import { freebuffConfigPath, planFreebuffConfig, readFreebuffConfig, writeFreebuffConfig } from './freebuff-config.js';
 import { readWait } from './wait-setting.js';
 import { configuredPort } from './http.js';
 import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
@@ -38,11 +40,15 @@ Usage: ${BIN} [command] [options]
   skill install --client codex|claude|both [--skill <name>] [--project <dir>] [--update]
                           Install the skills this bridge ships (first run also offers them once). Repeat --skill for one of
                           them; --update replaces an older packaged copy, and a file you edited yourself is never overwritten
-  setup codex|claude|both [--port N] [--shell powershell|cmd|bash]
-                          Print the exact client configuration (changes nothing)
+  setup codex|claude|freebuff|both [--port N] [--shell powershell|cmd|bash]
+                          Print the exact client configuration (changes nothing). Freebuff is an MCP client only:
+                          its CLI has no headless mode, so the bridge cannot delegate a task to it
   setup codex|both --apply [--yes] [--tool-timeout N] [--port N]
                           Write the Codex tool timeout (default 3700 s) into config.toml after showing the change and asking;
                           a backup is made first. Without an antigravity entry it adds one. Claude Code is never edited
+  setup freebuff --apply [--project <dir>] [--yes]
+                          Merge the stdio entry Freebuff needs into ~/.agents/mcp.json (or <dir>/.agents/mcp.json) after
+                          showing the change and asking; a backup is made first and every other server is preserved
   config [--json]         Show where config and state live
   update [--check]        Install the newest version from npm (only for a global install); --check only reports
   unlock                 Reclaim a lock only when both recorded server and child PIDs are dead
@@ -140,13 +146,14 @@ async function updateCommand(args: string[]) {
 
 async function setup(args: string[]) {
   const target = args[0];
-  const usage = `Usage: ${BIN} setup codex|claude|both [--port N] [--shell powershell|cmd|bash] | setup codex|both --apply [--yes] [--tool-timeout N] [--port N]`;
-  if (target !== 'codex' && target !== 'claude' && target !== 'both') throw new Error(usage);
+  const usage = `Usage: ${BIN} setup codex|claude|freebuff|both [--port N] [--shell powershell|cmd|bash] | setup codex|both --apply [--yes] [--tool-timeout N] [--port N] | setup freebuff --apply [--project <dir>] [--yes]`;
+  if (target !== 'codex' && target !== 'claude' && target !== 'freebuff' && target !== 'both') throw new Error(usage);
   let port = process.env.PORT !== undefined && process.env.PORT !== '0' ? configuredPort(process.env.PORT) : 3000;
   let shell: Shell[] = process.platform === 'win32' ? ['powershell', 'cmd'] : ['bash'];
-  let apply = false; let yes = false; let toolTimeout = DEFAULT_TOOL_TIMEOUT_SECONDS;
+  let apply = false; let yes = false; let toolTimeout = DEFAULT_TOOL_TIMEOUT_SECONDS; let project: string | undefined;
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--port' && args[i + 1] !== undefined) port = configuredPort(args[++i]);
+    if (args[i] === '--project' && args[i + 1] !== undefined) project = path.resolve(args[++i]);
+    else if (args[i] === '--port' && args[i + 1] !== undefined) port = configuredPort(args[++i]);
     else if (args[i] === '--shell' && args[i + 1] !== undefined) {
       const chosen = args[++i];
       if (chosen !== 'powershell' && chosen !== 'cmd' && chosen !== 'bash') throw new Error('--shell must be powershell, cmd or bash');
@@ -158,14 +165,47 @@ async function setup(args: string[]) {
   }
   if (port === 0) throw new Error('Give a fixed port: --port 3000 (0 picks a different port every run, so a client could not be configured)');
   const mcpUrl = `http://127.0.0.1:${port}/mcp`;
+  if (project !== undefined && !(apply && target === 'freebuff')) throw new Error('--project is only used by setup freebuff --apply');
+  if (apply && target === 'freebuff') { await applyFreebuffSetup(project, yes); return; }
   if (apply) { await applyCodexSetup(target, mcpUrl, toolTimeout, yes); return; }
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
-  console.log(renderSetup({clients, mcpUrl, shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined}));
+  console.log(renderSetup({clients, mcpUrl, shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined, stdio: stdioCommand()}));
+}
+
+/** The command a stdio client must run for THIS installation: the interpreter and the packaged stdio entry, both absolute. */
+export function stdioCommand(): {command: string; args: string[]} {
+  return {command: process.execPath, args: [path.join(paths.packageRoot, 'dist', 'src', 'stdio.js')]};
+}
+
+/** Shows exactly what would change in Freebuff's .agents/mcp.json and writes it only after a yes (or --yes). */
+async function applyFreebuffSetup(project: string | undefined, yes: boolean) {
+  if (project !== undefined) {
+    const info = await stat(project).catch(() => null);
+    if (!info?.isDirectory()) throw new Error(`--project must be an existing directory: ${project}`);
+  }
+  const file = freebuffConfigPath({project});
+  const plan = planFreebuffConfig(await readFreebuffConfig(file), stdioCommand());
+  if (plan.action === 'refuse') { console.error(`Not changed: ${plan.reason}. Edit ${file} by hand (see: ${BIN} setup freebuff).`); process.exitCode = 1; return; }
+  if (plan.action === 'none') { console.log(`Nothing to do: ${plan.reason} in ${file}.`); return; }
+  console.log(`File: ${file}`, `\nChange (${plan.action}):`, `\n  before: ${plan.before.split('\n').join('\n          ')}`, `\n  after:  ${plan.after.split('\n').join('\n          ')}`);
+  console.log('\nOnly the "antigravity" server is written; every other entry in the file is preserved. The file is re-serialized, so its formatting may change.');
+  console.log('Freebuff starts this bridge as a child process: closing Freebuff cancels a task that is still running.');
+  if (!yes) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY)) { console.error('Not changed: this is not an interactive terminal. Run it in a terminal, or add --yes.'); process.exitCode = 1; return; }
+    const rl = createInterface({input: process.stdin, output: process.stdout});
+    try {
+      const answer = (await rl.question('Apply this change? [y/N] ')).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') { console.log('Not changed.'); return; }
+    } finally { rl.close(); }
+  }
+  const backup = await writeFreebuffConfig(file, plan);
+  console.log(backup ? `Done. Backup: ${backup}` : 'Done (file created).');
+  console.log('Reopen Freebuff so it reads the new server.');
 }
 
 /** Shows exactly what would change in Codex's config.toml and writes it only after a yes (or --yes). */
 async function applyCodexSetup(target: string, mcpUrl: string, toolTimeout: number, yes: boolean) {
-  if (target === 'claude') throw new Error('--apply edits Codex only. Claude Code is configured with the claude mcp add command printed by setup claude.');
+  if (target === 'claude') throw new Error('--apply edits Codex and Freebuff only. Claude Code is configured with the claude mcp add command printed by setup claude.');
   const file = codexConfigPath();
   const plan = planCodexConfig(await readCodexConfig(file), {mcpUrl, toolTimeoutSeconds: toolTimeout});
   if (plan.action === 'refuse') { console.error(`Not changed: ${plan.reason}. Edit ${file} by hand (see: ${BIN} setup codex).`); process.exitCode = 1; return; }
