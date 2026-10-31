@@ -5,6 +5,24 @@
 
 Không thay đổi hành vi hiện tại của antigravity và codex. OpenCode nằm trong **Phase 3** theo `docs/MULTI-AGENT-PLAN.md`.
 
+## Đã làm khác thiết kế ban đầu (đọc mục này trước các mục 1–3)
+
+Các mục 1–3 bên dưới là bản thiết kế viết trước khi có code, giữ lại để biết lý do. Nơi nào mâu thuẫn với bảng này thì **bảng này đúng** (đã đối chiếu với `opencode` v2.2.5 và với code):
+
+| Thiết kế ban đầu | Thực tế |
+|---|---|
+| `opencode` vào `DEFAULT_ENABLED` | **Mặc định tắt**; chỉ chạy khi `agents.enabled` liệt kê. Profile OpenCode khai báo mà bỏ `agents.enabled` vẫn được kiểm tra CLI và báo lý do nếu không dùng được |
+| `opencode run <prompt>` qua argv | `opencode run --standalone --format json`, prompt qua **stdin** (argv bị giới hạn độ dài, và prompt bắt đầu bằng `-` bị đọc thành cờ) |
+| không nhắc service nền | **`--standalone` bắt buộc**: mặc định `opencode run` giao việc cho service nền dùng chung của OpenCode Desktop, hủy task không dừng agent và shell của agent nằm ngoài cây process mà bridge dọn (đo ở `docs/HANDOFF.md` mục 7) |
+| `OPENCODE_HOME` tách tài khoản | Biến này **không có tác dụng**; dùng `XDG_DATA_HOME` / `XDG_CONFIG_HOME` trong `profile.env` |
+| model `gpt-5` | Dạng `provider/model` (xem `opencode models`), ví dụ `opencode/big-pickle` |
+| `parseResult` đọc JSON đơn hoặc text thường | Đọc luồng JSONL: sự kiện `text` cuối là câu trả lời, `step_finish` cho lượt và token, `error` là thất bại |
+| `autonomy: "full"` có thể thêm `--auto` | **Không bao giờ**: `autonomy` do client chọn và chỉ là chỉ dẫn. `--auto` chỉ bật bằng `agents.opencode_auto_approve` trong config của chủ máy, và hiện trong cảnh báo của `agents_list` |
+| không có giới hạn log | `compactLine` bỏ `step_start` và rút `tool_use` về tên tool và trạng thái, để luồng JSON không vượt giới hạn output |
+| quyền mặc định không bàn tới | OpenCode **chạy lệnh shell và sửa file mà không hỏi** kể cả không có `--auto` (đo trên v2.2.5): mô hình quyền của nó lỏng hơn mặc định của `agy` và Codex `workspace-write`. Bật nó trong `agents.enabled` là chấp nhận điều đó |
+
+Mục 3 ("Câu hỏi cần trả lời") đã được trả lời bằng bảng trên; không còn câu hỏi mở.
+
 ---
 
 ## 1. Khai báo kỹ thuật
