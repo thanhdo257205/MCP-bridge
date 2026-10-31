@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -8,7 +8,10 @@ import { PassThrough } from 'node:stream';
 import { isHardTask, isQuotaError, ProfileHealthTracker } from '../src/agents/quota.js';
 import { poolSchema, type Config } from '../src/config.js';
 import { TaskManager } from '../src/tasks/manager.js';
+import { codexAdapter } from '../src/agents/codex.js';
 import type { AgentAdapter, AgentRuntime, AgentStatus } from '../src/agents/types.js';
+
+let nextFakePid = 0;
 
 test('isHardTask accurately identifies complex tasks vs simple tasks', () => {
   // Simple task
@@ -51,6 +54,54 @@ test('isQuotaError accurately matches rate limits and balance/quota exhaustion e
   assert.equal(isQuotaError('SyntaxError: Unexpected token'), false);
   assert.equal(isQuotaError('File not found: src/index.ts'), false);
   assert.equal(isQuotaError('Command failed with exit code 1'), false);
+});
+
+test('a bare 429 in a stack trace or a count is not a quota error, a named status still is', () => {
+  assert.equal(isQuotaError('    at parse (src/parser.ts:429:12)'), false);
+  assert.equal(isQuotaError('Processed 429 files'), false);
+  assert.equal(isQuotaError('HTTP 429'), true);
+  assert.equal(isQuotaError('status: 429'), true);
+  assert.equal(isQuotaError('request failed with code 429'), true);
+  assert.equal(isQuotaError('429 Too Many Requests'), true);
+});
+
+test('words an agent writes on stdout do not cool its profile, the provider wording still does', async () => {
+  const adapter = codexAdapter({executable: 'codex', prefixArgs: [], source: 'codex'}, {id: 'p1'});
+  const run = (stdout: string, stderr = '') => adapter.parseResult({stdout, stderr, exitCode: 1, signal: null, resultFile: null});
+  const message = (text: string) => `${JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text}})}\n`;
+  // The agent talks about rate limits and a 429 but never reaches its final message: that is a failed task, not a spent account.
+  const prose = await run(message('I fixed the rate limit handler so it returns 429 when the server is overloaded'));
+  assert.equal(prose.success, false);
+  assert.equal(prose.isQuotaExceeded, false);
+  assert.equal((await run('', 'rate limit reached for gpt')).isQuotaExceeded, true, 'stderr is the CLI speaking, so it is still trusted');
+  assert.equal((await run(`${JSON.stringify({type: 'error', message: 'insufficient_quota: check your plan and billing'})}\n`)).isQuotaExceeded, true);
+  assert.equal((await run(message('insufficient_quota'))).isQuotaExceeded, true, 'unambiguous provider wording on stdout still counts');
+});
+
+test('cooldowns survive a restart, an expired or damaged file means every profile is available', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-cooldowns-'));
+  const file = path.join(root, 'cooldowns.json');
+  try {
+    const first = new ProfileHealthTracker();
+    first.attach(file);
+    first.markCooldown('spent', 60);
+    first.markCooldown('short', 60);
+    first.clearCooldown('short');
+    const second = new ProfileHealthTracker();
+    second.attach(file);
+    assert.equal(second.isAvailable('spent'), false, 'the restarted bridge still keeps the spent account out');
+    assert.equal(second.isAvailable('short'), true, 'a cleared cooldown is not brought back');
+    await writeFile(file, JSON.stringify({old: Date.now() - 1000, text: 'soon', bad: null, long: Date.now() + 60_000}));
+    const third = new ProfileHealthTracker();
+    third.attach(file);
+    assert.deepEqual(['old', 'text', 'bad', 'long'].map(id => third.isAvailable(id)), [true, true, true, false]);
+    await writeFile(file, '{not json');
+    const fourth = new ProfileHealthTracker();
+    fourth.attach(file);
+    assert.equal(fourth.isAvailable('spent'), true, 'unreadable state fails open, never closed');
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
 });
 
 test('ProfileHealthTracker manages cooldown and prefers hard_task_profile for hard tasks', () => {
@@ -129,7 +180,8 @@ test('TaskManager routes hard task to hard_task_profile and auto-fails over on q
       enabled: true,
       launch: (args, cwd, opts) => {
         const ee = new EventEmitter() as any;
-        ee.pid = 1000 + Math.floor(Math.random() * 8000);
+        // Far above any live pid, so the process-tree release can never find a real process behind a fake child.
+        ee.pid = 900_000 + (nextFakePid += 1);
         ee.stdout = new PassThrough();
         ee.stderr = new PassThrough();
         ee.stdin = new PassThrough();

@@ -1,7 +1,7 @@
 import type { PromptTransport } from '../antigravity/invocation.js';
 import { finalEnvelope, invocationFor } from '../antigravity/invocation.js';
 import { extractStats } from '../usage.js';
-import { isQuotaError } from './quota.js';
+import { isQuotaError, isStrongQuotaError } from './quota.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
 const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
@@ -60,7 +60,7 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
       // A stream result that is not the expected envelope is reported by field name, because that is what tells the owner to turn step progress off.
       const fields = transport === 'argv' ? '' : ` (stream result fields: ${Object.keys(envelope).slice(0, 12).join(', ') || 'none'}; if step progress is on, turn it off in Settings to return to the JSON mode)`;
       const finalErr = typeof envelope.error === 'string' ? envelope.error : `CLI did not provide a complete successful response${fields}`;
-      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isQuotaError(raw.stdout);
+      const quotaHit = isQuotaError(raw.stderr) || isQuotaError(finalErr) || isStrongQuotaError(raw.stdout);
       return {...result, error: finalErr, isQuotaExceeded: quotaHit};
     }
   };

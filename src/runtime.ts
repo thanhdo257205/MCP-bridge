@@ -7,6 +7,8 @@ import { MissionManager, MAX_RETAINED_MISSIONS, MAX_STEPS_PER_MISSION } from './
 import {sweepStaleWorktrees, pruneWorktrees} from './isolation/worktree.js';
 import {startTreeWatch} from './isolation/orphans.js';
 import {recoverExecutionLock} from './tasks/execution-lock.js';
+import {globalHealthTracker} from './agents/quota.js';
+import path from 'node:path';
 
 export async function createRuntime() {
   const config = await loadConfig();
@@ -41,6 +43,8 @@ export async function createRuntime() {
     watchTree: treeWatchEnabled ? pid => startTreeWatch(pid, {delays: treeWatch.delays_ms}) : undefined
   });
   await recoverExecutionLock(paths.stateDirectory);
+  // A profile that ran out of quota stays out of its pool after a restart, until its cooldown ends.
+  globalHealthTracker.attach(path.join(paths.stateDirectory, 'cooldowns.json'));
   const sweep = await sweepStaleWorktrees(paths.stateDirectory);
   for (const removed of sweep.removed) console.error(`[bridge] Removed a stale empty worktree directory: ${removed}`);
   for (const kept of sweep.retained) console.error(`[bridge] Kept worktree directory ${kept.path}: ${kept.reason}`);
