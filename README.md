@@ -1,4 +1,4 @@
-# agy-mcp-bridge
+# agy-mcp-bridge.
 
 **An MCP server that hands bounded coding tasks to the CLI agents already logged in on your machine.** One TypeScript process speaks MCP Streamable HTTP on `127.0.0.1` and drives `agy` (Antigravity) and/or `codex`. Every task declares its workspace, acceptance criteria, which agent runs it, how isolated it is, and how much it may self-approve. The orchestrating agent (Codex, Claude Code, any MCP client) keeps the review; the bridge does the reading, writing and waiting.
 
