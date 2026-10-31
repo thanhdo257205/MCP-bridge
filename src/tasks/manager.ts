@@ -383,7 +383,8 @@ export class TaskManager {
         extraArgs, promptTransport: transport
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
-      const streaming = invocation.transport !== undefined && invocation.transport !== 'argv';
+      const compactLine = agent.adapter.compactLine?.bind(agent.adapter);
+      const streaming = (invocation.transport !== undefined && invocation.transport !== 'argv') || compactLine !== undefined;
       const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin, customEnv: invocation.customEnv};
       const child = agent.launch
         ? agent.launch(invocation.args, execWorkspace, options)
@@ -446,6 +447,12 @@ export class TaskManager {
         if (steps.recent.length > MAX_RECENT_STEPS) steps.recent.shift();
         return true;
       };
+      /** What of one complete stdout line is kept: nothing for a step event, else the adapter's compact form (or the line itself). */
+      const keepLine = (line: string): string | null => {
+        if (takeStepLine(line)) return null;
+        if (!compactLine) return line;
+        try { return compactLine(line); } catch { return line; }
+      };
       const capture = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
         entry.lastOutputAt = Date.now();
         task[`${stream}_bytes`] += chunk.length;
@@ -453,7 +460,7 @@ export class TaskManager {
         if (streaming && stream === 'stdout') {
           const lines = (partialLine + decoder.write(chunk)).split('\n');
           partialLine = lines.pop() ?? '';
-          keep = Buffer.from(lines.filter(line => !takeStepLine(line)).map(line => `${line}\n`).join(''));
+          keep = Buffer.from(lines.map(keepLine).filter((line): line is string => line !== null).map(line => `${line}\n`).join(''));
           // A line that never ends must not grow without bound: treat an oversized one as ordinary output (and so as an overflow).
           if (partialLine.length > this.config.max_output_bytes) { keep = Buffer.concat([keep, Buffer.from(partialLine)]); partialLine = ''; }
         }
@@ -495,7 +502,7 @@ export class TaskManager {
         finalized = true;
         clearTimeout(timer);
         clearInterval(outputTimer);
-        if (streaming) { const rest = partialLine + decoder.end(); partialLine = ''; if (rest.trim() && !takeStepLine(rest)) retain('stdout', Buffer.from(rest)); }
+        if (streaming) { const rest = partialLine + decoder.end(); partialLine = ''; if (rest.trim()) { const kept = keepLine(rest); if (kept !== null) retain('stdout', Buffer.from(kept)); } }
         flushOutput(true);
         const rawStdout=Buffer.concat(buffers.stdout,lengths.stdout).toString('utf8');
         const rawStderr=Buffer.concat(buffers.stderr,lengths.stderr).toString('utf8');

@@ -66,6 +66,12 @@ export interface AgentAdapter {
   capabilities: AgentCapability[];
   buildInvocation(task: AgentTask): Invocation;
   parseResult(raw: RawRun): Promise<AgentResult>;
+  /**
+   * For a CLI whose stdout is a JSON event stream: the form of one complete stdout line that is kept in the task log, or null to
+   * drop it. Tool events carry whole files and command output, which would fill the output cap long before the answer arrives
+   * and cancel a task that is working; parseResult then reads only what is kept, so it must keep every event it relies on.
+   */
+  compactLine?(line: string): string | null;
 }
 
 export interface AgentRuntime {

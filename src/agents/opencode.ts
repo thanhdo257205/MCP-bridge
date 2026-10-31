@@ -46,6 +46,18 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
         customEnv: options.env
       };
     },
+    compactLine(line: string): string | null {
+      let event: unknown;
+      try { event = JSON.parse(line); } catch { return line; /* not an event: kept, it may be the only clue to a failure */ }
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return line;
+      const {type, part} = event as {type?: unknown; part?: {tool?: unknown; state?: {status?: unknown}}};
+      // parseResult reads text, error and step_finish events, so those stay whole.
+      if (type === 'text' || type === 'error' || type === 'step_finish') return line;
+      if (type === 'step_start') return null;
+      // A tool event carries the file or command output it produced: keep which tool ran and how it ended, not the payload.
+      if (type === 'tool_use') return JSON.stringify({type, part: {tool: part?.tool, state: {status: part?.state?.status}}});
+      return line.length > 2000 ? JSON.stringify({type}) : line;
+    },
     async parseResult(raw: RawRun): Promise<AgentResult> {
       const texts: string[] = [];
       const errors: string[] = [];

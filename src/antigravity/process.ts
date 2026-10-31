@@ -46,8 +46,13 @@ async function shimEntry(shim: string): Promise<string> {
   const text = await readFile(shim, 'utf8');
   if (text.length > 65536) throw new Error('Unsupported .cmd shim: file is too large');
   const directory = path.dirname(shim);
-  for (const match of text.matchAll(SHIM_ENTRY)) {
-    const candidate = path.resolve(directory, match[1]);
+  // A script entry wins over an .exe one. npm's own shim for a Node CLI names `%dp0%\node.exe` (its "use the node beside me"
+  // line) before the script line, and where node.exe sits next to the shim that line would otherwise be taken as the entry
+  // and the script dropped. A shim of a natively packaged CLI has no script, so its .exe is then the entry.
+  const isExe = (entry: string) => path.extname(entry).toLowerCase() === '.exe';
+  const entries = [...text.matchAll(SHIM_ENTRY)].map(match => match[1]).sort((a, b) => Number(isExe(a)) - Number(isExe(b)));
+  for (const entry of entries) {
+    const candidate = path.resolve(directory, entry);
     if (!inside(directory, candidate)) continue;
     try {
       const resolved = await realpath(candidate);

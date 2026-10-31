@@ -80,6 +80,19 @@ test('Windows .cmd shims resolve to a local Node entry without a shell', {skip: 
     assert.equal(nativeResolved.executable, await realpath(native), 'a shim of a native CLI runs the .exe itself, not Node');
     assert.deepEqual(nativeResolved.prefixArgs, []);
 
+    // npm's own shim for a Node CLI names the node.exe beside it before the script; with that node.exe present
+    // (nvm-windows, an npm prefix equal to the node directory) the script must still be the entry.
+    await writeFile(path.join(bin, 'node.exe'), '');
+    const npmShim = path.join(bin, 'fake-cli-npm.cmd');
+    await writeFile(npmShim, [
+      '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+      'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', ')', '',
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\fake-cli.js" %*'
+    ].join('\r\n'));
+    const npmResolved = await resolveCommand(npmShim);
+    assert.equal(npmResolved.executable, process.execPath, 'the interpreter is the bridge\'s own node, not the node.exe the shim mentions');
+    assert.deepEqual(npmResolved.prefixArgs, [await realpath(script)], 'the script is kept');
+
     const outside = path.join(root, 'outside.js');
     await writeFile(outside, '');
     const escaping = path.join(bin, 'escaping.cmd');

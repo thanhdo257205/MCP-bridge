@@ -37,6 +37,57 @@ test('opencode invocation prefers the task model, and only the owner option adds
   assert.ok(opencodeAdapter(command, {autoApprove: true}).buildInvocation(task({autonomy: 'suggest'})).args.includes('--auto'));
 });
 
+test('opencode drops tool payloads from the kept log but leaves everything parseResult reads untouched', async () => {
+  const adapter = opencodeAdapter(command);
+  const compact = adapter.compactLine!.bind(adapter);
+  const big = 'x'.repeat(50_000);
+  const toolEvent = JSON.stringify({type: 'tool_use', part: {tool: 'read', state: {status: 'completed', output: big}}});
+  assert.deepEqual(JSON.parse(compact(toolEvent)!), {type: 'tool_use', part: {tool: 'read', state: {status: 'completed'}}});
+  assert.equal(compact(event('step_start', {})), null);
+  for (const kept of [text('answer'), finish('stop'), JSON.stringify({type: 'error', error: {message: 'boom'}})]) assert.equal(compact(kept), kept);
+  assert.equal(compact('not json'), 'not json');
+  assert.equal(compact('null'), 'null');
+  assert.equal(compact(JSON.stringify({type: 'something-new', blob: big})), JSON.stringify({type: 'something-new'}));
+  // The result computed from the compacted stream is the one computed from the full stream.
+  const stream = [event('step_start', {}), toolEvent, text('done'), finish('stop', 7, 3)];
+  const compacted = stream.map(compact).filter((line): line is string => line !== null).join('\n');
+  const [full, small] = await Promise.all([adapter.parseResult(raw(stream.join('\n'))), adapter.parseResult(raw(compacted))]);
+  assert.deepEqual(small, full);
+});
+
+test('a task whose tool events dwarf the output cap still completes, because only the compacted log is counted', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-oc-cap-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const big = 'x'.repeat(2000);
+  const tools = Array.from({length: 40}, () => event('tool_use', {tool: 'read', state: {status: 'completed', output: big}}));
+  const agent: AgentRuntime = {
+    adapter: opencodeAdapter(command),
+    status: {id: 'opencode', label: 'OpenCode', available: true, version: '2.2.5', executable: 'opencode', capabilities: ['code'], warnings: []},
+    enabled: true,
+    launch: () => {
+      const child = new EventEmitter() as EventEmitter & {pid: number; stdout: PassThrough; stderr: PassThrough; stdin: PassThrough};
+      child.pid = 910_002; child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+      setTimeout(() => { child.stdout.end(`${[...tools, text('all done'), finish('stop')].join('\n')}\n`); child.emit('close', 0, null); }, 10);
+      return child as unknown as ChildProcess;
+    }
+  };
+  // 80 KB of tool events against a 4 KB cap: without compaction this task is cancelled for exceeding it.
+  const config = {allowed_workspaces: [workspace], executable: 'agy', max_timeout_seconds: 15, default_timeout_seconds: 10, max_output_bytes: 4096,
+    max_retained_tasks: 10, max_queued_tasks: 0, default_autonomy: 'auto', extra_env_passthrough: [], prompt_transport: 'argv'} as unknown as Config;
+  const manager = new TaskManager(config, {executable: 'opencode', supported: true, stateDirectory: path.join(root, 'state'), agents: [agent], defaultAgent: 'opencode'});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'opencode'});
+    const done = await manager.wait(started.task_id);
+    assert.equal(done.status, 'completed', done.error ?? '');
+    assert.equal(done.final_response, 'all done');
+    assert.equal(done.stdout_truncated, false);
+    assert.ok(done.stdout_bytes > 40 * 2000, 'the raw stream really was far above the cap');
+  } finally {
+    await manager.shutdown();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('opencode keeps the profile env and the resolved prefix args', () => {
   const invocation = opencodeAdapter({executable: 'node', prefixArgs: ['oc.js'], source: 'x'}, {env: {XDG_DATA_HOME: 'D:\\d'}}).buildInvocation(task());
   assert.deepEqual(invocation.args.slice(0, 2), ['oc.js', 'run']);
