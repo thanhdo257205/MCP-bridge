@@ -30,22 +30,29 @@ export async function resolveCommand(configured: string): Promise<ResolvedComman
     // A shim that exists but cannot be resolved safely is a definitive failure: silently falling through
     // to the next PATH entry would hide why the configured command cannot run.
     if (process.platform === 'win32' && (extension === '.cmd' || extension === '.bat')) {
-      const script = await shimEntry(resolved);
-      return {executable: process.execPath, prefixArgs: [script], source: resolved};
+      const entry = await shimEntry(resolved);
+      // A shim of a natively packaged CLI (OpenCode) points at its own .exe: run that directly, not through Node.
+      if (path.extname(entry).toLowerCase() === '.exe') return {executable: entry, prefixArgs: [], source: resolved};
+      return {executable: process.execPath, prefixArgs: [entry], source: resolved};
     }
     if (process.platform === 'win32' && extension !== '.exe') continue;
     return {executable: resolved, prefixArgs: [], source: resolved};
   }
-  throw new Error(`Command not found: ${configured}${process.platform === 'win32' ? ' (a native .exe or an npm .cmd shim pointing at a local .js entry is required)' : ''}`);
+  throw new Error(`Command not found: ${configured}${process.platform === 'win32' ? ' (a native .exe or an npm .cmd shim pointing at a local .js or .exe entry is required)' : ''}`);
 }
 
-const SHIM_ENTRY = /(?:%dp0%|%~dp0)[\\/]([^"\r\n]+?\.(?:js|mjs|cjs))/gi;
+const SHIM_ENTRY = /(?:%dp0%|%~dp0)[\\/]([^"\r\n]+?\.(?:js|mjs|cjs|exe))/gi;
 async function shimEntry(shim: string): Promise<string> {
   const text = await readFile(shim, 'utf8');
   if (text.length > 65536) throw new Error('Unsupported .cmd shim: file is too large');
   const directory = path.dirname(shim);
-  for (const match of text.matchAll(SHIM_ENTRY)) {
-    const candidate = path.resolve(directory, match[1]);
+  // A script entry wins over an .exe one. npm's own shim for a Node CLI names `%dp0%\node.exe` (its "use the node beside me"
+  // line) before the script line, and where node.exe sits next to the shim that line would otherwise be taken as the entry
+  // and the script dropped. A shim of a natively packaged CLI has no script, so its .exe is then the entry.
+  const isExe = (entry: string) => path.extname(entry).toLowerCase() === '.exe';
+  const entries = [...text.matchAll(SHIM_ENTRY)].map(match => match[1]).sort((a, b) => Number(isExe(a)) - Number(isExe(b)));
+  for (const entry of entries) {
+    const candidate = path.resolve(directory, entry);
     if (!inside(directory, candidate)) continue;
     try {
       const resolved = await realpath(candidate);

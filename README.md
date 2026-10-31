@@ -16,7 +16,7 @@ agy-mcp-bridge                                       # serves http://127.0.0.1:3
 
 Fastest first run: from inside the project you want to work on, `agy-mcp-bridge --workspace .` grants the current directory **for this run only** and does not touch config. Repeat the flag for several folders; a wrong path, or the bridge's own install directory, stops startup.
 
-`agy-mcp-bridge check | setup codex|claude|both | delegation on|off|status | skill install | config | update | help`. `--open` launches the web UI in your browser. Config and task history live in the user data directory (`%APPDATA%\agy-mcp-bridge`, `~/.config/agy-mcp-bridge`, `~/Library/Application Support/agy-mcp-bridge`; override with `BRIDGE_HOME`), so an upgrade never deletes them. `agy-mcp-bridge config` prints the real paths.
+`agy-mcp-bridge check | setup codex|claude|freebuff|both | delegation on|off|status | skill install | config | update | help`. `--open` launches the web UI in your browser. Config and task history live in the user data directory (`%APPDATA%\agy-mcp-bridge`, `~/.config/agy-mcp-bridge`, `~/Library/Application Support/agy-mcp-bridge`; override with `BRIDGE_HOME`), so an upgrade never deletes them. `agy-mcp-bridge config` prints the real paths.
 
 At startup the bridge probes each CLI. An agent that is missing or unsupported is marked unavailable and takes no task; if `agy` is unavailable, the default agent silently becomes the next enabled one, so check `agents_list` after changing machines. Priority and per-agent switches live under `agents` in `config/workspaces.json`. Verified against real agent execution on `agy` 1.4.3, 1.4.7, 1.4.8 and 1.4.9; other 1.4.x patches run with a logged warning; other majors are refused.
 
@@ -40,6 +40,8 @@ Claude Code:
 ```bash
 claude mcp add --transport http --scope local antigravity 'http://127.0.0.1:3000/mcp'
 ```
+
+Freebuff CLI is a **client only**, never a delegated agent: its CLI is an interactive TUI with no headless mode, so no adapter can drive it. `agy-mcp-bridge setup freebuff` prints the stdio entry it reads (`.agents/mcp.json`); `setup freebuff --apply [--project <dir>]` merges that one entry into `~/.agents/mcp.json` after showing the change and asking, keeping every other server and taking a backup. Freebuff starts that bridge as a **child process**, so closing Freebuff cancels a task still running; for work that must outlive the client, run the HTTP server and point Freebuff at `/mcp` instead (only stdio is documented for Freebuff). [docs/FREEBUFF-INTEGRATION.md](docs/FREEBUFF-INTEGRATION.md)
 
 Then call `antigravity_environment` from a fresh session — that is the proof; `codex mcp list` and `/mcp` only show configuration. Closing or disconnecting a client does not stop the server or cancel an accepted task. Reconnect, read `recent_tasks`, and reuse the task id instead of delegating the same work twice.
 
@@ -97,9 +99,10 @@ Four rules about these ids are easy to get wrong, all measured rather than infer
 
 The owner's Settings reach an `antigravity` **profile** exactly as they reach `antigravity`, because they key on the adapter behind the id, not on the id: the model, the permission level, the effort, and the soft deadline with its `--log-file` and its extended `--print-timeout` are all on the command line of a profile task. Read that as a widening, not a cosmetic fix — before, a profile was locked to the CLI's own defaults and could not be given `--dangerously-skip-permissions` at all; now your permission level applies to its tasks too, so a profile is no more restricted than the agent it comes from.
 
-Two knobs are opt-in because they widen what the bridge can reach. Neither is reachable from a task, and neither stays invisible: the codex pair is reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
+Three knobs are opt-in because they widen what the bridge can reach. None is reachable from a task, and none stays invisible: the codex pair and `opencode_auto_approve` are reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
 
 - `codex_sandbox: "danger-full-access"` / `codex_ask_for_approval: "never"` — readable from the bridge's own config file only. No task, tool argument or MCP client can ask for them, and `--ask-for-approval` is passed where codex accepts it (before `exec`).
+- `agents.opencode_auto_approve: true` — passes `opencode run --auto`, which approves every permission OpenCode's own config does not deny. OpenCode itself is opt-in (list it in `agents.enabled`). A task's `autonomy: "full"` never adds the flag, for the same reason it never changes the codex sandbox: `autonomy` is an instruction, not a permission grant.
 - `xerj.enabled` / `xerj.auto_reference` — both default to `false`. Turning them on sends task text to another local service and can place a retrieved passage inside the prompt an agent follows, which is a decision for the machine's owner, not for a delegating client.
 
 ## Missions
@@ -164,6 +167,7 @@ Pushing or merging to `main` runs CI and, when it passes, publishes to npm autom
 - [docs/VERIFICATION.md](docs/VERIFICATION.md) — client CLI versions and live connection results.
 - [docs/MULTI-AGENT-PLAN.md](docs/MULTI-AGENT-PLAN.md) — the multi-agent roadmap and per-phase status.
 - [docs/HANDOFF.md](docs/HANDOFF.md) — open work (Job Object, POSIX E2E, worktree TTL) with mutation-test evidence.
+- [docs/FREEBUFF-INTEGRATION.md](docs/FREEBUFF-INTEGRATION.md) — why Freebuff is a client and not an agent, the measurement behind that, and what `setup freebuff` writes.
 - [docs/PROMPTS.md](docs/PROMPTS.md) — review and follow-up task prompts.
 - [skills/antigravity-bridge/SKILL.md](skills/antigravity-bridge/SKILL.md), [skills/mission-orchestrator/SKILL.md](skills/mission-orchestrator/SKILL.md) and [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) — the client-side contract and manual evaluation cases.
 
