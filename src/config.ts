@@ -8,7 +8,7 @@ export const codexSandboxSchema = z.enum(['workspace-write', 'danger-full-access
 export const codexApprovalSchema = z.enum(['on-request', 'never']);
 
 export const agentProfileSchema = z.object({
-  adapter: z.enum(['codex', 'antigravity']),
+  adapter: z.enum(['codex', 'antigravity', 'opencode']),
   label: z.string().min(1).max(100).optional(),
   env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).optional(),
   codex_sandbox: codexSandboxSchema.optional(),
@@ -45,7 +45,9 @@ const agentsSchema = z.object({
   priority: z.array(z.string().min(1).max(64)).max(50).optional(),
   enabled: z.array(z.string().min(1).max(64)).max(50).optional(),
   codex_executable: z.string().min(1).max(4096).optional(),
-  codex_model: z.string().min(1).max(200).optional()
+  codex_model: z.string().min(1).max(200).optional(),
+  opencode_executable: z.string().min(1).max(4096).optional(),
+  opencode_model: z.string().min(1).max(200).optional()
 }).strict();
 
 const schema = z.object({
