@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -250,16 +251,16 @@ const OK_LINES = ['{"type":"turn.completed","status":"completed"}', '{"type":"it
  * A codex profile whose fake CLI prints one JSONL transcript and closes, so the real parseResult decides the outcome.
  * `script(id, call)` returns the lines for that launch, which is how a test gives a profile a different answer on retry.
  */
-function fakeProfile(id: string, launches: string[], script: (call: number) => {lines: string[]; code: number}, onLaunch?: () => void): AgentRuntime {
+function fakeProfile(id: string, launches: string[], script: (call: number) => {lines: string[]; code: number}, onLaunch?: (cwd: string) => void): AgentRuntime {
   const adapter = codexAdapter({executable: 'codex', prefixArgs: [], source: 'codex'}, {id, label: id});
   return {
     adapter,
     status: {id, label: id, available: true, version: '1.0', executable: 'codex', capabilities: ['code' as const], warnings: []},
     enabled: true,
-    launch: () => {
+    launch: (_args, cwd) => {
       const call = launches.filter(item => item === id).length + 1;
       launches.push(id);
-      onLaunch?.();
+      onLaunch?.(cwd);
       const child = new EventEmitter() as EventEmitter & {pid: number; stdout: PassThrough; stderr: PassThrough; stdin: PassThrough};
       child.pid = 900_000 + launches.length;
       child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
@@ -274,7 +275,7 @@ function poolConfig(workspace: string): Config {
     allowed_workspaces: [workspace], executable: 'agy', max_timeout_seconds: 15, default_timeout_seconds: 10,
     max_output_bytes: 262144, max_retained_tasks: 10, max_queued_tasks: 0, max_parallel_worktrees: 2,
     default_autonomy: 'auto', extra_env_passthrough: [], prompt_transport: 'argv',
-    agents: {pools: {'codex-pool': {strategy: 'quota-adaptive', members: ['p1', 'p2'], quota_cooldown_seconds: 10}}}
+    agents: {pools: {'codex-pool': {members: ['p1', 'p2'], quota_cooldown_seconds: 10}}}
   } as unknown as Config;
 }
 /** The health tracker is a module singleton, so a cooldown left by an earlier test would change which profile a pool picks first. */
@@ -313,6 +314,38 @@ test('a quota failover keeps the lane it already holds and keeps the abandoned a
   }
 });
 
+test('a worktree failover records what the abandoned attempt had changed, because the retry reuses the worktree', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-scope-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  const git = (...args: string[]) => new Promise<void>((resolve, reject) =>
+    execFile('git', ['-c', 'user.email=t@e', '-c', 'user.name=t', ...args], {cwd: workspace}, error => error ? reject(error) : resolve()));
+  await git('init', '-b', 'main');
+  await writeFile(path.join(workspace, 'wanted.txt'), 'base\n');
+  await git('add', 'wanted.txt');
+  await git('commit', '-m', 'base');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}), cwd => { writeFileSync(path.join(cwd, 'half-done.txt'), 'partial\n'); });
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), cwd => { writeFileSync(path.join(cwd, 'wanted.txt'), 'changed\n'); });
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool', isolation: 'worktree', owns: ['wanted.txt']});
+    const done = await manager.wait(started.task_id);
+    assert.equal(done.status, 'completed');
+    const abandoned = done.attempts?.[0];
+    assert.equal(abandoned?.agent, 'p1');
+    assert.equal(abandoned?.scope?.checked, true);
+    assert.deepEqual(abandoned?.scope?.out_of_scope, ['half-done.txt'], 'the first attempt is shown with the file it left behind');
+    // The retry's own result still covers everything in the worktree, which is why the per-attempt record exists.
+    assert.deepEqual(done.scope?.out_of_scope, ['half-done.txt']);
+    assert.equal(done.scope?.changed, 2);
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('failover visits each profile in the pool at most once and then fails the task', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-bound-'));
   const workspace = path.join(root, 'workspace'); await mkdir(workspace);
@@ -341,7 +374,93 @@ test('failover visits each profile in the pool at most once and then fails the t
   }
 });
 
-const AGY_JSON = '{"status":"SUCCESS","num_turns":1,"response":"ok"}';
+test('a failover whose retry cannot start ends the task and frees the lane instead of leaving it running', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-nostart-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}));
+  // p1 is cooling after the first task, so the second task is routed to p2, which starts normally.
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), () => {
+    if (launches.filter(item => item === 'p2').length === 1) throw new Error('spawn exploded');
+  });
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const done = await Promise.race([
+      manager.wait(started.task_id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the task never ended: it is stuck running with no process')), 5000).unref())
+    ]);
+    assert.deepEqual(launches, ['p1', 'p2']);
+    assert.equal(done.status, 'failed');
+    assert.equal(done.process_running, false);
+    assert.match(done.error ?? '', /Failover to "p2" could not start: spawn exploded/);
+    assert.equal(done.attempts?.length, 1, 'the abandoned attempt is still on the record');
+    assert.equal(existsSync(path.join(state, 'execution.lock')), false, 'the lock the failed retry held is released');
+    // The lane is free: the next ordinary task starts and completes (p1 cools down, p2 now starts normally).
+    const next = await manager.delegate({task: 'do more work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const second = await manager.wait(next.task_id);
+    assert.equal(second.status, 'completed');
+    assert.equal(second.agent, 'p2');
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a failover releases the process tree the abandoned attempt left before the retry starts', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-reap-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const events: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}));
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), () => { events.push('launch p2'); });
+  const reapTree = async (pid: number) => {
+    events.push(`reap ${pid}`);
+    return {checked: true, reaped: pid === 900_001 ? [4242] : [], skipped: []};
+  };
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1', reapTree});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const done = await manager.wait(started.task_id);
+    assert.equal(done.status, 'completed');
+    assert.equal(events[0], 'reap 900001', 'the first attempt is released before anything else happens');
+    assert.ok(events.indexOf('reap 900001') < events.indexOf('launch p2'), 'and before the retry is launched');
+    assert.deepEqual(done.attempts?.[0].cleanup?.reaped, [4242], 'what was released is kept on the abandoned attempt');
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a pool with no healthy member says so instead of calling the pool an unknown agent', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-pool-empty-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: OK_LINES, code: 0}));
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}));
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    globalHealthTracker.markCooldown('p1', 60);
+    globalHealthTracker.markCooldown('p2', 60);
+    await assert.rejects(
+      manager.delegate({task: 'x', workspace, acceptance_criteria: ['ok'], agent: 'codex-pool'}),
+      /Pool "codex-pool" has no healthy member right now \(members: p1, p2\)/
+    );
+    assert.deepEqual(launches, []);
+  } finally {
+    healthyPool();
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const AGY_JSON ='{"status":"SUCCESS","num_turns":1,"response":"ok"}';
 const AGY_STREAM = '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"response":"ok"}}';
 
 /** A fake `agy` that answers with a successful final envelope and records the argv of every launch. */

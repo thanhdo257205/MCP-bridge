@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -116,10 +116,60 @@ test('the sweep drops the git admin record with the directory it removes', async
   assert.deepEqual(report.retained, [], 'a missing directory is not a leftover held for review');
   assert.deepEqual(report.prunable, [worktree.toplevel], 'the record left inside the repository is named so it can be cleared');
 
-  const pruned = await pruneWorktrees(worktree.toplevel);
+  const pruned = await pruneWorktrees(worktree.toplevel, worktrees);
   assert.equal(pruned.pruned, 1, `git still lists the deleted worktree until it is pruned (${JSON.stringify(pruned)})`);
   assert.equal(pruned.reason, '');
-  assert.deepEqual((await pruneWorktrees(worktree.toplevel)).pruned, 0, 'a second prune finds nothing left to clear');
+  assert.deepEqual((await pruneWorktrees(worktree.toplevel, worktrees)).pruned, 0, 'a second prune finds nothing left to clear');
+});
+
+test('pruning clears the bridge worktrees whose directory is gone and leaves every other record alone', async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), 'agy-prune-scope-'));
+  const state = path.join(repo, 'state');
+  const worktrees = path.join(state, 'worktrees');
+  await mkdir(worktrees, {recursive: true});
+  await git(repo, ['init', '-b', 'main']);
+  await writeFile(path.join(repo, 'tracked.txt'), 'base\n');
+  await git(repo, ['add', 'tracked.txt']);
+  await git(repo, ['-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', '-m', 'base']);
+
+  const bridge = await createWorktree({workspace: repo, stateDirectory: state, taskId: randomUUID()});
+  // A worktree the user made by hand, on a drive that is unmounted right now.
+  const byHand = path.join(await mkdtemp(path.join(tmpdir(), 'agy-prune-hand-')), 'checkout');
+  await git(repo, ['worktree', 'add', '-b', 'by-hand', byHand]);
+  // A bridge-side worktree someone locked on purpose.
+  const lockedPath = path.join(worktrees, randomUUID());
+  await git(repo, ['worktree', 'add', '-b', 'locked-one', lockedPath]);
+  await git(repo, ['worktree', 'lock', lockedPath]);
+  for (const gone of [bridge.root, byHand, lockedPath]) await rm(gone, {recursive: true, force: true});
+
+  const result = await pruneWorktrees(repo, worktrees);
+  assert.equal(result.reason, '');
+  assert.equal(result.pruned, 1, 'only the unlocked bridge worktree is cleared');
+  // Identified by branch, not by path: git prints a path in its long form while mkdtemp may have handed ours out in the 8.3 short one.
+  const branches = (await git(repo, ['worktree', 'list', '--porcelain'])).split(/\r?\n/).filter(line => line.startsWith('branch ')).map(line => line.slice('branch refs/heads/'.length));
+  assert.ok(!branches.includes(bridge.branch), 'the bridge worktree record is gone');
+  assert.ok(branches.includes('by-hand'), 'a worktree made by hand keeps its record');
+  assert.ok(branches.includes('locked-one'), 'a locked record is never touched');
+  assert.ok(branches.includes('main'), 'the main checkout is listed, so the list was read');
+});
+
+test('pruning finds the bridge worktrees when the worktrees root is spelled with a Windows 8.3 short name', {skip: process.platform !== 'win32'}, async () => {
+  const repo = await mkdtemp(path.join(tmpdir(), 'agy-prune-short-name-'));
+  const state = path.join(repo, 'state');
+  const worktrees = path.join(state, 'worktrees');
+  await mkdir(worktrees, {recursive: true});
+  await git(repo, ['init', '-b', 'main']);
+  await writeFile(path.join(repo, 'tracked.txt'), 'base\n');
+  await git(repo, ['add', 'tracked.txt']);
+  await git(repo, ['-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', '-m', 'base']);
+  const bridge = await createWorktree({workspace: repo, stateDirectory: state, taskId: randomUUID()});
+  await rm(bridge.root, {recursive: true, force: true});
+  // CI runners hand out their temp directory in the short form (C:\Users\RUNNER~1\...), while git reports the long one.
+  const short = execFileSync('powershell.exe', ['-NoProfile', '-Command', `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${worktrees.replace(/'/g, "''")}').ShortPath`], {encoding: 'utf8'}).trim();
+  if (short.toLowerCase() === worktrees.toLowerCase()) return; // 8.3 names are switched off on this volume: there is no second spelling to test
+  const result = await pruneWorktrees(repo, short);
+  assert.equal(result.reason, '');
+  assert.equal(result.pruned, 1, `the record is found through the short spelling ${short}`);
 });
 
 test('a repository whose directory went without git is queued for pruning', async () => {

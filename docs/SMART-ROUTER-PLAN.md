@@ -99,14 +99,27 @@ Bảng dưới ghi lại **chỗ tài liệu này nói một đường, code là
 | §1.1 `reasoning effort là high` | **Không có tác dụng**: `delegateSchema` (`src/security/input.ts:9-19`) không có field `effort`, và schema `.strict()` nên client gửi thêm cũng bị từ chối; `input.effort === 'high'` vì thế chỉ đúng khi gọi `isHardTask` trực tiếp trong test. Effort thật đến từ `effort.json` — cài đặt **toàn bridge của chủ máy** (`src/tasks/manager.ts:251`), không phải tín hiệu per-task. Muốn dùng thì phải thêm field vào schema delegate — chưa làm |
 | §1.3 "trả về kết quả hoàn thành liền mạch cho client" | Failover **có trần**: mỗi profile trong pool chỉ được thử **một lần mỗi task** (`entry.poolTried` loại profile đã đốt), pool N thành viên → tối đa N−1 retry; hết thành viên lành thì task **`failed`**, không quay vòng. Attempt bị bỏ được lưu trong `attempts[]` (agent, error, exit code, log tails cắt ở 4000 ký tự), và `summary()` cắt field này |
 | §2.2 `selectProfile(pool, isHard, availableAgents)` | Chữ ký thật có thêm tham số thứ tư `exclude: ReadonlySet<string>`; trả `null` khi không còn thành viên lành, và **caller phải fail task** chứ không loop |
-| §2.1 ba `strategy` (`quota-adaptive`, `priority-failover`, `round-robin`) | Schema nhận cả ba nhưng **hành vi đang như nhau**: cả ba đều trả thành viên lành đầu tiên theo thứ tự pool; `round-robin` vẫn chỉ là stub, đúng như comment ở dòng 94 của `src/agents/quota.ts`. Chưa có chiến lược thật nào khác |
+| §2.1 ba `strategy` (`quota-adaptive`, `priority-failover`, `round-robin`) | Schema từng nhận cả ba nhưng **hành vi như nhau**: cả ba đều trả thành viên lành đầu tiên theo thứ tự pool; `round-robin` chỉ là stub. **Đã bỏ enum (2026-10-31)**: `strategy` giờ là chuỗi tùy chọn, không có tác dụng, vẫn được nhận để cấu hình cũ khởi động được và bị cảnh báo lúc nạp; file ví dụ không còn dòng này. Quy tắc duy nhất của pool: thành viên lành đầu tiên theo thứ tự `members` (và `hard_task_profile` cho task khó) |
 | §2.1 `hard_task_profile` | Chỉ được chọn khi task **khó** *và* profile đó *đang lành và thuộc pool*; ngược lại pool bỏ qua nó |
 | §1.2 cooldown "mặc định 15 phút" | Khớp: `quota_cooldown_seconds` default 900. Nhưng tracker là **in-memory singleton** (`globalHealthTracker`): restart bridge **xóa toàn bộ cooldown**, nên một tài khoản vừa cạn quota sẽ được chọn lại ngay sau khi restart |
 | §1.2 "bắt các lỗi cạn quota từ output" | Danh sách pattern rộng hơn nhiều (thêm `model_capacity`, `resource_exhausted`, `overloaded`, `credit limit`, `check your plan and billing`, `exceeded your current quota` và cả `/\b429\b/`), quét **cả stdout lẫn stderr**. Hệ quả đã ghi ở `docs/HANDOFF.md` mục 6.4: agent chỉ cần *kể lại* chữ đó là profile bị cooldown oan 15 phút |
 | (chưa bàn) | Task chạy bằng pool vẫn báo `task.agent` là **profile thật** chứ không phải id pool, và khi pool **hết sạch thành viên lành ngay lúc delegate** thì `selectAgent` rơi xuống nhánh "agent lạ" và báo `Unknown agent "<id-pool>"` — message gây hiểu nhầm, vì pool có tồn tại, chỉ hết tài khoản lành |
 | (chưa bàn) | Với task `isolation: worktree`, retry **dùng lại đúng worktree đó** (`entry.worktreeInfo` đã cache): sửa dở của attempt bị bỏ vẫn còn trong diff, và `scope` cuối cùng là của **tổng** hai attempt cộng lại |
 
-Còn mở, xếp theo thứ tự đáng làm: (1) một chiến lược pool thật thay vì stub, hoặc bỏ hẳn enum khỏi schema;
-(2) nói cho client biết "pool hết thành viên lành" thay vì `Unknown agent`; (3) nối `effort` (hoặc bỏ điều kiện chết);
-(4) persistence cooldown qua restart; (5) live-test đốt quota thật bằng hai profile đăng nhập thật — hiện hai test
-`fakeProfile()` là bằng chứng duy nhất; (6) `fallback: true` khi agent được chỉ định không sẵn sàng (mòn từ Phase 1).
+Đã xử lý sau bảng này (2026-10-31): hàng §1.2 "cooldown" — tracker giờ lưu `.bridge-state/cooldowns.json` và nạp lại lúc
+khởi động (file thiếu/hỏng/hết hạn = mọi profile khỏe); hàng §1.2 "bắt lỗi" — stdout chỉ còn bị quét bằng
+`STRONG_QUOTA_PATTERNS` (`insufficient_quota`, `quota exceeded`, `credits exhausted`, `check your plan and billing`,
+`exceeded your current quota`, `resource_exhausted`), còn `429` phải đi kèm `http|status|code|error` hoặc `Too Many`;
+hàng "chưa bàn" thứ nhất — pool hết thành viên lành báo `Pool "<id>" has no healthy member right now (members: …)`.
+
+Còn mở, xếp theo thứ tự đáng làm: (1) ~~một chiến lược pool thật thay vì stub, hoặc bỏ hẳn enum~~ đã bỏ enum; muốn chiến lược thật (xoay vòng, theo chi phí) thì thiết kế lại từ đầu;
+(2) ~~nói cho client biết "pool hết thành viên lành"~~ xong; (3) ~~nối `effort` (hoặc bỏ điều kiện chết)~~ đã bỏ điều kiện:
+effort là cài đặt toàn bridge của chủ máy, không phải tín hiệu độ khó của một task, và thêm field vào `delegateSchema`
+chỉ để nó có tác dụng sẽ mở rộng bề mặt API cho một heuristic yếu;
+(4) ~~persistence cooldown qua restart~~ xong; (5) live-test đốt quota thật bằng hai profile đăng nhập thật — hiện hai test
+`fakeProfile()` là bằng chứng duy nhất; (6) ~~`fallback: true`~~ **quyết định không làm**: một agent khác là tài khoản,
+mức quyền và sandbox khác, nên đổi agent âm thầm khi agent được chỉ định không sẵn sàng sẽ đổi cả mô hình rủi ro của
+task; client muốn failover thì đặt tên một pool, nơi các thành viên được chủ máy chọn trước. Hàng "retry dùng lại
+worktree" ở bảng trên: giữ nguyên hành vi, nhưng mỗi `attempts[]` của task worktree nay mang `scope` lúc bị bỏ để phân
+biệt file của attempt đó với file của attempt sau (không reset worktree: `git reset/clean` trong cây mà agent vừa ghi
+`.git/config` vào là đường chạy lệnh do repo khai báo).

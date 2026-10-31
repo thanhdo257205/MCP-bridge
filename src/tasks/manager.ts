@@ -49,6 +49,10 @@ export interface Task {
 export interface TaskAttempt {
   agent: string; status: Status; error: string | null; exit_code: number | null; signal: string | null;
   ended_at: string | null; duration_ms: number; stdout_tail: string; stderr_tail: string;
+  /** A worktree task only: what this attempt had changed when it was given up on. The retry reuses the worktree, so the final scope is the sum of every attempt. */
+  scope?: ScopeReport;
+  /** The process trees this attempt left behind and the bridge released before the retry started. */
+  cleanup?: TreeReport;
 }
 /** How much of an abandoned attempt's log is kept: enough to show why it stopped, small enough not to multiply the record. */
 const ATTEMPT_TAIL_CHARS = 4000;
@@ -148,6 +152,10 @@ export class TaskManager {
       if (pickedId) {
         const found = this.agents.find(a => a.adapter.id === pickedId);
         if (found) return found;
+      }
+      // The pool exists; it is its members that are out. Falling through would call a real pool an "Unknown agent".
+      if (id !== undefined && !this.agents.some(item => item.adapter.id === id)) {
+        throw new Error(`Pool "${id}" has no healthy member right now (members: ${pool.members.join(', ')}); a member in cooldown or unavailable is skipped. Check agents_list or retry later`);
       }
     }
     if (id !== undefined) {
@@ -535,17 +543,34 @@ export class TaskManager {
                     // The first attempt's evidence survives the retry: the error, exit and output tails are what a
                     // reviewer needs to tell "quota exhausted" from "the agent did the work badly", and the next
                     // attempt's own flush overwrites task.stdout wholesale.
+                    // The retry works in the same worktree, so whatever the abandoned attempt left behind stays in the diff;
+                    // recording it now lets a reviewer tell that attempt's files from the next one's.
+                    // What the abandoned agent left running is released first, and before the retry starts: a leftover MCP
+                    // server or shell would otherwise keep the worktree pinned and could still write into the files the
+                    // next attempt is about to work on.
+                    const abandonedCleanup = await this.releaseAttemptTree(child.pid ?? null, started, watch);
+                    let abandonedScope: ScopeReport | undefined;
+                    if (worktree) { try { abandonedScope = await inspectScope(worktree, task.owns); } catch { /* the retry goes ahead without it */ } }
                     (task.attempts ??= []).push({
                       agent: agent.adapter.id, status: 'failed', error: task.error, exit_code: code, signal,
                       ended_at: task.ended_at, duration_ms: task.duration_ms,
-                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr)
+                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr),
+                      cleanup: abandonedCleanup,
+                      ...(abandonedScope ? {scope: abandonedScope} : {})
                     });
                     entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
                     task.agent = nextId;
                     task.error = null;
                     // The execution lock is deliberately NOT released here: this task still holds the lane, so the
                     // retry cannot let a second ordinary task in and a release can never delete a lock another task owns.
-                    return this.launch(entry);
+                    try { await this.launch(entry); return; }
+                    catch (error) {
+                      // Nobody awaits this callback, so a retry that cannot start must end the task here: left to reject, the
+                      // task would stay "running" with no process while it keeps the lane. launch() already removed the
+                      // lock it held; the finalization below runs for the attempt that did exit and records why it ended.
+                      ownsLock = false; entry.holdsLock = false; entry.pending = undefined;
+                      task.error = `Failover to "${nextId}" could not start: ${error instanceof Error ? redact(error.message) : 'unknown error'}`;
+                    }
                   }
                 }
               }
@@ -609,6 +634,15 @@ export class TaskManager {
       }
       throw error;
     }
+  }
+
+  /** The release for an attempt that a failover is about to replace; the final reading of its watcher is held to the same budget as the release. */
+  private async releaseAttemptTree(pid: number | null, startedAtMs: number, watch: TreeWatch): Promise<TreeReport> {
+    const observed = await Promise.race([
+      Promise.resolve().then(() => watch.stop()),
+      new Promise<ProcessInfo[]>(resolve => { const timer = setTimeout(() => resolve([]), REAP_BUDGET_MS); timer.unref?.(); })
+    ]).catch(() => [] as ProcessInfo[]);
+    return this.releaseOwnedTree(pid, startedAtMs, observed);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, readdir, realpath, rmdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { workspaceChanges } from '../changes.js';
 import { inside } from '../security/workspace.js';
@@ -205,34 +205,76 @@ export async function sweepStaleWorktrees(stateDirectory: string, options: {
 }
 
 
-/** Worktree paths the repository still has a record for, including the ones whose directory is already gone. */
-async function listedWorktrees(repo: string): Promise<string[]> {
+interface ListedWorktree { path: string; locked: boolean; }
+
+/** Worktrees the repository still has a record for, including the ones whose directory is already gone. */
+async function listedWorktrees(repo: string): Promise<ListedWorktree[]> {
   const text = await git(repo, ['worktree', 'list', '--porcelain']);
-  return text.split('\n').filter(line => line.startsWith('worktree ')).map(line => line.slice('worktree '.length).trim()).filter(Boolean);
+  const listed: ListedWorktree[] = [];
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/);
+    const line = lines.find(item => item.startsWith('worktree '));
+    const target = line?.slice('worktree '.length).trim();
+    if (target) listed.push({path: target, locked: lines.some(item => item === 'locked' || item.startsWith('locked '))});
+  }
+  return listed;
 }
 
 /**
- * Clears the `<repo>/.git/worktrees/<name>` entries left behind when a worktree directory went away without git.
- * Git only prunes records whose directory is already missing, so this is called for the repositories whose
- * directories the sweep itself deleted — a worktree someone is still using is never in scope. `--expire=now` is
- * required because the default grace is three months, which would leave a record the bridge just orphaned in place.
- * Any other missing-directory record in that repository goes with it; that costs an admin entry, not files, and a
- * checkout that is merely unmounted is restored with `git worktree repair`.
+ * A path in one canonical spelling even when its tail no longer exists: the nearest ancestor that does is resolved (so a
+ * Windows 8.3 short name such as `RUNNER~1` and its long form agree), and the missing part is appended unchanged. Git reports
+ * the long form while a temp directory is often handed out in the short one, so comparing raw strings misses real matches.
  */
-export async function pruneWorktrees(repo: string): Promise<{pruned: number; reason: string}> {
+async function canonicalPath(target: string): Promise<string> {
+  const rest: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try { return path.join(await realpath(current), ...rest.reverse()); }
+    catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+const samePath = async (a: string, b: string): Promise<boolean> => {
+  const [left, right] = await Promise.all([canonicalPath(a), canonicalPath(b)]);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+};
+
+/**
+ * Clears the `<repo>/.git/worktrees/<name>` entries the bridge's own worktrees left behind when their directory went
+ * away without git. `git worktree prune` cannot be pointed at one record: it takes every record whose directory is
+ * missing, including a worktree the user made by hand that is merely on an unmounted drive. So the entry is removed
+ * the way prune would remove it, one at a time, and only when its directory is missing, lies under `worktreesRoot`
+ * (where the bridge puts its worktrees) and is not locked. Anything else is left for its owner.
+ */
+export async function pruneWorktrees(repo: string, worktreesRoot: string): Promise<{pruned: number; reason: string}> {
   try {
     const missing: string[] = [];
-    for (const target of await listedWorktrees(repo)) {
-      if (!await exists(target)) missing.push(target);
+    const root = await canonicalPath(worktreesRoot);
+    for (const item of await listedWorktrees(repo)) {
+      if (!item.locked && inside(root, await canonicalPath(item.path)) && !await exists(item.path)) missing.push(item.path);
     }
     if (!missing.length) return {pruned: 0, reason: ''};
-    // The count comes from the record list, not from what `prune -v` prints: that goes to stderr, and a report of
-    // "0 pruned" after a record was in fact cleared would be the worse kind of wrong.
-    await git(repo, ['worktree', 'prune', '-v', '--expire=now']);
-    const remaining = new Set(await listedWorktrees(repo));
-    return {pruned: missing.filter(target => !remaining.has(target)).length, reason: ''};
+    const common = path.resolve(repo, (await git(repo, ['rev-parse', '--git-common-dir'])).trim());
+    const admin = path.join(common, 'worktrees');
+    let pruned = 0;
+    for (const name of await readdir(admin)) {
+      let recorded: string;
+      try { recorded = (await readFile(path.join(admin, name, 'gitdir'), 'utf8')).trim(); } catch { continue; }
+      // `gitdir` holds `<worktree>/.git`, so the worktree is its parent.
+      let matches = false;
+      for (const target of missing) if (await samePath(path.dirname(recorded), target)) { matches = true; break; }
+      if (!matches) continue;
+      await rm(path.join(admin, name), {recursive: true, force: true});
+      pruned++;
+    }
+    return {pruned, reason: ''};
   } catch (error) {
-    return {pruned: 0, reason: error instanceof Error ? error.message : 'git worktree prune failed'};
+    return {pruned: 0, reason: error instanceof Error ? error.message : 'could not prune worktree records'};
   }
 }
 
