@@ -88,7 +88,7 @@ Whether a profile really is a second account depends on the adapter. A `codex` p
 
 Four rules about these ids are easy to get wrong, all measured rather than inferred:
 
-- `agents.enabled` must list **every profile id** you declare, not just the adapters. A profile missing there is silently disabled, and a pool of such members then refuses with `Unknown agent "<pool id>"` — a message that names the pool while the broken line is `enabled`. Omitting `enabled` entirely enables everything; the example keeps the key so you can see it exists, which means a new profile has to be added to that list too.
+- `agents.enabled` must list **every profile id** you declare, not just the adapters. A profile missing there is silently disabled, and a pool of such members then refuses with `Pool "<pool id>" has no healthy member right now` — a message that names the pool while the broken line is `enabled`. Omitting `enabled` entirely enables everything; the example keeps the key so you can see it exists, which means a new profile has to be added to that list too.
 - A `codex` profile also needs the base `codex` id in `enabled`, because that is what makes the bridge probe the codex CLI at all. Without it the profile is unavailable **and reports no warning**, so `agents_list` shows a dead agent with no reason.
 - `model` on a profile is read only for a `codex` profile; an `antigravity` profile runs with the model you choose in the web UI.
 - `priority` and `enabled` accept a pool id without complaining, but the default agent is matched against agent ids only — a pool there silently selects nothing. Name the pool in the `agent` argument of a task instead.

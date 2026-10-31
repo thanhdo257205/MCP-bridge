@@ -149,6 +149,10 @@ export class TaskManager {
         const found = this.agents.find(a => a.adapter.id === pickedId);
         if (found) return found;
       }
+      // The pool exists; it is its members that are out. Falling through would call a real pool an "Unknown agent".
+      if (id !== undefined && !this.agents.some(item => item.adapter.id === id)) {
+        throw new Error(`Pool "${id}" has no healthy member right now (members: ${pool.members.join(', ')}); a member in cooldown or unavailable is skipped. Check agents_list or retry later`);
+      }
     }
     if (id !== undefined) {
       const agent = this.agents.find(item => item.adapter.id === id);
@@ -545,7 +549,14 @@ export class TaskManager {
                     task.error = null;
                     // The execution lock is deliberately NOT released here: this task still holds the lane, so the
                     // retry cannot let a second ordinary task in and a release can never delete a lock another task owns.
-                    return this.launch(entry);
+                    try { await this.launch(entry); return; }
+                    catch (error) {
+                      // Nobody awaits this callback, so a retry that cannot start must end the task here: left to reject, the
+                      // task would stay "running" with no process while it keeps the lane. launch() already removed the
+                      // lock it held; the finalization below runs for the attempt that did exit and records why it ended.
+                      ownsLock = false; entry.holdsLock = false; entry.pending = undefined;
+                      task.error = `Failover to "${nextId}" could not start: ${error instanceof Error ? redact(error.message) : 'unknown error'}`;
+                    }
                   }
                 }
               }

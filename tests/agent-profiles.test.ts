@@ -341,7 +341,66 @@ test('failover visits each profile in the pool at most once and then fails the t
   }
 });
 
-const AGY_JSON = '{"status":"SUCCESS","num_turns":1,"response":"ok"}';
+test('a failover whose retry cannot start ends the task and frees the lane instead of leaving it running', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-nostart-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}));
+  // p1 is cooling after the first task, so the second task is routed to p2, which starts normally.
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), () => {
+    if (launches.filter(item => item === 'p2').length === 1) throw new Error('spawn exploded');
+  });
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const done = await Promise.race([
+      manager.wait(started.task_id),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the task never ended: it is stuck running with no process')), 5000).unref())
+    ]);
+    assert.deepEqual(launches, ['p1', 'p2']);
+    assert.equal(done.status, 'failed');
+    assert.equal(done.process_running, false);
+    assert.match(done.error ?? '', /Failover to "p2" could not start: spawn exploded/);
+    assert.equal(done.attempts?.length, 1, 'the abandoned attempt is still on the record');
+    assert.equal(existsSync(path.join(state, 'execution.lock')), false, 'the lock the failed retry held is released');
+    // The lane is free: the next ordinary task starts and completes (p1 cools down, p2 now starts normally).
+    const next = await manager.delegate({task: 'do more work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool'});
+    const second = await manager.wait(next.task_id);
+    assert.equal(second.status, 'completed');
+    assert.equal(second.agent, 'p2');
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a pool with no healthy member says so instead of calling the pool an unknown agent', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-pool-empty-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: OK_LINES, code: 0}));
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}));
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    globalHealthTracker.markCooldown('p1', 60);
+    globalHealthTracker.markCooldown('p2', 60);
+    await assert.rejects(
+      manager.delegate({task: 'x', workspace, acceptance_criteria: ['ok'], agent: 'codex-pool'}),
+      /Pool "codex-pool" has no healthy member right now \(members: p1, p2\)/
+    );
+    assert.deepEqual(launches, []);
+  } finally {
+    healthyPool();
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const AGY_JSON ='{"status":"SUCCESS","num_turns":1,"response":"ok"}';
 const AGY_STREAM = '{"event":"result","result":{"status":"SUCCESS","num_turns":1,"response":"ok"}}';
 
 /** A fake `agy` that answers with a successful final envelope and records the argv of every launch. */
