@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isQuotaError, isStrongQuotaError } from './quota.js';
-import { startProcess, terminateOwned, type ResolvedCommand } from '../antigravity/process.js';
+import type { ResolvedCommand } from '../antigravity/process.js';
+import { captureOutput } from './probe.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, RawRun } from './types.js';
 
 const CAPABILITIES: AgentCapability[] = ['code', 'review', 'test', 'research', 'long-run'];
@@ -89,21 +90,6 @@ export function codexAgent(command: ResolvedCommand, status: AgentStatus, option
   return {adapter: codexAdapter(command, options), status, enabled: true, prefixArgs: command.prefixArgs};
 }
 
-interface Capture { code: number | null; text: string; }
-async function capture(command: ResolvedCommand, args: string[], cwd: string, extraEnvPassthrough: string[]): Promise<Capture> {
-  return new Promise((resolve, reject) => {
-    const child = startProcess(command.executable, [...command.prefixArgs, ...args], cwd, {extraEnvPassthrough});
-    let text = '';
-    let exceeded = false;
-    const timer = setTimeout(() => { exceeded = true; void terminateOwned(child).catch(reject); }, 10000);
-    const append = (chunk: Buffer) => { if (text.length < 32768) text += chunk.toString().slice(0, 32768 - text.length); };
-    child.stdout!.on('data', append);
-    child.stderr!.on('data', append);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', code => { clearTimeout(timer); exceeded ? reject(new Error('Codex inspection timed out')) : resolve({code, text}); });
-  });
-}
-
 /** Non-interactive `codex exec` support is the only contract this adapter relies on. */
 export async function detectCodex(command: ResolvedCommand, options: {cwd?: string; extraEnvPassthrough?: string[]} = {}): Promise<AgentStatus> {
   const cwd = options.cwd ?? process.cwd();
@@ -112,8 +98,8 @@ export async function detectCodex(command: ResolvedCommand, options: {cwd?: stri
     id: 'codex', label: 'Codex', available, version, executable: command.source, capabilities: CAPABILITIES, warnings
   });
   try {
-    const version = await capture(command, ['--version'], cwd, extra);
-    const help = await capture(command, ['exec', '--help'], cwd, extra);
+    const version = await captureOutput('Codex', command, ['--version'], cwd, extra);
+    const help = await captureOutput('Codex', command, ['exec', '--help'], cwd, extra);
     const versionText = version.text.trim().split(/\r?\n/)[0] ?? '';
     const parsed = /codex-cli\s+([^\s]+)/i.exec(versionText)?.[1] ?? (versionText || null);
     const missing = REQUIRED_FLAGS.filter(flag => !new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|,|$)`).test(help.text));

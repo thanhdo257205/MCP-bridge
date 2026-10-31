@@ -1,4 +1,5 @@
-import { startProcess, terminateOwned, type ResolvedCommand } from '../antigravity/process.js';
+import type { ResolvedCommand } from '../antigravity/process.js';
+import { captureOutput } from './probe.js';
 import type { AgentAdapter, AgentCapability, AgentResult, AgentRuntime, AgentStatus, AgentTask, Invocation, RawRun } from './types.js';
 import { isQuotaError } from './quota.js';
 
@@ -106,21 +107,6 @@ export function opencodeAgent(command: ResolvedCommand, status: AgentStatus, opt
   return {adapter: opencodeAdapter(command, options), status, enabled: true, prefixArgs: command.prefixArgs};
 }
 
-interface Capture { code: number | null; text: string; }
-function capture(command: ResolvedCommand, args: string[], cwd: string, extraEnvPassthrough: string[]): Promise<Capture> {
-  return new Promise((resolve, reject) => {
-    const child = startProcess(command.executable, [...command.prefixArgs, ...args], cwd, {extraEnvPassthrough});
-    let text = '';
-    let exceeded = false;
-    const timer = setTimeout(() => { exceeded = true; void terminateOwned(child).catch(reject); }, 10000);
-    const append = (chunk: Buffer) => { if (text.length < 32768) text += chunk.toString().slice(0, 32768 - text.length); };
-    child.stdout!.on('data', append);
-    child.stderr!.on('data', append);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', code => { clearTimeout(timer); exceeded ? reject(new Error('OpenCode inspection timed out')) : resolve({code, text}); });
-  });
-}
-
 /** Non-interactive `opencode run --format json` is the only contract this adapter relies on. */
 export async function detectOpenCode(command: ResolvedCommand, opts: {cwd?: string; extraEnvPassthrough?: string[]} = {}): Promise<AgentStatus> {
   const cwd = opts.cwd ?? process.cwd();
@@ -129,8 +115,8 @@ export async function detectOpenCode(command: ResolvedCommand, opts: {cwd?: stri
     id: 'opencode', label: 'OpenCode', available, version, executable: command.executable, capabilities: CAPABILITIES, warnings
   });
   try {
-    const version = await capture(command, ['--version'], cwd, extra);
-    const help = await capture(command, ['run', '--help'], cwd, extra);
+    const version = await captureOutput('OpenCode', command, ['--version'], cwd, extra);
+    const help = await captureOutput('OpenCode', command, ['run', '--help'], cwd, extra);
     const parsed = version.text.trim().split(/\r?\n/)[0]?.replace(/^opencode\s+/i, '').replace(/^v/i, '') || null;
     if (version.code !== 0) return status(false, null, ['opencode --version failed']);
     if (help.code !== 0) return status(false, parsed, ['opencode run --help failed']);
