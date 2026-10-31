@@ -421,8 +421,10 @@ chứng là Chrome, và người sau sửa trang này phải xem lại bằng Ch
    `deactivated_workspace`); mọi bước live đều là `agy`. Cần `codex login` rồi chạy lại `scripts/live.ts`.
    **(Đã hết hiệu lực 2026-10-28: `codex` 0.163.0 chạy lại bình thường, một task codex thật đã live-xanh — xem mục 6.3.
    Phần còn đúng: các **bước mission** vẫn chưa chạy bằng codex.)**
-7. Retention mission (20) đuổi bản ghi **kẻ trước, không hỏi**: plan cũ bị đuổi thì bước của nó thành `lost` mãi mãi.
-   Chưa có cảnh báo chủ máy, chưa có cách "ghim" một plan.
+7. Retention mission (20) đuổi bản ghi: plan bị đuổi thì bước của nó thành `lost` mãi mãi. **(Đã đổi 2026-10-31.)** Plan đã xong
+   hoặc đã hủy (không còn bước `ready`/`pending`) bị đuổi **trước**, kể cả khi nó mới hơn một plan còn việc; chỉ khi mọi plan
+   đều còn việc thì plan cũ nhất mới bị đuổi, và log ghi `WARNING: dropped mission record … with N step(s) not yet
+   dispatched`. Vẫn chưa có cách "ghim" một plan và chưa có cảnh báo trên UI.
 
 ### 5.7 Quy tắc cho người tiếp theo (mission)
 
@@ -747,7 +749,9 @@ Vài thứ chỉ ra khi đo, không có cách nào khác để biết:
 - **`agy` trên máy này là native exe**, không phải shim npm: `%LOCALAPPDATA%\agy\bin\agy.exe` → `prefixArgs` rỗng.
   `agy models` hiện trả sáu id (`gemini-3.8-flash-{high,medium,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
   `gpt-oss-120b-medium`), tức là họ model đã đổi so với các đợt trước — `VERIFIED_AGY_VERSIONS` đã cập nhật ở mục 6.10,
-  còn họ model thì chưa có test nào khóa tên id cụ thể.
+  còn họ model thì chưa có test nào khóa tên id cụ thể. (2026-10-31: không thêm — `tests/models.test.ts` đã ghim cách parse
+  trên một mẫu `agy models`, còn việc "id này có thật" chỉ kiểm được bằng `agy models` sau khi đăng nhập, mà lần thử hôm
+  nay `agy` báo `Please sign in to view available models`. Một test đơn vị không phát hiện được CLI đổi họ model.)
 - **Test argv phải tự xóa `BRIDGE_AGY_PERMISSIONS`.** `permissionState` đọc env trước file, nên nếu shell của người chạy để
   leftover một mức nào đó thì argv trong test do env quyết định, không phải do đoạn code đang bị test.
 
