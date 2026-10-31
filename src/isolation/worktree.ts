@@ -220,8 +220,27 @@ async function listedWorktrees(repo: string): Promise<ListedWorktree[]> {
   return listed;
 }
 
-const samePath = (a: string, b: string): boolean => {
-  const [left, right] = [path.resolve(a), path.resolve(b)];
+/**
+ * A path in one canonical spelling even when its tail no longer exists: the nearest ancestor that does is resolved (so a
+ * Windows 8.3 short name such as `RUNNER~1` and its long form agree), and the missing part is appended unchanged. Git reports
+ * the long form while a temp directory is often handed out in the short one, so comparing raw strings misses real matches.
+ */
+async function canonicalPath(target: string): Promise<string> {
+  const rest: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try { return path.join(await realpath(current), ...rest.reverse()); }
+    catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+const samePath = async (a: string, b: string): Promise<boolean> => {
+  const [left, right] = await Promise.all([canonicalPath(a), canonicalPath(b)]);
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 };
 
@@ -235,8 +254,9 @@ const samePath = (a: string, b: string): boolean => {
 export async function pruneWorktrees(repo: string, worktreesRoot: string): Promise<{pruned: number; reason: string}> {
   try {
     const missing: string[] = [];
+    const root = await canonicalPath(worktreesRoot);
     for (const item of await listedWorktrees(repo)) {
-      if (!item.locked && inside(path.resolve(worktreesRoot), path.resolve(item.path)) && !await exists(item.path)) missing.push(item.path);
+      if (!item.locked && inside(root, await canonicalPath(item.path)) && !await exists(item.path)) missing.push(item.path);
     }
     if (!missing.length) return {pruned: 0, reason: ''};
     const common = path.resolve(repo, (await git(repo, ['rev-parse', '--git-common-dir'])).trim());
@@ -246,7 +266,9 @@ export async function pruneWorktrees(repo: string, worktreesRoot: string): Promi
       let recorded: string;
       try { recorded = (await readFile(path.join(admin, name, 'gitdir'), 'utf8')).trim(); } catch { continue; }
       // `gitdir` holds `<worktree>/.git`, so the worktree is its parent.
-      if (!missing.some(target => samePath(path.dirname(recorded), target))) continue;
+      let matches = false;
+      for (const target of missing) if (await samePath(path.dirname(recorded), target)) { matches = true; break; }
+      if (!matches) continue;
       await rm(path.join(admin, name), {recursive: true, force: true});
       pruned++;
     }
