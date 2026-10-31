@@ -31,7 +31,9 @@ export function opencodeAdapter(command: ResolvedCommand, options: OpenCodeOptio
       const model = task.model ?? options.model;
       if (model) args.push('--model', model);
       // Without --auto opencode still writes inside the workspace; --auto also approves what its config would otherwise ask about.
-      if (options.autoApprove || task.autonomy === 'full') args.push('--auto');
+      // Only the owner can turn it on (agents.opencode_auto_approve): the task's `autonomy` is chosen by the delegating client and is an
+      // instruction to the agent, never a permission grant, so it must not reach a flag that takes approval away.
+      if (options.autoApprove) args.push('--auto');
       return {
         executable: command.executable,
         args: [...command.prefixArgs, ...args],

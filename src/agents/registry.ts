@@ -85,8 +85,11 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
       opencodeStatus = {...opencodeStatus, warnings: [`OpenCode CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
     }
   }
+  const opencodeAutoWarning = 'Agent "opencode" is configured to auto-approve permissions (opencode_auto_approve): tasks run with opencode --auto';
+  if (opencodeEnabled && settings.opencode_auto_approve) opencodeStatus = {...opencodeStatus, warnings: [...opencodeStatus.warnings, opencodeAutoWarning]};
   agents.push(opencodeAgent(opencodeCommand, opencodeStatus, {
     model: settings.opencode_model,
+    autoApprove: settings.opencode_auto_approve
   }));
 
   if (settings.profiles) {
@@ -178,10 +181,12 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
           id: profileId, label, available: isProfileEnabled && available,
           version: version || null, executable: cmd || null,
           capabilities: CAPABILITIES,
-          warnings: isProfileEnabled ? [...opencodeStatus.warnings.filter(w => !w.includes('Disabled')), ...profileWarnings] : profileWarnings
+          warnings: isProfileEnabled
+            ? [...opencodeStatus.warnings.filter(w => !w.includes('Disabled') && w !== opencodeAutoWarning), ...profileWarnings, ...(settings.opencode_auto_approve ? [opencodeAutoWarning.replace('"opencode"', `"${profileId}"`)] : [])]
+            : profileWarnings
         };
         agents.push({
-          adapter: opencodeAdapter({executable: cmd, prefixArgs, source: 'opencode-profile'}, {id: profileId, label, model: profile.model ?? settings.opencode_model, env: profile.env}),
+          adapter: opencodeAdapter({executable: cmd, prefixArgs, source: 'opencode-profile'}, {id: profileId, label, model: profile.model ?? settings.opencode_model, env: profile.env, autoApprove: settings.opencode_auto_approve}),
           status, enabled: isProfileEnabled, prefixArgs
         });
       }

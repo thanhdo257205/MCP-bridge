@@ -378,7 +378,8 @@ export class TaskManager {
         prompt: promptFor(promptInput, entry.request?.client), workspace: execWorkspace,
         timeoutSeconds: antigravity&&soft.enabled?absoluteLimit:timeout,
         autonomy, owns: task.owns, taskId: task.task_id, stateDirectory: this.runtime.stateDirectory,
-        model: antigravity ? entry.request?.model ?? null : this.config.agents?.codex_model,
+        // The task's model is a per-family setting: a codex model handed to another family would override that family's own.
+        model: antigravity ? entry.request?.model ?? null : agent.adapter.family === 'codex' ? this.config.agents?.codex_model : undefined,
         extraArgs, promptTransport: transport
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});

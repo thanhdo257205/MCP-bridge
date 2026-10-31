@@ -48,7 +48,9 @@ const agentsSchema = z.object({
   codex_executable: z.string().min(1).max(4096).optional(),
   codex_model: z.string().min(1).max(200).optional(),
   opencode_executable: z.string().min(1).max(4096).optional(),
-  opencode_model: z.string().min(1).max(200).optional()
+  opencode_model: z.string().min(1).max(200).optional(),
+  /** Passes `--auto` (approve every permission opencode's own config does not deny). Owner-only, like the codex sandbox settings: no task can ask for it. */
+  opencode_auto_approve: z.boolean().optional()
 }).strict();
 
 const schema = z.object({

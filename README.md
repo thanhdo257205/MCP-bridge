@@ -99,9 +99,10 @@ Four rules about these ids are easy to get wrong, all measured rather than infer
 
 The owner's Settings reach an `antigravity` **profile** exactly as they reach `antigravity`, because they key on the adapter behind the id, not on the id: the model, the permission level, the effort, and the soft deadline with its `--log-file` and its extended `--print-timeout` are all on the command line of a profile task. Read that as a widening, not a cosmetic fix — before, a profile was locked to the CLI's own defaults and could not be given `--dangerously-skip-permissions` at all; now your permission level applies to its tasks too, so a profile is no more restricted than the agent it comes from.
 
-Two knobs are opt-in because they widen what the bridge can reach. Neither is reachable from a task, and neither stays invisible: the codex pair is reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
+Three knobs are opt-in because they widen what the bridge can reach. None is reachable from a task, and none stays invisible: the codex pair and `opencode_auto_approve` are reported in `agents_list` warnings, and the XERJ pair in `/api/xerj/status` plus the refusal `code_search` gives while it is off.
 
 - `codex_sandbox: "danger-full-access"` / `codex_ask_for_approval: "never"` — readable from the bridge's own config file only. No task, tool argument or MCP client can ask for them, and `--ask-for-approval` is passed where codex accepts it (before `exec`).
+- `agents.opencode_auto_approve: true` — passes `opencode run --auto`, which approves every permission OpenCode's own config does not deny. OpenCode itself is opt-in (list it in `agents.enabled`). A task's `autonomy: "full"` never adds the flag, for the same reason it never changes the codex sandbox: `autonomy` is an instruction, not a permission grant.
 - `xerj.enabled` / `xerj.auto_reference` — both default to `false`. Turning them on sends task text to another local service and can place a retrieved passage inside the prompt an agent follows, which is a decision for the machine's owner, not for a delegating client.
 
 ## Missions
