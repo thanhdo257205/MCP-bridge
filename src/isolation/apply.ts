@@ -68,13 +68,15 @@ const literal = (file: string) => `:(literal)${file}`;
 export async function applyWorktreeChanges(input: ApplyInput): Promise<ApplyResult> {
   try {
     const prefix = await prefixOf(input.toplevel, input.workspace);
-    const scope = prefix ? [prefix] : ['.'];
+    const scope = prefix ? [literal(prefix)] : ['.'];
     const owns = input.owns.map(normalizeOwn);
     if (!owns.length) throw new Refusal('The task declared no owned paths, so there is nothing it was allowed to change');
 
+    // Renames are never detected: with them on, `--name-only` lists only the new name, so a file moved out of a protected path
+    // would be deleted from the workspace without the owned-paths check ever seeing it.
     // Staging is only a way to include new files in the diff: it touches the worktree's own index, never the workspace.
     await git(input.worktree, ['add', '-A', '--', ...scope]);
-    const names = (await git(input.worktree, ['diff', '--cached', '--name-only', '-z', 'HEAD', '--', ...scope])).split('\0').filter(Boolean);
+    const names = (await git(input.worktree, ['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD', '--', ...scope])).split('\0').filter(Boolean);
     if (!names.length) throw new Refusal('The worktree has no changes to apply');
     if (names.length > MAX_FILES) throw new Refusal(`The worktree changes ${names.length} files; apply is limited to ${MAX_FILES}`);
     const relative = names.map(name => prefix && name.startsWith(`${prefix}/`) ? name.slice(prefix.length + 1) : name);
@@ -82,10 +84,10 @@ export async function applyWorktreeChanges(input: ApplyInput): Promise<ApplyResu
     if (outside.length) throw new Refusal(`Files outside the task's owned paths were changed (${outside.slice(0, 5).join(', ')}); review them in the worktree`);
 
     // A symlink or a submodule pointer is more than text: it can point outside the workspace, so it is never applied from here.
-    const raw = (await git(input.worktree, ['diff', '--cached', '--raw', '-z', 'HEAD', '--', ...scope])).split('\0');
+    const raw = (await git(input.worktree, ['diff', '--cached', '--no-renames', '--raw', '-z', 'HEAD', '--', ...scope])).split('\0');
     if (raw.some(field => /^:(?:12|16)0000 /.test(field) || /^:\d+ (?:12|16)0000 /.test(field))) throw new Refusal('The change includes a symlink or a submodule, which is not applied from here; review it in the worktree');
 
-    const patch = await git(input.worktree, ['diff', '--cached', '--binary', '--full-index', '--no-ext-diff', '--no-textconv', 'HEAD', '--', ...scope]);
+    const patch = await git(input.worktree, ['diff', '--cached', '--no-renames', '--binary', '--full-index', '--no-ext-diff', '--no-textconv', 'HEAD', '--', ...scope]);
     if (Buffer.byteLength(patch) > MAX_PATCH_BYTES) throw new Refusal('The change is larger than the apply limit; review it in the worktree');
 
     // A file the owner is editing right now is theirs to merge by hand, even if the patch would happen to fit.

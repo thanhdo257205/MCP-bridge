@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { inside } from '../security/workspace.js';
 import { redact } from '../security/redact.js';
 import { gitEnvironment } from './apply.js';
 
@@ -41,6 +43,9 @@ function capture(cwd: string, args: string[]): Promise<Captured> {
 
 export async function worktreeFileDiff(worktree: string, file: string): Promise<FileDiff> {
   if (!isRelativeFilePath(file)) throw new Error('path must be a relative path inside the worktree');
+  // A link in the worktree (a junction on Windows) can lead anywhere; the diff reads files, so the real location must stay inside it.
+  const [base, real] = await Promise.all([realpath(worktree), realpath(path.join(worktree, file)).catch(() => null)]);
+  if (real !== null && !inside(base, real)) throw new Error('path leaves the worktree through a link, so it is not read');
   const literal = `:(literal)${file}`;
   // Tracked files diff against the base commit; a file the agent created is not in the index, so it is shown as all added lines.
   const tracked = (await capture(worktree, ['ls-files', '--error-unmatch', '-z', '--', literal])).code === 0;
