@@ -9,6 +9,7 @@ import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput
 import { inside, validateWorkspace } from '../security/workspace.js';
 import { appendDecision } from '../decisions.js';
 import { applyWorktreeChanges, repositoryRoot } from '../isolation/apply.js';
+import { worktreeFileDiff, type FileDiff } from '../isolation/diff.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
 import { startProcess, terminateOwned, type ProcessOptions } from '../antigravity/process.js';
@@ -719,12 +720,12 @@ export class TaskManager {
     this.decisionQueue = run.catch(() => undefined);
     return run;
   }
-  private async reviewableTask(id: string): Promise<Task> {
+  private async reviewableTask(id: string, allowRunning = false): Promise<Task> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown or expired task_id');
     const task = entry.task;
     if (task.isolation !== 'worktree' || !task.worktree) throw new Error('This task did not run in a worktree');
-    if (task.status === 'queued' || task.status === 'running') throw new Error('The task is still running');
+    if (!allowRunning && (task.status === 'queued' || task.status === 'running')) throw new Error('The task is still running');
     if (task.discarded_at) throw new Error('This task worktree was already discarded');
     const [root, canonical] = await Promise.all([
       realpath(path.join(this.runtime.stateDirectory, 'worktrees')).catch(() => null),
@@ -736,6 +737,11 @@ export class TaskManager {
   }
   private recordDecision(id: string, action: 'apply' | 'discard', ok: boolean, detail: string): Promise<void> {
     return appendDecision(this.runtime.stateDirectory, {at: new Date().toISOString(), task_id: id, action, ok, detail});
+  }
+  /** One file's content diff from a worktree task. Read only, so it is allowed while the task still runs. */
+  async fileDiff(id: string, file: string): Promise<FileDiff> {
+    const task = await this.reviewableTask(id, true);
+    return worktreeFileDiff(task.worktree!, file);
   }
   applyTask(id: string): Promise<{task: TaskSummary; files: string[]}> {
     return this.enqueueDecision(async () => {

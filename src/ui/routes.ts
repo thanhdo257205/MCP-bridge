@@ -9,6 +9,7 @@ import { paths } from '../paths.js';
 import { knownUpdate, readPackageInfo } from '../update.js';
 import { workspaceChanges } from '../changes.js';
 import { readDecisions } from '../decisions.js';
+import { isRelativeFilePath } from '../isolation/diff.js';
 import { validModelId, writeModel } from '../models.js';
 import { readProgress, writeProgress } from '../progress.js';
 import { readUsage, summarizeUsage } from '../usage.js';
@@ -166,6 +167,12 @@ export async function handleUi(req: IncomingMessage, res: ServerResponse, ctx: U
       const body = await readJson(req);
       if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
       json(res, 200, {task: await ctx.manager.discardTask(discard[1])}); return true;
+    }
+    const fileDiff = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/diff$`));
+    if (fileDiff && method === 'GET') {
+      const file = new URL(req.url ?? '', 'http://localhost').searchParams.get('path');
+      if (!isRelativeFilePath(file)) { json(res, 400, {error: 'path must be a relative path inside the worktree'}); return true; }
+      json(res, 200, await ctx.manager.fileDiff(fileDiff[1], file)); return true;
     }
     if (pathname === '/ui/api/decisions' && method === 'GET') { json(res, 200, {decisions: await readDecisions(ctx.manager.stateDirectory)}); return true; }
     const cancel = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/cancel$`));

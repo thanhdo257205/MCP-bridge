@@ -375,6 +375,36 @@ function collapsible(key, title, ...body) {
 function more(key, ...body) { return collapsible(key, 'Xem thêm', ...body); }
 
 const CHANGE_LABEL = {modified: 'Sửa', deleted: 'Xóa', added: 'Thêm', 'type-changed': 'Đổi kiểu'};
+/* ---------- Content diff of one changed file (worktree tasks only; read only, secrets filtered on the server) ---------- */
+async function loadDiff(task, file) {
+  state.diff = {task_id: task.task_id, path: file, loading: true}; patch();
+  try { state.diff = {task_id: task.task_id, path: file, data: await api(`tasks/${task.task_id}/diff?path=${encodeURIComponent(file)}`)}; }
+  catch (error) { state.diff = {task_id: task.task_id, path: file, error: error.message}; }
+  patch();
+}
+/** A row is a button only where a diff can be read: a task that ran in a worktree, which the bridge owns. */
+function rowProps(task, file) {
+  if (task.isolation !== 'worktree' || task.discarded_at) return {class: 'change-row'};
+  const open = () => loadDiff(task, file);
+  return {class: 'change-row clickable', tabindex: '0', role: 'button', 'aria-label': `Xem diff của ${file}`, onclick: open,
+    onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } }};
+}
+const diffLineClass = line => line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ') ? 'meta'
+  : line.startsWith('@@') ? 'hunk' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : '';
+function diffViewer(task) {
+  const current = state.diff && state.diff.task_id === task.task_id ? state.diff : null;
+  if (!current) return null;
+  const close = h('button', {class: 'btn small', onclick: () => { state.diff = null; patch(); }, text: 'Đóng'});
+  const head = h('div', {class: 'change-head'}, h('strong', {class: 'mono', text: current.path}), close);
+  if (current.loading) return h('div', {class: 'diff-box'}, head, h('div', {class: 'typing'}, h('span', {class: 'spinner'}), 'Đang đọc diff…'));
+  if (current.error) return h('div', {class: 'diff-box'}, head, h('div', {class: 'callout bad', text: current.error}));
+  const data = current.data;
+  if (!data.changed) return h('div', {class: 'diff-box'}, head, h('p', {class: 'muted', text: 'File này không có thay đổi so với commit gốc của worktree.'}));
+  if (data.binary) return h('div', {class: 'diff-box'}, head, h('p', {class: 'muted', text: 'File nhị phân: chỉ biết là có thay đổi, không hiện được nội dung.'}));
+  return h('div', {class: 'diff-box'}, head,
+    h('pre', {class: 'log diff'}, data.diff.split('\n').map(line => h('span', {class: diffLineClass(line), text: line}))),
+    data.truncated ? h('div', {class: 'callout warn', text: 'Diff dài nên chỉ hiện phần đầu.'}) : null);
+}
 function changesBody(task) {
   const c = state.changes && state.changes.task_id === task.task_id ? state.changes : null;
   const refresh = h('button', {class: 'btn small', onclick: () => loadChanges(task.task_id), disabled: Boolean(c && c.loading), text: c && c.data ? 'Làm mới' : 'Xem thay đổi'});
@@ -384,16 +414,18 @@ function changesBody(task) {
   const d = c.data;
   if (!d.available) return [h('div', {class: 'callout warn', text: d.reason || 'Không đọc được thay đổi.'}), refresh];
   const rows = [
-    ...d.changes.map(item => h('li', {class: 'change-row'}, h('span', {class: `change-kind ${item.status}`, text: CHANGE_LABEL[item.status] || item.status}),
+    ...d.changes.map(item => h('li', rowProps(task, item.path), h('span', {class: `change-kind ${item.status}`, text: CHANGE_LABEL[item.status] || item.status}),
       h('span', {class: 'change-path mono', text: item.path}),
       h('span', {class: 'change-count mono', text: item.added === null ? 'nhị phân' : `+${item.added} −${item.deleted}`}))),
-    ...d.untracked.map(item => h('li', {class: 'change-row'}, h('span', {class: 'change-kind untracked', text: 'Mới'}),
+    ...d.untracked.map(item => h('li', rowProps(task, item.path), h('span', {class: 'change-kind untracked', text: 'Mới'}),
       h('span', {class: 'change-path mono', text: item.path}), h('span', {class: 'change-count mono', text: item.bytes === null ? '' : bytes(item.bytes)})))
   ];
   return [
     h('div', {class: 'change-head'}, h('strong', {text: rows.length ? `${d.changes.length} file đã sửa hoặc xóa · ${d.untracked.length} file mới chưa theo dõi` : 'Không có thay đổi nào so với HEAD.'}), refresh),
-    h('p', {class: 'muted', text: `So với commit ${d.head ? d.head.slice(0, 8) : '(repo chưa có commit)'}; gồm cả thay đổi đã có từ trước khi task chạy. Chỉ hiện tên file và số dòng, không có nội dung.`}),
+    h('p', {class: 'muted', text: `So với commit ${d.head ? d.head.slice(0, 8) : '(repo chưa có commit)'}; gồm cả thay đổi đã có từ trước khi task chạy. ${task.isolation === 'worktree' && !task.discarded_at ? 'Danh sách chỉ có tên file và số dòng; nội dung đọc ở diff từng file.' : 'Chỉ hiện tên file và số dòng, không có nội dung.'}`}),
+    rows.length && task.isolation === 'worktree' && !task.discarded_at ? h('p', {class: 'muted', text: 'Bấm một file để đọc nội dung thay đổi (đã lọc secret).'}) : null,
     rows.length ? h('ul', {class: 'change-list'}, rows) : null,
+    diffViewer(task),
     d.truncated ? h('div', {class: 'callout warn', text: 'Chỉ hiện 500 mục đầu tiên của mỗi nhóm.'}) : null
   ];
 }
@@ -437,6 +469,7 @@ function reviewBody(task) {
       h('button', {class: 'btn primary small', disabled: Boolean(block), title: block || 'Ghi thay đổi vào workspace', onclick: () => applyTask(task), text: 'Áp dụng vào workspace'}),
       h('button', {class: 'btn danger small', disabled: Boolean(task.discarded_at), onclick: () => discardTask(task), text: 'Bỏ worktree'})),
     block && !task.applied_at && !task.discarded_at ? h('p', {class: 'muted', text: block}) : null,
+    !task.applied_at && !task.discarded_at ? h('p', {class: 'muted', text: 'Đọc diff từng file ở mục "Thay đổi trong workspace" trước khi áp dụng.'}) : null,
     mine.length ? h('div', {}, h('div', {class: 'msg-head', text: 'Nhật ký quyết định'}),
       h('ul', {class: 'change-list'}, mine.map(item => h('li', {class: 'change-row'},
         h('span', {class: `change-kind ${item.ok ? 'added' : 'deleted'}`, text: item.action === 'apply' ? 'Áp dụng' : 'Bỏ'}),
@@ -874,7 +907,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.diff, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();

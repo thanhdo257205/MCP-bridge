@@ -27,7 +27,7 @@ export interface ApplyInput {
 
 export type ApplyResult = {applied: true; files: string[]; patch_bytes: number} | {applied: false; reason: string};
 
-const gitEnvironment = (): NodeJS.ProcessEnv => ({
+export const gitEnvironment = (): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, SystemRoot: process.env.SystemRoot, COMSPEC: process.env.COMSPEC,
   TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR,
   GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
