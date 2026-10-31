@@ -172,6 +172,29 @@ test('only the owner config turns on --auto, and agents_list says so', async () 
   }
 });
 
+test('an opencode profile declared without agents.enabled is probed and says why it is unavailable', async () => {
+  const base: Config = {
+    allowed_workspaces: [], executable: 'agy', max_timeout_seconds: 900, default_timeout_seconds: 300, max_output_bytes: 262144,
+    max_retained_tasks: 50, max_queued_tasks: 3, extra_env_passthrough: [], prompt_transport: 'argv'
+  };
+  const inspection = {executable: 'agy', supported: true, version: '1.4.7', warnings: []};
+  // `enabled` omitted: every profile is enabled, OpenCode itself is not. The profile must still reach the CLI check and report its result.
+  const registry = await createAgentRegistry({...base, agents: {opencode_executable: 'no-such-opencode-cli', profiles: {'oc-work': {adapter: 'opencode'}}}}, inspection);
+  const profile = registry.agents.find(item => item.adapter.id === 'oc-work')!;
+  assert.equal(profile.status.available, false);
+  assert.ok(profile.status.warnings.some(warning => /OpenCode CLI not found/.test(warning)), `the profile explains itself: ${JSON.stringify(profile.status.warnings)}`);
+  assert.equal(profile.status.label, 'OpenCode (oc-work)', 'the default label names OpenCode, not Antigravity');
+  // The base agent stays opt-in and says so, whatever the profile needed.
+  const baseAgent = registry.agents.find(item => item.adapter.id === 'opencode')!;
+  assert.equal(baseAgent.status.available, false);
+  assert.deepEqual(baseAgent.status.warnings, ['Disabled in the bridge config']);
+  // A profile with its own executable does not inherit the base binary's failure.
+  const own = await createAgentRegistry({...base, agents: {opencode_executable: 'no-such-opencode-cli', profiles: {'oc-own': {adapter: 'opencode', executable: 'no-such-profile-cli'}}}}, inspection);
+  const ownWarnings = own.agents.find(item => item.adapter.id === 'oc-own')!.status.warnings;
+  assert.equal(ownWarnings.length, 1);
+  assert.match(ownWarnings[0], /OpenCode CLI not found/);
+});
+
 test('a codex model in the config never becomes the model of another family\'s task', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'agy-oc-model-'));
   const workspace = path.join(root, 'workspace'); await mkdir(workspace);

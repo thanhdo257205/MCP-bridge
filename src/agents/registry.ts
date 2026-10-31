@@ -72,21 +72,29 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
   }));
 
   const opencodeEnabled = enabled.includes('opencode');
-  let opencodeStatus: AgentStatus = {
+  const autoApproveWarning = (id: string) => `Agent "${id}" is configured to auto-approve permissions (opencode_auto_approve): tasks run with opencode --auto`;
+  // The OpenCode CLI is probed when the `opencode` agent is enabled, and also when an enabled opencode profile relies on it:
+  // OpenCode is opt-in, so a profile declared without `enabled` must not end up unavailable because the base agent is off.
+  const profileUsesOpencode = Object.entries(settings.profiles ?? {}).some(([id, profile]) =>
+    profile.adapter === 'opencode' && !profile.executable && (enabled.includes(id) || !settings.enabled));
+  let opencodeProbe: AgentStatus = {
     id: 'opencode', label: 'OpenCode', available: false, version: null, executable: null,
     capabilities: CAPABILITIES, warnings: ['Disabled in the bridge config']
   };
   let opencodeCommand: ResolvedCommand = {executable: 'opencode', prefixArgs: [], source: 'opencode'};
-  if (opencodeEnabled) {
+  if (opencodeEnabled || profileUsesOpencode) {
     try {
       opencodeCommand = await resolveCommand(settings.opencode_executable ?? 'opencode');
-      opencodeStatus = await detectOpenCode(opencodeCommand, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+      opencodeProbe = await detectOpenCode(opencodeCommand, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
     } catch (error) {
-      opencodeStatus = {...opencodeStatus, warnings: [`OpenCode CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+      opencodeProbe = {...opencodeProbe, warnings: [`OpenCode CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
     }
   }
-  const opencodeAutoWarning = 'Agent "opencode" is configured to auto-approve permissions (opencode_auto_approve): tasks run with opencode --auto';
-  if (opencodeEnabled && settings.opencode_auto_approve) opencodeStatus = {...opencodeStatus, warnings: [...opencodeStatus.warnings, opencodeAutoWarning]};
+  // The base agent is only available when it was asked for; the probe above may exist just for a profile.
+  let opencodeStatus: AgentStatus = opencodeEnabled
+    ? opencodeProbe
+    : {...opencodeProbe, available: false, warnings: ['Disabled in the bridge config']};
+  if (opencodeEnabled && settings.opencode_auto_approve) opencodeStatus = {...opencodeStatus, warnings: [...opencodeStatus.warnings, autoApproveWarning('opencode')]};
   agents.push(opencodeAgent(opencodeCommand, opencodeStatus, {
     model: settings.opencode_model,
     autoApprove: settings.opencode_auto_approve
@@ -96,7 +104,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     for (const [profileId, profile] of Object.entries(settings.profiles)) {
       const isProfileEnabled = enabled.includes(profileId) || (!settings.enabled && true);
       const adapterType = profile.adapter;
-      const label = profile.label ?? (adapterType === 'codex' ? `Codex (${profileId})` : `Antigravity (${profileId})`);
+      const label = profile.label ?? `${{codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode'}[adapterType]} (${profileId})`;
       const profileWarnings: string[] = [];
       if (!isProfileEnabled) profileWarnings.push('Disabled in the bridge config');
 
@@ -161,8 +169,8 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
       } else if (adapterType === 'opencode') {
         let cmd = opencodeCommand.executable;
         let prefixArgs = opencodeCommand.prefixArgs;
-        let available = opencodeStatus.available;
-        let version = opencodeStatus.version;
+        let available = opencodeProbe.available;
+        let version = opencodeProbe.version;
         if (profile.executable) {
           try {
             const resolved = await resolveCommand(profile.executable);
@@ -182,7 +190,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
           version: version || null, executable: cmd || null,
           capabilities: CAPABILITIES,
           warnings: isProfileEnabled
-            ? [...opencodeStatus.warnings.filter(w => !w.includes('Disabled') && w !== opencodeAutoWarning), ...profileWarnings, ...(settings.opencode_auto_approve ? [opencodeAutoWarning.replace('"opencode"', `"${profileId}"`)] : [])]
+            ? [...(profile.executable ? [] : opencodeProbe.warnings.filter(w => !w.includes('Disabled'))), ...profileWarnings, ...(settings.opencode_auto_approve ? [autoApproveWarning(profileId)] : [])]
             : profileWarnings
         };
         agents.push({

@@ -10,7 +10,7 @@ import { addSessionWorkspaces } from './config.js';
 import { recoverExecutionLock } from './tasks/execution-lock.js';
 import { renderSetup, type Client, type Shell } from './setup.js';
 import { DEFAULT_TOOL_TIMEOUT_SECONDS, codexConfigPath, planCodexConfig, readCodexConfig, writeCodexConfig } from './codex-config.js';
-import { freebuffConfigPath, planFreebuffConfig, readFreebuffConfig, writeFreebuffConfig } from './freebuff-config.js';
+import { freebuffConfigPath, isTransientInstall, planFreebuffConfig, readFreebuffConfig, writeFreebuffConfig } from './freebuff-config.js';
 import { readWait } from './wait-setting.js';
 import { configuredPort } from './http.js';
 import { offerSkillInstall, offerSkillUpdate } from './onboarding.js';
@@ -169,6 +169,7 @@ async function setup(args: string[]) {
   if (apply && target === 'freebuff') { await applyFreebuffSetup(project, yes); return; }
   if (apply) { await applyCodexSetup(target, mcpUrl, toolTimeout, yes); return; }
   const clients: Client[] = target === 'both' ? ['codex', 'claude'] : [target];
+  if (target === 'freebuff' && isTransientInstall(paths.packageRoot)) console.error(`Note: this copy of ${BIN} runs from a temporary npx cache, so the stdio command printed below stops working once npm clears it. Install it globally (npm install -g ${pkg.name}) and print it again before using it.`);
   console.log(renderSetup({clients, mcpUrl, shells: shell, bin: BIN, waitSeconds: readWait(paths.stateDirectory) ?? undefined, stdio: stdioCommand()}));
 }
 
@@ -179,6 +180,10 @@ export function stdioCommand(): {command: string; args: string[]} {
 
 /** Shows exactly what would change in Freebuff's .agents/mcp.json and writes it only after a yes (or --yes). */
 async function applyFreebuffSetup(project: string | undefined, yes: boolean) {
+  if (isTransientInstall(paths.packageRoot)) {
+    console.error(`Not changed: this copy of ${BIN} runs from a temporary npx cache (${paths.packageRoot}), which npm can delete, so Freebuff's config would point at a path that stops working. Install it first: npm install -g ${pkg.name}, then run ${BIN} setup freebuff --apply again.`);
+    process.exitCode = 1; return;
+  }
   if (project !== undefined) {
     const info = await stat(project).catch(() => null);
     if (!info?.isDirectory()) throw new Error(`--project must be an existing directory: ${project}`);

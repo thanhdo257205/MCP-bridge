@@ -12,6 +12,12 @@ import path from 'node:path';
  */
 export const SERVER_KEY = 'antigravity';
 
+/**
+ * `npx` unpacks a package into a cache directory (`.../_npx/<hash>/node_modules/...`) that npm may delete at any time. An
+ * absolute path into it must not be written into a client's persistent config: it works today and breaks silently later.
+ */
+export const isTransientInstall = (packageRoot: string): boolean => /[\\/]_npx[\\/]/.test(packageRoot);
+
 export interface StdioCommand {
   command: string;
   args: string[];
