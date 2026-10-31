@@ -145,10 +145,12 @@ test('pruning clears the bridge worktrees whose directory is gone and leaves eve
   const result = await pruneWorktrees(repo, worktrees);
   assert.equal(result.reason, '');
   assert.equal(result.pruned, 1, 'only the unlocked bridge worktree is cleared');
-  const listed = (await git(repo, ['worktree', 'list', '--porcelain'])).replace(/\\/g, '/');
-  assert.ok(!listed.includes(bridge.root.replace(/\\/g, '/')), 'the bridge worktree record is gone');
-  assert.ok(listed.includes(byHand.replace(/\\/g, '/')), 'a worktree made by hand keeps its record');
-  assert.ok(listed.includes(lockedPath.replace(/\\/g, '/')), 'a locked record is never touched');
+  // Identified by branch, not by path: git prints a path in its long form while mkdtemp may have handed ours out in the 8.3 short one.
+  const branches = (await git(repo, ['worktree', 'list', '--porcelain'])).split(/\r?\n/).filter(line => line.startsWith('branch ')).map(line => line.slice('branch refs/heads/'.length));
+  assert.ok(!branches.includes(bridge.branch), 'the bridge worktree record is gone');
+  assert.ok(branches.includes('by-hand'), 'a worktree made by hand keeps its record');
+  assert.ok(branches.includes('locked-one'), 'a locked record is never touched');
+  assert.ok(branches.includes('main'), 'the main checkout is listed, so the list was read');
 });
 
 test('pruning finds the bridge worktrees when the worktrees root is spelled with a Windows 8.3 short name', {skip: process.platform !== 'win32'}, async () => {
