@@ -150,6 +150,15 @@ details.more .body { padding: 10px 12px 12px; }
 .change-list { margin: 0; padding: 0; list-style: none; display: grid; max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 .change-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 13px; }
 .change-row:first-child { border-top: 0; }
+.change-row.clickable { cursor: pointer; }
+.change-row.clickable:hover, .change-row.clickable:focus-visible { background: var(--surface-2); outline: none; }
+.diff-box { margin-top: 12px; display: grid; gap: 8px; }
+.diff { white-space: pre; overflow: auto; max-height: 460px; }
+.diff span { display: block; min-height: 1.3em; }
+.diff .add { color: var(--ok); background: var(--ok-soft); }
+.diff .del { color: var(--bad); background: var(--bad-soft); }
+.diff .hunk { color: var(--warn); }
+.diff .meta { color: var(--muted); }
 .change-path { overflow-wrap: anywhere; }
 .change-count { color: var(--muted); white-space: nowrap; font-size: 12.5px; }
 .change-kind { text-align: center; padding: 1px 6px; border-radius: 6px; font-size: 11.5px; font-weight: 650; background: var(--idle-soft); color: var(--idle); }
