@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -250,16 +251,16 @@ const OK_LINES = ['{"type":"turn.completed","status":"completed"}', '{"type":"it
  * A codex profile whose fake CLI prints one JSONL transcript and closes, so the real parseResult decides the outcome.
  * `script(id, call)` returns the lines for that launch, which is how a test gives a profile a different answer on retry.
  */
-function fakeProfile(id: string, launches: string[], script: (call: number) => {lines: string[]; code: number}, onLaunch?: () => void): AgentRuntime {
+function fakeProfile(id: string, launches: string[], script: (call: number) => {lines: string[]; code: number}, onLaunch?: (cwd: string) => void): AgentRuntime {
   const adapter = codexAdapter({executable: 'codex', prefixArgs: [], source: 'codex'}, {id, label: id});
   return {
     adapter,
     status: {id, label: id, available: true, version: '1.0', executable: 'codex', capabilities: ['code' as const], warnings: []},
     enabled: true,
-    launch: () => {
+    launch: (_args, cwd) => {
       const call = launches.filter(item => item === id).length + 1;
       launches.push(id);
-      onLaunch?.();
+      onLaunch?.(cwd);
       const child = new EventEmitter() as EventEmitter & {pid: number; stdout: PassThrough; stderr: PassThrough; stdin: PassThrough};
       child.pid = 900_000 + launches.length;
       child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
@@ -307,6 +308,38 @@ test('a quota failover keeps the lane it already holds and keeps the abandoned a
     assert.match(abandoned[0].error ?? '', /insufficient_quota/, 'the reason the first profile stopped is kept');
     assert.match(abandoned[0].stdout_tail, /insufficient_quota/, 'the first attempt is still readable after its log is replaced');
     assert.match(done.final_response ?? '', /worked after failover/);
+  } finally {
+    await manager.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a worktree failover records what the abandoned attempt had changed, because the retry reuses the worktree', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agy-failover-scope-'));
+  const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const state = path.join(root, 'state');
+  const git = (...args: string[]) => new Promise<void>((resolve, reject) =>
+    execFile('git', ['-c', 'user.email=t@e', '-c', 'user.name=t', ...args], {cwd: workspace}, error => error ? reject(error) : resolve()));
+  await git('init', '-b', 'main');
+  await writeFile(path.join(workspace, 'wanted.txt'), 'base\n');
+  await git('add', 'wanted.txt');
+  await git('commit', '-m', 'base');
+  healthyPool();
+  const launches: string[] = [];
+  const p1 = fakeProfile('p1', launches, () => ({lines: [QUOTA_LINE], code: 1}), cwd => { writeFileSync(path.join(cwd, 'half-done.txt'), 'partial\n'); });
+  const p2 = fakeProfile('p2', launches, () => ({lines: OK_LINES, code: 0}), cwd => { writeFileSync(path.join(cwd, 'wanted.txt'), 'changed\n'); });
+  const manager = new TaskManager(poolConfig(workspace), {executable: 'codex', supported: true, stateDirectory: state, agents: [p1, p2], defaultAgent: 'p1'});
+  try {
+    const started = await manager.delegate({task: 'do the work', workspace, acceptance_criteria: ['done'], agent: 'codex-pool', isolation: 'worktree', owns: ['wanted.txt']});
+    const done = await manager.wait(started.task_id);
+    assert.equal(done.status, 'completed');
+    const abandoned = done.attempts?.[0];
+    assert.equal(abandoned?.agent, 'p1');
+    assert.equal(abandoned?.scope?.checked, true);
+    assert.deepEqual(abandoned?.scope?.out_of_scope, ['half-done.txt'], 'the first attempt is shown with the file it left behind');
+    // The retry's own result still covers everything in the worktree, which is why the per-attempt record exists.
+    assert.deepEqual(done.scope?.out_of_scope, ['half-done.txt']);
+    assert.equal(done.scope?.changed, 2);
   } finally {
     await manager.shutdown();
     await rm(root, { recursive: true, force: true });

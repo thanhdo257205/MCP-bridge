@@ -113,6 +113,13 @@ khởi động (file thiếu/hỏng/hết hạn = mọi profile khỏe); hàng �
 hàng "chưa bàn" thứ nhất — pool hết thành viên lành báo `Pool "<id>" has no healthy member right now (members: …)`.
 
 Còn mở, xếp theo thứ tự đáng làm: (1) ~~một chiến lược pool thật thay vì stub, hoặc bỏ hẳn enum~~ đã bỏ enum; muốn chiến lược thật (xoay vòng, theo chi phí) thì thiết kế lại từ đầu;
-(2) ~~nói cho client biết "pool hết thành viên lành"~~ xong; (3) nối `effort` (hoặc bỏ điều kiện chết);
+(2) ~~nói cho client biết "pool hết thành viên lành"~~ xong; (3) ~~nối `effort` (hoặc bỏ điều kiện chết)~~ đã bỏ điều kiện:
+effort là cài đặt toàn bridge của chủ máy, không phải tín hiệu độ khó của một task, và thêm field vào `delegateSchema`
+chỉ để nó có tác dụng sẽ mở rộng bề mặt API cho một heuristic yếu;
 (4) ~~persistence cooldown qua restart~~ xong; (5) live-test đốt quota thật bằng hai profile đăng nhập thật — hiện hai test
-`fakeProfile()` là bằng chứng duy nhất; (6) `fallback: true` khi agent được chỉ định không sẵn sàng (mòn từ Phase 1).
+`fakeProfile()` là bằng chứng duy nhất; (6) ~~`fallback: true`~~ **quyết định không làm**: một agent khác là tài khoản,
+mức quyền và sandbox khác, nên đổi agent âm thầm khi agent được chỉ định không sẵn sàng sẽ đổi cả mô hình rủi ro của
+task; client muốn failover thì đặt tên một pool, nơi các thành viên được chủ máy chọn trước. Hàng "retry dùng lại
+worktree" ở bảng trên: giữ nguyên hành vi, nhưng mỗi `attempts[]` của task worktree nay mang `scope` lúc bị bỏ để phân
+biệt file của attempt đó với file của attempt sau (không reset worktree: `git reset/clean` trong cây mà agent vừa ghi
+`.git/config` vào là đường chạy lệnh do repo khai báo).

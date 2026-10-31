@@ -98,7 +98,7 @@ Thứ tự mặc định do người dùng cấu hình, ví dụ:
 
 - Adapter không có trong `enabled` hoặc không detect được sẽ bị bỏ qua.
 - Nếu task chỉ định `agent` mà agent đó không sẵn sàng: trả lỗi rõ ràng, không
-  âm thầm đổi sang agent khác. Cờ `fallback: true` chưa triển khai; dự kiến ở Phase 2.
+  âm thầm đổi sang agent khác. Cờ `fallback: true` **sẽ không triển khai**: muốn failover thì đặt tên một pool (`docs/SMART-ROUTER-PLAN.md`).
 
 ### 2.4 Cách ly song song
 

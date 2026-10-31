@@ -38,9 +38,9 @@ test('isHardTask accurately identifies complex tasks vs simple tasks', () => {
   assert.equal(isHardTask({ task: 'Fix concurrency and deadlock issues' }), true);
   assert.equal(isHardTask({ task: 'Thực hiện tái cấu trúc module thanh toán' }), true);
 
-  // Hard by timeout or effort
+  // Hard by timeout
   assert.equal(isHardTask({ task: 'Normal task', timeout_seconds: 600 }), true);
-  assert.equal(isHardTask({ task: 'Normal task', effort: 'high' }), true);
+  assert.equal(isHardTask({ task: 'Normal task', timeout_seconds: 599 }), false);
 });
 
 test('isQuotaError accurately matches rate limits and balance/quota exhaustion errors', () => {

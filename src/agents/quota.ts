@@ -48,7 +48,6 @@ export interface TaskComplexityInput {
   owns?: string[];
   acceptance_criteria?: string[];
   timeout_seconds?: number;
-  effort?: string;
 }
 
 /** Assess whether a task is considered 'hard' (high complexity, multi-file, or architectural). */
@@ -58,8 +57,8 @@ export function isHardTask(input: TaskComplexityInput): boolean {
   const fullText = `${input.task ?? ''} ${input.context ?? ''}`;
   if (fullText.length >= 3000) return true;
   if (HARD_KEYWORDS.test(fullText)) return true;
+  // Reasoning effort is not a signal here: it is an owner setting for the whole bridge, not a property of one task.
   if ((input.timeout_seconds ?? 0) >= 600) return true;
-  if (input.effort === 'high') return true;
   return false;
 }
 

@@ -49,6 +49,8 @@ export interface Task {
 export interface TaskAttempt {
   agent: string; status: Status; error: string | null; exit_code: number | null; signal: string | null;
   ended_at: string | null; duration_ms: number; stdout_tail: string; stderr_tail: string;
+  /** A worktree task only: what this attempt had changed when it was given up on. The retry reuses the worktree, so the final scope is the sum of every attempt. */
+  scope?: ScopeReport;
 }
 /** How much of an abandoned attempt's log is kept: enough to show why it stopped, small enough not to multiply the record. */
 const ATTEMPT_TAIL_CHARS = 4000;
@@ -539,10 +541,15 @@ export class TaskManager {
                     // The first attempt's evidence survives the retry: the error, exit and output tails are what a
                     // reviewer needs to tell "quota exhausted" from "the agent did the work badly", and the next
                     // attempt's own flush overwrites task.stdout wholesale.
+                    // The retry works in the same worktree, so whatever the abandoned attempt left behind stays in the diff;
+                    // recording it now lets a reviewer tell that attempt's files from the next one's.
+                    let abandonedScope: ScopeReport | undefined;
+                    if (worktree) { try { abandonedScope = await inspectScope(worktree, task.owns); } catch { /* the retry goes ahead without it */ } }
                     (task.attempts ??= []).push({
                       agent: agent.adapter.id, status: 'failed', error: task.error, exit_code: code, signal,
                       ended_at: task.ended_at, duration_ms: task.duration_ms,
-                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr)
+                      stdout_tail: tail(task.stdout), stderr_tail: tail(task.stderr),
+                      ...(abandonedScope ? {scope: abandonedScope} : {})
                     });
                     entry.pending = {input, workspace, timeout, agent: nextAgent, autonomy};
                     task.agent = nextId;

@@ -414,7 +414,7 @@ chứng là Chrome, và người sau sửa trang này phải xem lại bằng Ch
    Đã ghi cả trong skill, README và tool description.
 2. Plan không có role/priority: role (Tech Lead, Reviewer, Tester…) chỉ là chữ trong `task`, bridge không hiểu ngữ
    nghĩa. Bảng role của kế hoạch thuộc Phase 4.
-3. `fallback: true` (chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+3. ~~`fallback: true`~~ **Quyết định không làm (2026-10-31)** — xem `docs/SMART-ROUTER-PLAN.md`: failover có tên là pool.
 4. Ngân sách theo **mission** chưa có; usage vẫn chỉ theo task và theo ngày, nên một plan 12 bước không có trần chi phí.
 5. Trang UI chỉ đọc + dừng, **không có nút dispatch** — có chủ đích: khởi động bước là quyết định của client MCP.
 6. Chưa live-test plan có bước chạy bằng `codex` vì CLI đó trên máy này hết auth (401 `token_revoked` / 402
@@ -577,7 +577,7 @@ bridge, và không làm task fail.
    hết quota thật. Hành vi đó hiện chỉ do hai test `fakeProfile()` chứng minh. Tương tự, chưa live-test plan mission có
    bước chạy bằng `codex`. (Trước 2026-10-27 `codex` trên máy này hết auth — 401 `token_revoked` / 402
    `deactivated_workspace` — nay đã dùng lại được, nên các mục cũ trong HANDOFF nói "codex không test được" là **hết hiệu lực**.)
-3. `fallback: true` (tự chọn agent khác khi agent được chỉ định không sẵn sàng) vẫn chưa làm — từ Phase 1.
+3. ~~`fallback: true`~~ **Quyết định không làm (2026-10-31)** — xem `docs/SMART-ROUTER-PLAN.md`: failover có tên là pool.
 4. Ngân sách theo pool/profile chưa có; usage vẫn chỉ theo task và theo ngày.
 
 ### 6.6 Quy tắc cho người tiếp theo
