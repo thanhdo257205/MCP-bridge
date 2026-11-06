@@ -790,7 +790,7 @@ trước khi thêm phải chạy lại toàn bộ live script trên đúng CLI m
 | Suite Windows (Node 24.15.0) | **264 test / 258 pass / 0 fail / 6 skipped**, 4 m 37 s, exit 0. Số test bằng baseline `0.1.26` vì đợt này chỉ thêm hai dòng vào bảng có sẵn, không thêm test mới |
 
 **Chưa tuyên bố gì:** danh sách là **kết quả đo trên máy phát triển**, không phải cam kết mọi bản 1.4.8/1.4.9 ở máy khác
-đều giống nhau; 1.4.x patch khác (1.4.0, 1.4.10…) vẫn chỉ được họ version + cờ help duyệt, vẫn cảnh báo. Phần stdin của
+đều giống nhau; bản 1.x chưa đo (1.4.0, 1.4.10, 1.5.0, 1.10.0…) vẫn chỉ được họ version + cờ help duyệt, vẫn cảnh báo. Phần stdin của
 mục 8 HARDENING không đổi — live script dùng transport argv mặc định, nên chạy thêm patch cũng không chứng minh được stdin.
 Họ model đã đổi (`agy models` trả sáu id khác các đợt trước) nhưng không có test nào khóa tên model id, nên đợt này không đụng.
 
