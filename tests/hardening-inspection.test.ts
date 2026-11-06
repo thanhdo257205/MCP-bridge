@@ -6,7 +6,7 @@ const fixture=fileURLToPath(new URL('../../tests/fixtures/inspect-agy.mjs',impor
 test('CLI accepts the agy 1.x line with complete help, warns for unverified releases and refuses other majors',async()=>{
   // agy updates itself, so a minor it ships must not stop delegation on a machine whose CLI is otherwise compatible; a
   // dropped required flag and a different major still have to fail closed.
-  for(const [version,missing,supported,warn] of [['1.4.3','',true,false],['1.4.7','',true,false],['1.4.8','',true,false],['1.4.9','',true,false],['1.4.0','',true,true],['1.4.99','',true,true],['1.5.0','',true,true],['1.5.1','',true,false],['1.10.0','',true,true],['2.4.3','',false,false],['1.4.3','--print-timeout',false,false]] as const){
+  for(const [version,missing,supported,warn] of [['1.4.3','',true,false],['1.4.7','',true,false],['1.4.8','',true,false],['1.4.9','',true,false],['1.4.0','',true,true],['1.4.99','',true,true],['1.5.0','',true,true],['1.5.1','',true,false],['1.5.2','',true,false],['1.10.0','',true,true],['2.4.3','',false,false],['1.4.3','--print-timeout',false,false]] as const){
     const result=await inspectCli({executable:process.execPath,prefixArgs:[fixture,version,missing],source:'fixture'},process.cwd());
     assert.equal(result.supported,supported,`${version} ${missing}`);assert.equal(result.warnings.length>0,warn);
   }

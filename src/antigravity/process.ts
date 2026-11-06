@@ -6,7 +6,7 @@ import { inside } from '../security/workspace.js';
 export interface ResolvedCommand { executable: string; prefixArgs: string[]; source: string; }
 
 /** Releases exercised with a real agent run; any other release of the 1.x line still runs, with a warning. */
-export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7', '1.4.8', '1.4.9', '1.5.1'] as const;
+export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7', '1.4.8', '1.4.9', '1.5.1', '1.5.2'] as const;
 
 /** The version family the bridge accepts. Exported because the live verifier has to ask the same question of the CLI it is about to spend real tasks on. */
 export function isSupportedAgyVersion(version: string): boolean {
