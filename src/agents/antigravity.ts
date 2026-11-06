@@ -20,7 +20,7 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
     capabilities: CAPABILITIES,
     buildInvocation(task) {
       const transport = task.promptTransport ?? defaultTransport;
-      const invocation = invocationFor(task.prompt, task.timeoutSeconds, transport, task.model ?? null, task.extraArgs ?? []);
+      const invocation = invocationFor(task.prompt, task.timeoutSeconds, transport, task.model ?? null, task.extraArgs ?? [], task.conversationId ?? null);
       return {executable, args: invocation.args, stdin: invocation.stdin, transport, customEnv: options.env};
     },
     async parseResult(raw: RawRun): Promise<AgentResult> {
@@ -43,10 +43,11 @@ export function antigravityAdapter(executable: string, defaultTransport: PromptT
         })
         : [];
       const numTurns = typeof envelope.num_turns === 'number' ? envelope.num_turns : null;
+      const conversationId = typeof envelope.conversation_id === 'string' ? envelope.conversation_id : null;
       const result: AgentResult = {
         success: false, response, error: null,
         cliStatus: typeof envelope.status === 'string' ? envelope.status : null,
-        numTurns, deniedActions, stats: extractStats(envelope, null)
+        numTurns, deniedActions, stats: extractStats(envelope, null), conversationId
       };
       if (/print timeout|AGY_ERROR.*TIMEOUT/i.test(raw.stderr)) {
         return {...result, timeout: true, error: 'CLI reported a print timeout (possibly with exit code 0)'};

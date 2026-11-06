@@ -8,6 +8,8 @@ import type { AgentRuntime, AgentStatus, PublicAgentStatus } from './types.js';
 
 export interface AntigravityInspection {
   executable: string; supported: boolean; version: string; warnings: string[];
+  /** The probed CLI help shows `--conversation`, so `resume_conversation` can be offered. */
+  conversationResume?: boolean;
   /** The resolved .js entry of a Windows shim; the adapter's args follow it, so the launch needs them too. */
   prefixArgs?: string[];
 }
@@ -39,6 +41,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     id: 'antigravity', label: 'Antigravity', available: antigravityEnabled && antigravity.supported,
     version: antigravity.version || null, executable: antigravity.executable || null,
     capabilities: ['code', 'review', 'test', 'research', 'long-run'],
+    conversation_resume: antigravity.conversationResume,
     warnings: antigravityEnabled ? antigravity.warnings : ['Disabled in the bridge config']
   };
   agents.push({
@@ -127,6 +130,7 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
           id: profileId, label, available: isProfileEnabled && supported,
           version: version || null, executable: cmd || null,
           capabilities: ['code', 'review', 'test', 'research', 'long-run'],
+          conversation_resume: antigravity.conversationResume,
           warnings: isProfileEnabled ? [...antigravity.warnings, ...profileWarnings] : profileWarnings
         };
         agents.push({

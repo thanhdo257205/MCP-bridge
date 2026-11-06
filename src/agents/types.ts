@@ -29,6 +29,8 @@ export type Elevation =
 export interface AgentStatus {
   id: string; label: string; available: boolean; version: string | null;
   executable: string | null; capabilities: AgentCapability[]; warnings: string[];
+  /** The CLI was probed and its help shows `--conversation`. Undefined means this status did not come from a probe, so nothing is refused. */
+  conversation_resume?: boolean;
 }
 
 export interface AgentTask {
@@ -40,6 +42,8 @@ export interface AgentTask {
   promptTransport?: PromptTransport;
   /** Extra permission for this one run, granted by the owner (see Elevation). Antigravity's is applied by the manager, through its permission level. */
   elevation?: Elevation;
+  /** agy conversation to continue, already checked by the manager (see `resume_conversation`). Antigravity only. */
+  conversationId?: string | null;
 }
 
 export interface Invocation {
@@ -74,6 +78,8 @@ export interface AgentResult {
   timeout?: boolean;
   /** Indicates if the failure was caused by rate limit, token or billing quota exhaustion. */
   isQuotaExceeded?: boolean;
+  /** Set when the CLI names the conversation a later task could continue (Antigravity only). */
+  conversationId?: string | null;
 }
 
 export interface AgentAdapter {

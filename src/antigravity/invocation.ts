@@ -1,10 +1,12 @@
 /** argv: prompt on the command line, one JSON result at the end. argv-stream: same prompt, output as stream-json events (what probe-stream ran). stdin: prompt and output both stream-json. */
 export type PromptTransport='stdin'|'argv'|'argv-stream';
-export function invocationFor(prompt:string,timeout:number,transport:PromptTransport,model:string|null=null,extraArgs:string[]=[]) {
+/** `conversation` continues an earlier agy session (`--conversation <id>`), so it goes before `--print`: agy takes the prompt as the argument after it. */
+export function invocationFor(prompt:string,timeout:number,transport:PromptTransport,model:string|null=null,extraArgs:string[]=[],conversation:string|null=null) {
+  const lead=conversation?['--conversation',conversation]:[];
   const common=['--print-timeout',`${timeout}s`,'--disable-slash-commands',...(model?['--model',model]:[]),...extraArgs];
-  if(transport==='argv')return {args:['--print',prompt,'--output-format','json',...common],stdin:undefined};
-  if(transport==='argv-stream')return {args:['--print',prompt,'--output-format','stream-json',...common],stdin:undefined};
-  return {args:['--input-format','stream-json','--output-format','stream-json',...common],stdin:JSON.stringify({event:'user',message:{content:prompt}})+'\n'};
+  if(transport==='argv')return {args:[...lead,'--print',prompt,'--output-format','json',...common],stdin:undefined};
+  if(transport==='argv-stream')return {args:[...lead,'--print',prompt,'--output-format','stream-json',...common],stdin:undefined};
+  return {args:[...lead,'--input-format','stream-json','--output-format','stream-json',...common],stdin:JSON.stringify({event:'user',message:{content:prompt}})+'\n'};
 }
 export function finalEnvelope(output:string,transport:PromptTransport):Record<string,unknown> {
   if(transport==='argv')return JSON.parse(output) as Record<string,unknown>;

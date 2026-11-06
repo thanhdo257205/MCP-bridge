@@ -65,7 +65,7 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     inputSchema: z.object({}).strict(), annotations: {readOnlyHint: true, openWorldHint: false}
   }, async () => response(manager.agentsOverview()));
   server.registerTool('antigravity_delegate', {
-    description: 'Start one supervised agent task. Pick agent (default from config), isolation "worktree" plus owns paths for parallel isolated work, and autonomy. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
+    description: 'Start one supervised agent task. Pick agent (default from config), isolation "worktree" plus owns paths for parallel isolated work, and autonomy. To correct a finished Antigravity task without re-explaining it, pass resume_conversation with that task\'s conversation_id. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
     inputSchema: delegateSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
   }, async (input, ctx) => guard(() => manager.delegate(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_task_status', {
@@ -89,7 +89,7 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     return withNextStep(manager.summary(task_id), manager.activityNote(task_id));
   }));
   server.registerTool('antigravity_task_output', {
-    description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. Does not wait for completion.',
+    description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. conversation_id names the Antigravity session a follow-up task can continue with resume_conversation. Does not wait for completion.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id}) => guard(() => manager.get(task_id)));
   server.registerTool('antigravity_cancel_task', {

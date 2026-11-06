@@ -153,5 +153,5 @@ export async function inspectCli(command: ResolvedCommand, cwd: string, run: typ
     ['--print', '--output-format', '--print-timeout', '--disable-slash-commands',...(requireStdin?['--input-format']:[])].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
   const verified = (VERIFIED_AGY_VERSIONS as readonly string[]).includes(actual);
   const warnings=supported&&!verified?[`agy ${actual} is compatible by 1.4.x version/help checks, but only ${VERIFIED_AGY_VERSIONS.join(' and ')} have been verified with real agent execution`]:[];
-  return { version: actual, supported, executable: command.executable, prefixArgs: command.prefixArgs, warnings };
+  return { version: actual, supported, executable: command.executable, prefixArgs: command.prefixArgs, warnings, conversationResume: /(?:^|\s)--conversation(?=\s|$)/.test(help.text) };
 }

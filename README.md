@@ -66,19 +66,22 @@ Then call `antigravity_environment` from a fresh session — that is the proof; 
 | `isolation` | `none` (default — edits the workspace, globally serial) or `worktree` (branch `bridge/<task_id>` under `.bridge-state/worktrees/<task_id>`, parallel up to `max_parallel_worktrees`). Worktree tasks must declare `owns`, and the repo needs at least one commit. Uncommitted changes in the main checkout are **not** copied in. |
 | `owns` | relative paths the agent may touch. After the run the bridge diffs the worktree against this list and reports anything else in `scope.out_of_scope`. It never auto-merges, never deletes the branch, and does not run repo hooks. |
 | `autonomy` | `suggest` \| `auto` \| `full` — an instruction to the CLI agent, not a permission grant. Destructive actions stay hard-denied (see below). |
+| `resume_conversation` | the `conversation_id` of a finished Antigravity task **in the same workspace**: the new task continues that conversation instead of opening one. An agy conversation id names a session on this machine, not inside one project, so the bridge accepts only ids from its own task history and refuses the rest. A task the retention limit dropped can no longer be resumed. |
 
 | Tool | What it does |
 |---|---|
 | `antigravity_environment` | CLI versions, allowlist, limits, agents, parallelism, `recent_tasks`, delegation switch |
-| `agents_list` | probed agents, capabilities, availability, default agent, worktree limits (read-only) |
+| `agents_list` | probed agents, capabilities, availability, default agent, worktree limits, and `conversation_resume` for the agents whose CLI was probed (read-only) |
 | `antigravity_delegate` | accepts a task, returns `running` (or `queued`) with a `task_id` |
 | `antigravity_task_status` | cheap poll: state, pid, elapsed, errors, `denied_actions`, byte counts |
 | `antigravity_task_wait` | blocks up to `wait_seconds` (default cap 55 s), returns early when the task ends |
-| `antigravity_task_output` | final response, stdout/stderr, errors, `denied_actions`, truncation |
+| `antigravity_task_output` | final response, stdout/stderr, errors, `denied_actions`, `conversation_id`, truncation |
 | `antigravity_cancel_task` | kills the task's process tree; does not revert file changes |
 | `code_search` | XERJ passage/definition lookup; registered always but **refused while `xerj.enabled` is off** |
 
 `completed` means the CLI exited with a parseable result — always `review_required: true`, `acceptance_verified: false`. A 0 exit code can still be reported as `failed` after a permission denial or a timeout. While a task runs, `wait`/`status` return a short `activity` line instead of making the client read logs.
+
+Antigravity names each session (`conversation_id`), so a correction can continue the conversation that already read the code instead of re-explaining it: pass that id as `resume_conversation`. The token cost is the honest part — `agy` re-sends the whole conversation every turn. Measured on `agy` 1.4.12 with the bridge's own flags: a first turn cost 6.107 input tokens beside 12.223 cached, the resumed turn 8.394 input beside 28.500 cached. Continuing is cheap compared with writing the same context into a new task, but it is not free. Codex and OpenCode tasks start fresh: the bridge reads no session id out of their output, so it records none and offers no resume. That is a statement about what the bridge parses, not a claim that those CLIs cannot continue a session.
 
 Two switches control delegation itself: `agy-mcp-bridge delegation off` blocks new tasks immediately without a restart, and `BRIDGE_DELEGATION=off` pins it at startup. Tasks still refuse to be delegated by policy the skill describes (security, auth, secrets, data deletion, deploy, CI and public API changes are not delegated).
 
