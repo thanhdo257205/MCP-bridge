@@ -16,6 +16,12 @@ else if (scenario === 'active') {
   setTimeout(() => { clearInterval(timer); ok('finished while active'); }, Number(process.argv[4] ?? 2200));
 }
 else if (scenario === 'usage') process.stdout.write(JSON.stringify({status:'SUCCESS', response:'with usage', num_turns:2, duration_seconds:3.25, conversation_id:'c', usage:{input_tokens:1200, output_tokens:80, cache:{read_tokens:5, note:'text'}, label:'x'}}));
+else if (scenario === 'conversation') {
+  // Echo the --conversation it was handed, so a test proves the flag reached the CLI; a fresh run names its own conversation.
+  const at = process.argv.indexOf('--conversation');
+  process.stdout.write(JSON.stringify({status:'SUCCESS', response: at === -1 ? 'started' : 'continued',
+    num_turns: at === -1 ? 1 : 2, conversation_id: at === -1 ? '3f2a9b1c-7d4e-4c5a-9b8f-1e2d3c4b5a69' : process.argv[at + 1]}) + '\n');
+}
 else if (scenario.startsWith('stream')) {
   // stream-json output as seen with probe-stream: init, step_update events, then result (without a trailing newline). stream-bad returns an
   // unexpected result; stream-many sends thousands of steps (far more than the output cap); stream-hang stops after one step and waits.

@@ -674,7 +674,8 @@ function detailView() {
       ['Gửi lúc', clock(task.queued_at || task.started_at)], ['Bắt đầu chạy', queued ? 'Chưa chạy' : clock(task.started_at)], ['Kết thúc', clock(task.ended_at)],
       ['Thời gian chạy', running ? elapsedEl(task.started_at) : queued ? '—' : duration(task.duration_ms)],
       ['Giới hạn', request ? `${request.timeout_seconds}s` : '—'], ['Model', request && 'model' in request ? request.model || 'mặc định' : '—'], ['Quyền', request && request.permission ? (PERMISSION_LEVELS.find(l => l.id === request.permission)?.title || request.permission) : '—'], ['Effort', request && request.effort ? request.effort : '—'], ['Tổng token', state.detail?.stats?.usage && 'total_tokens' in state.detail.stats.usage ? number(state.detail.stats.usage.total_tokens) : '—'], ['Usage (agy báo)', usageLine(state.detail?.stats?.usage) ?? '—'], ['Exit code', task.exit_code ?? '—'], ['PID', task.pid ?? '—'],
-      ['CLI status', task.cli_status ?? '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
+      ['CLI status', task.cli_status ?? '—'],
+      ['Hội thoại agy', task.conversation_id ? h('span', {class: 'mono', title: request?.resume_conversation ? 'Task này tiếp tục hội thoại của task trước, nên nó mang ngữ cảnh task trước để lại.' : 'Định danh hội thoại agy của task này.', text: `${task.conversation_id}${request?.resume_conversation ? ' (tiếp nối)' : ''}`}) : '—']].map(([k, v]) => h('div', {}, h('dt', {text: k}), h('dd', {}, typeof v === 'string' || typeof v === 'number' ? String(v) : v))));
 
   const asker = request?.client ? `Tech Lead · ${request.client}` : 'Tech Lead';
   const asked = h('div', {class: 'msg out'},

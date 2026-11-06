@@ -50,6 +50,8 @@ export interface Task {
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
   denied_actions: {action: string; display_name: string; suspected?: boolean}[];
+  /** The agy conversation this task ran in, when the CLI named one. Another task continues it with `resume_conversation`. */
+  conversation_id: string | null;
   /** Set on a task the owner started from the approval queue: the task whose refused actions it runs again. */
   retry_of?: string | null;
   /** The extra permission the owner gave this one run (never a setting; see Elevation). Absent on every other task. */
@@ -92,6 +94,8 @@ export interface TaskRequest {
   permission?: PermissionLevel;
   /** Reasoning effort the task was accepted with ('default': no --effort flag); absent in older records. */
   effort?: EffortLevel;
+  /** The conversation this task continues. Provenance a reviewer needs: the task ran with context it did not write. Absent on a task that opens its own conversation. */
+  resume_conversation?: string;
 }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
@@ -210,7 +214,9 @@ export class TaskManager {
     return {
       agents: this.agents.map(({adapter, status, enabled}) => ({
         id: adapter.id, label: adapter.label, enabled, available: status.available, version: status.version,
-        executable: status.executable, capabilities: adapter.capabilities, warnings: status.warnings
+        executable: status.executable, capabilities: adapter.capabilities, warnings: status.warnings,
+        // A client only offers `resume_conversation` for an agent whose CLI was probed and shown to take `--conversation`.
+        conversation_resume: status.conversation_resume
       })),
       default_agent: this.defaultAgent,
       max_parallel_worktrees: this.maxParallelWorktrees
@@ -221,6 +227,12 @@ export class TaskManager {
   delegate(raw: DelegateRequest, meta: {client?: string | null} = {}): Promise<Task> {
     return this.admitInOrder(raw, meta);
   }
+  /** The task that ran this agy conversation, while it is still in the bridge's history (a restart reloads it from disk). */
+  private conversationOwner(conversationId: string): Task | undefined {
+    for (const entry of this.entries.values()) if (entry.task.conversation_id === conversationId) return entry.task;
+    return undefined;
+  }
+
   private admitInOrder(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}): Promise<Task> {
     const admitted = this.admission.then(() => this.admit(raw, meta, rerun));
     this.admission = admitted.then(() => undefined, () => undefined);
@@ -242,6 +254,26 @@ export class TaskManager {
     else try { agent = this.selectAgent(undefined, input); } catch { agent = undefined; }
     const supported = Boolean(agent?.status.available);
     const autonomy = input.autonomy ?? this.config.default_autonomy ?? 'auto';
+
+    // An agy conversation id is machine-global, so the bridge only continues one it ran itself and only in the workspace that
+    // created it: otherwise a client could aim a task at another project's context, or at the owner's own interactive session.
+    let resumeConversation: string | null = null;
+    if (input.resume_conversation !== undefined) {
+      if (agent?.adapter.family !== 'antigravity') {
+        throw new Error(`resume_conversation needs Antigravity, not agent "${agent?.adapter.id ?? input.agent ?? 'the default agent'}"`);
+      }
+      if (agent.status.conversation_resume === false) {
+        throw new Error(`The Antigravity CLI${agent.status.version ? ` ${agent.status.version}` : ''} has no --conversation, so no task can continue a conversation`);
+      }
+      const source = this.conversationOwner(input.resume_conversation);
+      if (!source) {
+        throw new Error(`resume_conversation "${input.resume_conversation}" is not a conversation this bridge ran. Read conversation_id from a finished task's output; a task the retention limit dropped can no longer be resumed`);
+      }
+      if (source.workspace !== workspace) {
+        throw new Error(`Conversation "${input.resume_conversation}" was created in another workspace, so it is not continued here`);
+      }
+      resumeConversation = input.resume_conversation;
+    }
 
     // Everything from here to the registration of the entry is synchronous, so concurrent callers cannot both claim a slot.
     // Ordinary tasks are serialized globally; worktree tasks may run in parallel up to max_parallel_worktrees.
@@ -267,6 +299,7 @@ export class TaskManager {
       stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0,
       stdout_truncated: false, stderr_truncated: false,
       final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false,
+      conversation_id: resumeConversation,
       ...(rerun ? {retry_of: rerun.retryOf, elevation: rerun.elevation} : {})
     };
     const pools = this.config.agents?.pools ?? {};
@@ -281,7 +314,9 @@ export class TaskManager {
         agent: task.agent, isolation: input.isolation, owns: input.owns, autonomy,
         model: agent?.adapter.family === 'antigravity' ? await readModel(this.runtime.stateDirectory) : null,
         permission: permissionState(this.runtime.stateDirectory).level,
-        effort: readEffort(this.runtime.stateDirectory)
+        effort: readEffort(this.runtime.stateDirectory),
+        // Only a task that continues a conversation carries the field, so the request of an ordinary task keeps its shape.
+        ...(resumeConversation ? {resume_conversation: resumeConversation} : {})
       }
     };
     this.entries.set(task.task_id, entry);
@@ -408,7 +443,9 @@ export class TaskManager {
         autonomy, owns: task.owns, taskId: task.task_id, stateDirectory: this.runtime.stateDirectory,
         // The task's model is a per-family setting: a codex model handed to another family would override that family's own.
         model: antigravity ? entry.request?.model ?? null : agent.adapter.family === 'codex' ? this.config.agents?.codex_model : undefined,
-        extraArgs, promptTransport: transport, elevation
+        extraArgs, promptTransport: transport, elevation,
+        // Set when this task continues an earlier Antigravity conversation (validated when the task was admitted).
+        conversationId: task.conversation_id
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
       const compactLine = agent.adapter.compactLine?.bind(agent.adapter);
@@ -547,6 +584,8 @@ export class TaskManager {
             });
             if (result.stats) entry.stats = {...result.stats, steps: entry.steps?.total ?? null};
             task.cli_status = result.cliStatus;
+            // The CLI names the conversation it used, which is what a follow-up task hands back as resume_conversation.
+            if (result.conversationId) task.conversation_id = result.conversationId;
             task.final_response = result.response === null ? null : redact(result.response);
             task.denied_actions = result.deniedActions.slice(0, 100).map(item => ({
               action: redact(item.action).slice(0, 200), display_name: redact(item.display_name).slice(0, 200),
