@@ -77,7 +77,7 @@ export async function createRuntime() {
     authentication: 'Each agent CLI uses its own cached login; only a live task verifies it.',
     limits: {max_timeout_seconds: config.max_timeout_seconds, max_output_bytes_per_stream: config.max_output_bytes, max_retained_tasks: config.max_retained_tasks, max_mission_steps: MAX_STEPS_PER_MISSION, max_retained_missions: MAX_RETAINED_MISSIONS, concurrent_tasks: maxParallelWorktrees + 1, concurrent_normal_tasks: 1, max_parallel_worktrees: maxParallelWorktrees, max_queued_tasks: config.max_queued_tasks},
     limitations: [
-      `Antigravity requires agy 1.4.x with all required flags; real execution was verified on ${VERIFIED_AGY_VERSIONS.join(' and ')}.`,
+      `Antigravity requires the agy 1.x line with all required flags; real execution was verified on ${VERIFIED_AGY_VERSIONS.join(' and ')}.`,
       'Codex defaults to sandbox workspace-write; the bridge owner may raise sandbox/approval in config (danger-full-access / ask-for-approval never), which is surfaced as agent warnings.',
       'Ordinary tasks are serialized globally. Only tasks with isolation "worktree" run concurrently, each in its own git worktree and branch.',
       'Mission plans are recorded and gated by the bridge, but the bridge never dispatches a step by itself: every step starts on a client call, and a canceled or completed plan grants nothing.',

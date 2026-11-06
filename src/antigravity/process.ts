@@ -5,8 +5,13 @@ import { inside } from '../security/workspace.js';
 
 export interface ResolvedCommand { executable: string; prefixArgs: string[]; source: string; }
 
-/** Patch releases exercised with a real agent run; other 1.4.x patches still run but warn. */
-export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7', '1.4.8', '1.4.9'] as const;
+/** Releases exercised with a real agent run; any other release of the 1.x line still runs, with a warning. */
+export const VERIFIED_AGY_VERSIONS = ['1.4.3', '1.4.7', '1.4.8', '1.4.9', '1.5.1'] as const;
+
+/** The version family the bridge accepts. Exported because the live verifier has to ask the same question of the CLI it is about to spend real tasks on. */
+export function isSupportedAgyVersion(version: string): boolean {
+  return /^1\.\d+\.\d+$/.test(version);
+}
 
 /**
  * Resolve a command without ever going through a shell. On Windows an npm-installed CLI is usually a `.cmd`
@@ -149,9 +154,12 @@ export async function inspectCli(command: ResolvedCommand, cwd: string, run: typ
   const version = await capture(['--version']);
   const help = await capture(['--help']);
   const actual=version.text.trim();
-  const supported = version.code === 0 && /^1\.4\.\d+$/.test(actual) && help.code === 0 &&
+  // The family is the agy 1.x line, not one minor of it: agy updates itself, and a minor bump it ships would otherwise
+  // mark the agent unavailable and stop every delegation on a machine that is otherwise fine. What has to hold is the
+  // flags this bridge passes, checked against the CLI's own help, so a release that drops one is still refused.
+  const supported = version.code === 0 && isSupportedAgyVersion(actual) && help.code === 0 &&
     ['--print', '--output-format', '--print-timeout', '--disable-slash-commands',...(requireStdin?['--input-format']:[])].every(flag => new RegExp(`(?:^|\\s)${flag}(?=\\s|$)`).test(help.text));
   const verified = (VERIFIED_AGY_VERSIONS as readonly string[]).includes(actual);
-  const warnings=supported&&!verified?[`agy ${actual} is compatible by 1.4.x version/help checks, but only ${VERIFIED_AGY_VERSIONS.join(' and ')} have been verified with real agent execution`]:[];
+  const warnings=supported&&!verified?[`agy ${actual} is compatible by 1.x version/help checks, but only ${VERIFIED_AGY_VERSIONS.join(' and ')} have been verified with real agent execution`]:[];
   return { version: actual, supported, executable: command.executable, prefixArgs: command.prefixArgs, warnings, conversationResume: /(?:^|\s)--conversation(?=\s|$)/.test(help.text) };
 }

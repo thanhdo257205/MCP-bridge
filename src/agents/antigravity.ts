@@ -73,7 +73,7 @@ export function legacyAntigravityAgent(runtime: {
   const status: AgentStatus = {
     id: 'antigravity', label: 'Antigravity', available: runtime.supported,
     version: null, executable: runtime.executable || null, capabilities: CAPABILITIES,
-    warnings: runtime.supported ? [] : ['Requires agy 1.4.x and all required print/output/timeout flags']
+    warnings: runtime.supported ? [] : ['Requires agy 1.x and all required print/output/timeout flags']
   };
   return {adapter: antigravityAdapter(runtime.executable, transport), status, enabled: true, prefixArgs: runtime.prefixArgs, launch: runtime.launch};
 }
