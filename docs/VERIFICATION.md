@@ -113,5 +113,15 @@ Máy thật, cùng máy với các đo ở trên. `agy` đã tự cập nhật *
 - Bằng chứng cộng thêm cho resume: task live trên 1.5.1 trả `conversation_id` thật (`5de8322b-19f0-47bc-ae57-4e735a95a6b5`), tức field bridge đọc từ envelope không phải chỉ có trong fixture.
 - Vì có một loạt task thật đạt, `1.5.1` được thêm vào `VERIFIED_AGY_VERSIONS`; environment trên máy này không còn in cảnh báo "only ... verified".
 - Mutation check (bỏ bản sửa là test phải đỏ): đổi thân `isSupportedAgyVersion` về `/^1\.4\.\d+$/` rồi build lại → `tests/hardening-inspection.test.ts` **đỏ** ngay tại `AssertionError [ERR_ASSERTION]: 1.5.0, actual: false, expected: true`; khôi phục regex họ 1.x → xanh (2/2 test của file).
-- Suite đầy đủ trên nội dung cuối (Windows, Node 24.18.0): **351 test / 344 pass / 0 fail / 7 skipped**, 370 s, exit 0. `skills/` không đổi nên không đăng ký hash mới.
-- Chưa đo: behavior khác của 1.5.1 so với 1.4.x ngoài bộ cờ và các đường live trên (ví dụ `--remote-agent`, `agy_acp_server`).
+- Suite đầy đủ trên nội dung cuối (Windows, Node **24.15.0** — `node -v` trên máy chạy suite): **351 test / 344 pass / 0 fail / 7 skipped**, 370 s, exit 0. `skills/` không đổi nên không đăng ký hash mới.
+- Chưa đo: behavior khác của 1.5.1 và 1.5.2 so với 1.4.x ngoài bộ cờ và các đường live trên (ví dụ `--remote-agent`, `agy_acp_server`).
+
+## Bổ sung 2026-11-06 (lần 2) — `agy` lên 1.5.2 ngay khi PR gate đang mở
+
+Cùng máy, cùng ngày. Lần đo 1.5.1 kết thúc 14:25:13Z; server build từ nhánh gate khởi động lúc ~14:41Z đã thấy **1.5.2**.
+
+- `npm run check` trên built server (không task AI nào): `bridge_status: ready`, `antigravity.available: true`, `version: 1.5.2`, `conversation_resume: true`, kèm đúng cảnh báo dự kiến `agy 1.5.2 is compatible by 1.x version/help checks, but only 1.4.3 and 1.4.7 and 1.4.8 and 1.4.9 and 1.5.1 have been verified with real agent execution`. Đây chính là đường "họ 1.x chấp nhận + cảnh báo" mà bản sửa mở ra; với gate `^1\.4\.\d+$` cũ, 1.5.2 cũng chết delegation như 1.5.1.
+- `npm run test:live` trên CLI thật 1.5.2: **exit 0**, `success: true`, 14:43:01Z → 14:44:07Z (66 s), smoke `completed` exit 0 trả đúng `BRIDGE_SMOKE_OK`, `response_verified=true`, `workspace_unchanged=true`, `reconnected=true`, mission ba bước đều `completed`, cancel `canceled` exit 1 với `process_running=false` và `denied_actions=[]`, `shutdown_with_active_task_verified=true`, `server_exit_code=0`. Task smoke trả `conversation_id` thật `9254265e-acfc-45c1-8e33-a3ef02b59f90`.
+- Theo chuẩn đã ghi (một lần `test:live` **đầy đủ** đạt, không phải một task lẻ), `1.5.2` được thêm vào `VERIFIED_AGY_VERSIONS`, kèm dòng `['1.5.2','',true,false]` trong bảng `tests/hardening-inspection.test.ts`.
+- Mutation check cho chính danh sách: bỏ `1.5.2` khỏi constant rồi build lại → test inspection **đỏ** (`fail 1`, `actual: true, expected: false` — đúng cái cờ `warn` của dòng `['1.5.2','',true,false]`, tức CLI chưa đo phải còn bị cảnh báo); khôi phục constant → xanh (2/2).
+- Suite đầy đủ trên nội dung cuối (Windows, Node 24.15.0): **351 test / 344 pass / 0 fail / 7 skipped**, 384 s, exit 0.
