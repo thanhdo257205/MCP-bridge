@@ -5,6 +5,7 @@ import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { isSupportedAgyVersion } from '../src/antigravity/process.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const results = path.join(root,'test-results');
@@ -44,7 +45,8 @@ try {
   assert.ok(endpoint,'HTTP server did not start');report.endpoint=endpoint;
   await connect();
   const environment=await call('antigravity_environment');
-  assert.match(String(environment.cli_version),/^1\.4\.\d+$/);assert.equal(environment.bridge_status,'ready');
+  // Same family rule as the probe, so this verifier never spends real tasks on a CLI the bridge itself would refuse.
+  assert.ok(isSupportedAgyVersion(String(environment.cli_version)),`unsupported agy ${environment.cli_version} for live verification`);assert.equal(environment.bridge_status,'ready');
   report.environment=environment;
   const task=await call('antigravity_delegate',{
     task:'Reply with exactly BRIDGE_SMOKE_OK. Do not use any tools, read files, change files or run commands.',
