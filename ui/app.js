@@ -21,7 +21,7 @@ const MATCH = {
 const state = {
   overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
   missions: null, selectedMission: null, plan: null,
-  approvals: null, approvalPick: {}, approvalDir: {},
+  approvals: null, approvalPick: {}, approvalDir: {}, notes: {}, noteInstruction: {},
   open: new Set(), changes: null, connected: true, toast: '', q: '', filter: 'all'
 };
 let timer = null;
@@ -180,7 +180,7 @@ function followChanges() {
 }
 /* ---------- Approval queue: a task whose agent was refused something waits here. No CLI lets the owner approve in the middle of a run, so the owner either
    runs the task again, as a new task, with a little more permission for that one run, or sets the refusal aside. Only this page can do it. ---------- */
-const DECISION_LABEL = {apply: 'Áp dụng', discard: 'Bỏ worktree', approve: 'Cho phép', rerun: 'Chạy lại', dismiss: 'Bỏ qua'};
+const DECISION_LABEL = {apply: 'Áp dụng', discard: 'Bỏ worktree', approve: 'Cho phép', rerun: 'Chạy lại', dismiss: 'Bỏ qua', feedback: 'Gửi nhận xét'};
 // What each permission is, in the CLI's own terms, and how far it reaches. The page never invents a grant: the options come from the bridge.
 const OPTION_TEXT = {
   'agy-level:accept-edits': ['Tự duyệt việc sửa file', '--mode accept-edits. Lệnh và đường dẫn ngoài workspace vẫn bị hỏi, nên vẫn bị từ chối.'],
@@ -189,14 +189,18 @@ const OPTION_TEXT = {
   'codex-add-dir': ['Mở thêm một thư mục để ghi', '--add-dir <thư mục>: chỉ đúng thư mục này; mọi thư mục khác ngoài workspace vẫn bị chặn.'],
   'opencode-allow:bash': ['Cho phép chạy lệnh shell', 'bash=allow cho lần này. Shell của OpenCode ghi được cả ra ngoài workspace.'],
   'opencode-allow:edit': ['Cho phép sửa file', 'edit=allow cho lần này.'],
-  'opencode-auto': ['Duyệt mọi thứ không bị chặn rõ ràng', '--auto: tự duyệt mọi quyền mà cấu hình OpenCode không từ chối.']
+  'opencode-auto': ['Duyệt mọi thứ không bị chặn rõ ràng', '--auto: tự duyệt mọi quyền mà cấu hình OpenCode không từ chối.'],
+  'claude-allow-bash': ['Cho phép đúng lệnh đã bị từ chối', '--allowedTools "Bash(<lệnh>)": chỉ lệnh y hệt này được chạy; mọi lệnh khác vẫn bị từ chối.'],
+  'claude-add-dir': ['Mở thêm một thư mục cho công cụ file', '--add-dir <thư mục>: Claude Code được đọc/ghi đúng thư mục này; lệnh shell vẫn cần quyền riêng.']
 };
+/** The exact value a Claude Code grant carries, shown beside its title so the owner reads the command before allowing it. */
+const elevationDetail = e => e?.kind === 'claude-allow-bash' ? e.rule : e?.kind === 'codex-add-dir' || e?.kind === 'claude-add-dir' ? e.dir : '';
 const optionKey = option => option.elevation?.kind === 'agy-level' ? `agy-level:${option.elevation.level}`
   : option.elevation?.kind === 'opencode-allow' ? `opencode-allow:${option.elevation.permission}` : option.kind;
 const elevationKey = e => e.kind === 'agy-level' ? `agy-level:${e.level}` : e.kind === 'opencode-allow' ? `opencode-allow:${e.permission}` : e.kind;
 function retryNote(task) {
   const e = task.elevation;
-  const what = e ? `${(OPTION_TEXT[elevationKey(e)] || [e.kind])[0]}${e.kind === 'codex-add-dir' ? ` (${e.dir})` : ''}` : 'không rõ';
+  const what = e ? `${(OPTION_TEXT[elevationKey(e)] || [e.kind])[0]}${elevationDetail(e) ? ` (${elevationDetail(e)})` : ''}` : 'không rõ';
   return `Đây là lần chạy lại của task ${task.retry_of.slice(0, 8)}, với thêm quyền chỉ cho lần chạy này: ${what}. Cài đặt của bạn không đổi.`;
 }
 let approvalsAt = 0;
@@ -218,7 +222,7 @@ async function approveRerun(view, option) {
   if (option.needs_dir && !typed) { notify('Nhập đường dẫn tuyệt đối của thư mục trước'); return; }
   const elevation = option.needs_dir ? {kind: option.kind, dir: typed} : option.elevation;
   const [title, note] = OPTION_TEXT[optionKey(option)] || [option.kind, ''];
-  if (!confirm(`Chạy lại task này với thêm quyền?\n\n${title}${option.needs_dir ? `: ${typed}` : ''}\n${note}\n\nChỉ áp dụng cho MỘT lần chạy: bridge tạo task mới từ đúng yêu cầu đã ghi của task cũ. Cài đặt của bạn không đổi và lần chạy sau không thừa hưởng quyền này.${option.wide ? '\n\nMức này RỘNG: nó mở nhiều hơn các hành động đã bị từ chối.' : ''}`)) return;
+  if (!confirm(`Chạy lại task này với thêm quyền?\n\n${title}${option.needs_dir ? `: ${typed}` : elevationDetail(elevation) ? `: ${elevationDetail(elevation)}` : ''}\n${note}\n\nChỉ áp dụng cho MỘT lần chạy: bridge tạo task mới từ đúng yêu cầu đã ghi của task cũ. Cài đặt của bạn không đổi và lần chạy sau không thừa hưởng quyền này.${option.wide ? '\n\nMức này RỘNG: nó mở nhiều hơn các hành động đã bị từ chối.' : ''}`)) return;
   try {
     await api(`tasks/${view.task_id}/approve`, {method: 'POST', body: {confirm: true, elevation}});
     notify('Đã tạo task chạy lại');
@@ -254,7 +258,7 @@ function approvalBody(view) {
     const [title, note] = OPTION_TEXT[optionKey(item)] || [item.kind, ''];
     return h('label', {class: `option${index === picked ? ' picked' : ''}`},
       h('input', {type: 'radio', name: `pick-${view.task_id}`, checked: index === picked, onchange: () => { state.approvalPick[view.task_id] = index; patch(); }}),
-      h('span', {}, h('strong', {text: title}), h('span', {class: 'muted', text: note}),
+      h('span', {}, h('strong', {text: title}), elevationDetail(item.elevation) ? h('code', {text: elevationDetail(item.elevation)}) : null, h('span', {class: 'muted', text: note}),
         h('span', {class: 'chips'}, item.narrowest ? h('span', {class: 'pill ok', text: 'hẹp nhất'}) : null, item.wide ? h('span', {class: 'pill bad', text: 'rộng'}) : null)));
   });
   return [denied,
@@ -516,6 +520,51 @@ function rowProps(task, file) {
 }
 const diffLineClass = line => line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ') ? 'meta'
   : line.startsWith('@@') ? 'hunk' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : '';
+/** The new-file line number of each diff line (null for removed and meta lines), read from the hunk headers. */
+function diffLineNumbers(lines) {
+  let next = null;
+  return lines.map(line => {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) { next = Number(hunk[1]); return null; }
+    if (next === null || line.startsWith('-') || line.startsWith('\\')) return null;
+    if (line.startsWith('+++') || line.startsWith('---')) return null;
+    return next++;
+  });
+}
+/* ---------- Review notes (Orca's "notes on exact changed lines"): click a line of the diff, write a note, send them all as one follow-up task ---------- */
+function addNote(task, file, line) {
+  const text = prompt(`Nhận xét cho ${file}${line ? `:${line}` : ''}`);
+  if (!text || !text.trim()) return;
+  (state.notes[task.task_id] ||= []).push({path: file, ...(line ? {line} : {}), note: text.trim().slice(0, 2000)});
+  patch();
+}
+async function sendNotes(task) {
+  const notes = state.notes[task.task_id] || [];
+  if (!notes.length) return;
+  const instruction = (state.noteInstruction[task.task_id] || '').trim();
+  if (!confirm(`Gửi ${notes.length} nhận xét cho agent "${task.agent}" thành MỘT task sửa tiếp?\n\n${task.isolation === 'worktree' ? 'Task mới chạy trong worktree mới đã chứa sẵn các thay đổi của task này; xem và áp dụng task mới, rồi bỏ worktree cũ.' : 'Task mới chạy ngay trong workspace.'}`)) return;
+  try {
+    const created = await api(`tasks/${task.task_id}/feedback`, {method: 'POST', body: {confirm: true, notes, ...(instruction ? {instruction} : {})}});
+    delete state.notes[task.task_id]; delete state.noteInstruction[task.task_id];
+    notify('Đã tạo task sửa theo nhận xét');
+    await refresh(true);
+    openTask(created.task.task_id);
+  } catch (error) { notify(error.message); }
+}
+function notesPanel(task) {
+  const notes = state.notes[task.task_id] || [];
+  if (!notes.length) return null;
+  return h('div', {class: 'diff-box'},
+    h('div', {class: 'msg-head', text: `Nhận xét đang chờ gửi (${notes.length})`}),
+    h('ul', {class: 'notes'}, notes.map((note, index) => h('li', {},
+      h('code', {text: `${note.path}${note.line ? `:${note.line}` : ''}`}), ' ', note.note, ' ',
+      h('button', {class: 'link-btn', onclick: () => { notes.splice(index, 1); patch(); }, text: 'Xóa'})))),
+    h('input', {type: 'text', class: 'search', 'aria-label': 'Chỉ dẫn chung', placeholder: 'Chỉ dẫn chung (tùy chọn), ví dụ: giữ nguyên API công khai',
+      value: state.noteInstruction[task.task_id] || '', oninput: event => { state.noteInstruction[task.task_id] = event.target.value; }}),
+    h('div', {class: 'chips'},
+      h('button', {class: 'btn primary small', onclick: () => sendNotes(task), text: 'Gửi nhận xét cho agent'}),
+      h('button', {class: 'btn small', onclick: () => { delete state.notes[task.task_id]; patch(); }, text: 'Bỏ hết'})));
+}
 function diffViewer(task) {
   const current = state.diff && state.diff.task_id === task.task_id ? state.diff : null;
   if (!current) return null;
@@ -526,8 +575,20 @@ function diffViewer(task) {
   const data = current.data;
   if (!data.changed) return h('div', {class: 'diff-box'}, head, h('p', {class: 'muted', text: 'File này không có thay đổi so với commit gốc của worktree.'}));
   if (data.binary) return h('div', {class: 'diff-box'}, head, h('p', {class: 'muted', text: 'File nhị phân: chỉ biết là có thay đổi, không hiện được nội dung.'}));
+  const lines = data.diff.split('\n');
+  const numbers = diffLineNumbers(lines);
+  // Notes are for a task that has ended and whose worktree is still there; the follow-up is built from it.
+  const reviewable = !['queued', 'running'].includes(task.status) && !task.applied_at && !task.discarded_at;
+  const noted = new Set((state.notes[task.task_id] || []).filter(note => note.path === current.path).map(note => note.line));
   return h('div', {class: 'diff-box'}, head,
-    h('pre', {class: 'log diff'}, data.diff.split('\n').map(line => h('span', {class: diffLineClass(line), text: line}))),
+    reviewable ? h('p', {class: 'muted', text: 'Bấm vào một dòng (thêm hoặc giữ nguyên) để ghi nhận xét cho dòng đó.'}) : null,
+    h('pre', {class: 'log diff'}, lines.map((line, index) => {
+      const number = numbers[index];
+      const props = {class: `${diffLineClass(line)}${reviewable && number ? ' notable' : ''}${noted.has(number) ? ' noted' : ''}`, text: line};
+      if (reviewable && number) Object.assign(props, {title: `Ghi nhận xét cho dòng ${number}`, onclick: () => addNote(task, current.path, number)});
+      return h('span', props);
+    })),
+    reviewable ? h('div', {class: 'chips'}, h('button', {class: 'btn small', onclick: () => addNote(task, current.path, null), text: 'Nhận xét cả file'})) : null,
     data.truncated ? h('div', {class: 'callout warn', text: 'Diff dài nên chỉ hiện phần đầu.'}) : null);
 }
 function changesBody(task) {
@@ -551,6 +612,7 @@ function changesBody(task) {
     rows.length && task.isolation === 'worktree' && !task.discarded_at ? h('p', {class: 'muted', text: 'Bấm một file để đọc nội dung thay đổi (đã lọc secret).'}) : null,
     rows.length ? h('ul', {class: 'change-list'}, rows) : null,
     diffViewer(task),
+    notesPanel(task),
     d.truncated ? h('div', {class: 'callout warn', text: 'Chỉ hiện 500 mục đầu tiên của mỗi nhóm.'}) : null
   ];
 }
@@ -1042,7 +1104,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.approvals, state.approvalPick, state.diff, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.approvals, state.approvalPick, state.diff, state.notes, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();

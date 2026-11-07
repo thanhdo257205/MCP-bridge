@@ -112,7 +112,7 @@ test('a probed CLI without --conversation refuses rather than failing in the CLI
   assert.equal(first.conversation_id, CONVERSATION);
   await assert.rejects(
     () => manager.delegate({task: 'x', workspace, acceptance_criteria: ['ok'], resume_conversation: CONVERSATION}),
-    /has no --conversation/);
+    /cannot continue a conversation/);
   await manager.shutdown();
 });
 

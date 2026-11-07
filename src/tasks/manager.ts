@@ -8,7 +8,9 @@ import type { Config } from '../config.js';
 import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput, type DelegateRequest } from '../security/input.js';
 import { inside, validateWorkspace } from '../security/workspace.js';
 import { appendDecision, type DecisionAction } from '../decisions.js';
-import { applyWorktreeChanges, repositoryRoot } from '../isolation/apply.js';
+import { applyWorktreeChanges, carryWorktreeChanges, repositoryRoot, worktreeHead } from '../isolation/apply.js';
+import { assertNotePath, feedbackSchema, feedbackTask, quoteNote, type QuotedNote } from '../review/feedback.js';
+import { isOwned, normalizeOwn } from '../isolation/worktree.js';
 import { worktreeFileDiff, type FileDiff } from '../isolation/diff.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
@@ -50,7 +52,7 @@ export interface Task {
   stdout_bytes: number; stderr_bytes: number; stdout_truncated: boolean; stderr_truncated: boolean;
   final_response: string | null; cli_status: string | null; error: string | null;
   denied_actions: {action: string; display_name: string; suspected?: boolean}[];
-  /** The agy conversation this task ran in, when the CLI named one. Another task continues it with `resume_conversation`. */
+  /** The agy conversation or claude session this task ran in, when the CLI named one. Another task continues it with `resume_conversation`. */
   conversation_id: string | null;
   /** Set on a task the owner started from the approval queue: the task whose refused actions it runs again. */
   retry_of?: string | null;
@@ -60,6 +62,10 @@ export interface Task {
   approval?: {state: 'rerun' | 'dismissed'; at: string; task_id?: string} | null;
   /** Attempts a quota failover abandoned before this one, each with the reason it stopped (absent when there was no failover). */
   attempts?: TaskAttempt[];
+  /** Set on a follow-up made from review notes: the task whose diff the notes were left on. */
+  feedback_of?: string | null;
+  /** Follow-ups made from review notes on this task, oldest first. */
+  feedback_tasks?: string[];
   review_required: true; acceptance_verified: false;
 }
 /** One agent attempt that was given up on and replaced by another profile in the same pool. */
@@ -72,7 +78,11 @@ export interface TaskAttempt {
   cleanup?: TreeReport;
 }
 /** How much of an abandoned attempt's log is kept: enough to show why it stopped, small enough not to multiply the record. */
+/** Families whose CLI can continue a session the bridge ran: agy `--conversation`, claude `--resume`. */
+const RESUMABLE_FAMILIES = new Set<AgentFamily>(['antigravity', 'claude']);
 const ATTEMPT_TAIL_CHARS = 4000;
+/** What a review follow-up carries into admission beside its delegate request. */
+interface FollowUp { of: string; notes: QuotedNote[]; instruction: string | null; seed?: {worktree: string; base: string} }
 const tail = (text: string): string => (text.length > ATTEMPT_TAIL_CHARS ? text.slice(-ATTEMPT_TAIL_CHARS) : text);
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response' | 'attempts'>;
 /** One row of the approval queue, as the web page reads it. */
@@ -96,6 +106,8 @@ export interface TaskRequest {
   effort?: EffortLevel;
   /** The conversation this task continues. Provenance a reviewer needs: the task ran with context it did not write. Absent on a task that opens its own conversation. */
   resume_conversation?: string;
+  /** The review notes a feedback follow-up was made from, with the lines they quoted. Absent on every other task. */
+  feedback?: {of: string; notes: QuotedNote[]; instruction: string | null; carried_files: number | null};
 }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
@@ -107,6 +119,8 @@ interface Entry {
   poolId?: string;
   poolTried?: Set<string>;
   worktreeInfo?: Worktree;
+  /** A review follow-up of a worktree task: its worktree is made from this commit and starts with that worktree's changes. */
+  seed?: {worktree: string; base: string};
   holdsLock?: boolean;
   /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
   lastOutputAt?: number;
@@ -215,7 +229,7 @@ export class TaskManager {
       agents: this.agents.map(({adapter, status, enabled}) => ({
         id: adapter.id, label: adapter.label, enabled, available: status.available, version: status.version,
         executable: status.executable, capabilities: adapter.capabilities, warnings: status.warnings,
-        // A client only offers `resume_conversation` for an agent whose CLI was probed and shown to take `--conversation`.
+        // A client only offers `resume_conversation` for an agent whose CLI was probed and shown to continue one (agy `--conversation`, claude `--resume`).
         conversation_resume: status.conversation_resume
       })),
       default_agent: this.defaultAgent,
@@ -233,13 +247,13 @@ export class TaskManager {
     return undefined;
   }
 
-  private admitInOrder(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}): Promise<Task> {
-    const admitted = this.admission.then(() => this.admit(raw, meta, rerun));
+  private admitInOrder(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}, follow?: FollowUp): Promise<Task> {
+    const admitted = this.admission.then(() => this.admit(raw, meta, rerun, follow));
     this.admission = admitted.then(() => undefined, () => undefined);
     return admitted;
   }
 
-  private async admit(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}): Promise<Task> {
+  private async admit(raw: DelegateRequest, meta: {client?: string | null}, rerun?: {retryOf: string; elevation: Elevation}, follow?: FollowUp): Promise<Task> {
     if (this.closing) throw new Error('Bridge is shutting down');
     const delegation = delegationState(this.runtime.stateDirectory);
     if (!delegation.enabled) throw new Error(`Delegation to Antigravity is disabled by the bridge owner (${delegation.reason}). Do not delegate; do this work yourself or ask the user to run \`agy-mcp-bridge delegation on\` (\`npm run delegation -- on\` in a git checkout)`);
@@ -259,11 +273,11 @@ export class TaskManager {
     // created it: otherwise a client could aim a task at another project's context, or at the owner's own interactive session.
     let resumeConversation: string | null = null;
     if (input.resume_conversation !== undefined) {
-      if (agent?.adapter.family !== 'antigravity') {
-        throw new Error(`resume_conversation needs Antigravity, not agent "${agent?.adapter.id ?? input.agent ?? 'the default agent'}"`);
+      if (!agent || !RESUMABLE_FAMILIES.has(agent.adapter.family)) {
+        throw new Error(`resume_conversation needs Antigravity or Claude Code, not agent "${agent?.adapter.id ?? input.agent ?? 'the default agent'}"`);
       }
       if (agent.status.conversation_resume === false) {
-        throw new Error(`The Antigravity CLI${agent.status.version ? ` ${agent.status.version}` : ''} has no --conversation, so no task can continue a conversation`);
+        throw new Error(`The ${agent.adapter.label} CLI${agent.status.version ? ` ${agent.status.version}` : ''} cannot continue a conversation, so no task can resume one`);
       }
       const source = this.conversationOwner(input.resume_conversation);
       if (!source) {
@@ -271,6 +285,11 @@ export class TaskManager {
       }
       if (source.workspace !== workspace) {
         throw new Error(`Conversation "${input.resume_conversation}" was created in another workspace, so it is not continued here`);
+      }
+      // An id from one CLI means nothing to another: a claude session id handed to agy (or the reverse) would fail or open something else.
+      const sourceFamily = this.familyOf(source.agent);
+      if (sourceFamily && sourceFamily !== agent.adapter.family) {
+        throw new Error(`Conversation "${input.resume_conversation}" was run by ${sourceFamily}, not ${agent.adapter.family}, so agent "${agent.adapter.id}" cannot continue it`);
       }
       resumeConversation = input.resume_conversation;
     }
@@ -300,12 +319,13 @@ export class TaskManager {
       stdout_truncated: false, stderr_truncated: false,
       final_response: null, cli_status: null, error: null, denied_actions: [], review_required: true, acceptance_verified: false,
       conversation_id: resumeConversation,
-      ...(rerun ? {retry_of: rerun.retryOf, elevation: rerun.elevation} : {})
+      ...(rerun ? {retry_of: rerun.retryOf, elevation: rerun.elevation} : {}),
+      ...(follow ? {feedback_of: follow.of} : {})
     };
     const pools = this.config.agents?.pools ?? {};
     const poolId = (input.agent && pools[input.agent]) ? input.agent : (!input.agent && this.defaultAgent && pools[this.defaultAgent] ? this.defaultAgent : undefined);
     const entry: Entry = {
-      poolId,
+      poolId, ...(follow?.seed ? {seed: follow.seed} : {}),
       task, done: Promise.resolve(), pending: supported ? {input, workspace, timeout, agent: agent!, autonomy} : undefined,
       request: {
         task: redact(input.task), acceptance_criteria: input.acceptance_criteria.map(redact),
@@ -316,7 +336,8 @@ export class TaskManager {
         permission: permissionState(this.runtime.stateDirectory).level,
         effort: readEffort(this.runtime.stateDirectory),
         // Only a task that continues a conversation carries the field, so the request of an ordinary task keeps its shape.
-        ...(resumeConversation ? {resume_conversation: resumeConversation} : {})
+        ...(resumeConversation ? {resume_conversation: resumeConversation} : {}),
+        ...(follow ? {feedback: {of: follow.of, notes: follow.notes, instruction: follow.instruction, carried_files: null}} : {})
       }
     };
     this.entries.set(task.task_id, entry);
@@ -363,8 +384,15 @@ export class TaskManager {
       await mkdir(this.runtime.stateDirectory, { recursive: true });
       if (task.isolation === 'worktree') {
         if (!worktree) {
-          worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id});
+          worktree = await createWorktree({workspace, stateDirectory: this.runtime.stateDirectory, taskId: task.task_id, ...(entry.seed ? {base: entry.seed.base} : {})});
           entry.worktreeInfo = worktree;
+          if (entry.seed) {
+            // The follow-up starts where the reviewed task stopped; if those changes cannot be carried, the agent is never started on a clean copy.
+            let carried: number;
+            try { carried = await carryWorktreeChanges(entry.seed.worktree, worktree.root); }
+            catch (error) { throw new Error(`The reviewed task's changes could not be carried into the follow-up worktree: ${error instanceof Error ? error.message : 'git apply failed'}`); }
+            if (entry.request?.feedback) entry.request.feedback.carried_files = carried;
+          }
           task.worktree = worktree.root;
           task.branch = worktree.branch;
           task.worktree_toplevel = worktree.toplevel;
@@ -444,7 +472,7 @@ export class TaskManager {
         // The task's model is a per-family setting: a codex model handed to another family would override that family's own.
         model: antigravity ? entry.request?.model ?? null : agent.adapter.family === 'codex' ? this.config.agents?.codex_model : undefined,
         extraArgs, promptTransport: transport, elevation,
-        // Set when this task continues an earlier Antigravity conversation (validated when the task was admitted).
+        // Set when this task continues an earlier Antigravity conversation or Claude Code session (validated when the task was admitted).
         conversationId: task.conversation_id
       });
       if (invocation.resultFile) await mkdir(path.dirname(invocation.resultFile), {recursive: true});
@@ -866,6 +894,55 @@ export class TaskManager {
     }
     return views.sort((a, b) => Date.parse(b.ended_at ?? '') - Date.parse(a.ended_at ?? '')).slice(0, 100);
   }
+  /**
+   * Review notes on a finished task become one follow-up task for the same agent (Orca's "send line notes back to the agent"). The notes
+   * quote the lines they point at; a worktree follow-up gets a new worktree that already holds the reviewed changes, so its diff is the
+   * whole result and the reviewed worktree can be discarded; a session the CLI can continue is resumed, so the agent keeps its context.
+   */
+  feedback(raw: unknown, meta: {client?: string | null} = {}): Promise<Task> {
+    return this.enqueueDecision(async () => {
+      const input = feedbackSchema.parse(raw);
+      const entry = this.entries.get(input.task_id);
+      if (!entry) throw new Error('Unknown or expired task_id');
+      const source = entry.task;
+      if (source.status === 'queued' || source.status === 'running') throw new Error('The task is still running; review it once it has ended');
+      if (source.status === 'unsupported') throw new Error('The task never ran, so there is no diff to review; delegate it again instead');
+      const request = entry.request;
+      if (!request) throw new Error('The recorded request of this task is gone, so no follow-up can be built from it');
+      const agent = this.agents.find(item => item.adapter.id === source.agent);
+      if (!agent) throw new Error(`Agent "${source.agent}" is no longer configured`);
+      for (const note of input.notes) assertNotePath(note);
+      let root = source.workspace;
+      let seed: FollowUp['seed'];
+      if (source.isolation === 'worktree') {
+        if (source.applied_at) throw new Error('This task was already applied to the workspace; review notes now belong to a task with isolation "none" in that workspace');
+        await this.reviewableTask(source.task_id);
+        root = request.worktree ?? source.worktree!;
+        seed = {worktree: source.worktree!, base: await worktreeHead(source.worktree!)};
+        const owns = source.owns.map(normalizeOwn);
+        const outside = input.notes.map(note => note.path.replace(/\\/g, '/')).filter(file => !isOwned(file, owns));
+        if (outside.length) throw new Error(`Notes on files the task does not own cannot be addressed by its follow-up: ${[...new Set(outside)].slice(0, 5).join(', ')}`);
+      }
+      const notes: QuotedNote[] = [];
+      for (const note of input.notes) notes.push(await quoteNote(root, note));
+      const resumable = RESUMABLE_FAMILIES.has(agent.adapter.family) && agent.status.conversation_resume !== false && source.conversation_id;
+      const followUp: DelegateRequest = {
+        task: feedbackTask(source.task_id, request.task, notes, input.instruction),
+        workspace: source.workspace,
+        acceptance_criteria: [...request.acceptance_criteria.slice(0, 29), 'Every review note is addressed and nothing else is changed'],
+        ...(request.context ? {context: request.context} : {}),
+        timeout_seconds: input.timeout_seconds ?? request.timeout_seconds,
+        agent: source.agent, isolation: source.isolation, owns: source.owns, autonomy: source.autonomy,
+        ...(resumable ? {resume_conversation: source.conversation_id!} : {})
+      };
+      const created = await this.admitInOrder(followUp, {client: meta.client ?? request.client ?? null}, undefined,
+        {of: source.task_id, notes, instruction: input.instruction ?? null, ...(seed ? {seed} : {})});
+      source.feedback_tasks = [...(source.feedback_tasks ?? []), created.task_id].slice(-20);
+      await this.persist(source);
+      await this.recordDecision(source.task_id, 'feedback', true, `${notes.length} note(s) sent to task ${created.task_id}`);
+      return created;
+    });
+  }
   approveTask(id: string, requested: unknown): Promise<{task: Task; rerun_of: string}> {
     return this.enqueueDecision(async () => {
       const entry = this.entries.get(id);
@@ -882,7 +959,7 @@ export class TaskManager {
       try { elevation = parseElevation(requested); } catch (error) { return refuse(error instanceof Error ? error.message : 'Invalid permission'); }
       const why = elevationRefusal(family, original.denied_actions, elevation);
       if (why) return refuse(why);
-      if (elevation.kind === 'codex-add-dir') {
+      if (elevation.kind === 'codex-add-dir' || elevation.kind === 'claude-add-dir') {
         const info = await stat(elevation.dir).catch(() => null);
         if (!info?.isDirectory()) return refuse('The directory does not exist');
       }

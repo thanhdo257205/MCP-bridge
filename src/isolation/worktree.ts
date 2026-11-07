@@ -43,15 +43,20 @@ function git(cwd: string, args: string[], timeout = 20000): Promise<string> {
   });
 }
 
-/** A worktree is created from HEAD only; uncommitted changes in the original workspace are intentionally not copied. */
-export async function createWorktree(options: { workspace: string; stateDirectory: string; taskId: string }): Promise<Worktree> {
+/**
+ * A worktree is created from HEAD only; uncommitted changes in the original workspace are intentionally not copied. `base` replaces HEAD
+ * with another commit of the same repository (a review follow-up starts from the commit its earlier task's worktree was made from).
+ */
+export async function createWorktree(options: { workspace: string; stateDirectory: string; taskId: string; base?: string }): Promise<Worktree> {
   let toplevel: string;
   let prefix: string;
   let base: string;
   try {
     toplevel = (await git(options.workspace, ['-c', 'core.fsmonitor=false', 'rev-parse', '--show-toplevel'])).trim();
     prefix = (await git(options.workspace, ['-c', 'core.fsmonitor=false', 'rev-parse', '--show-prefix'])).trim().replace(/\\/g, '/').replace(/\/+$/, '');
-    base = (await git(options.workspace, ['-c', 'core.fsmonitor=false', 'rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+    if (options.base !== undefined && !/^[0-9a-f]{7,64}$/i.test(options.base)) throw new Error('base must be a commit id');
+    const wanted = options.base !== undefined ? `${options.base}^{commit}` : 'HEAD^{commit}';
+    base = (await git(options.workspace, ['-c', 'core.fsmonitor=false', 'rev-parse', '--verify', wanted])).trim();
   } catch (error) {
     throw new Error(`Worktree isolation requires a git repository with at least one commit: ${error instanceof Error ? error.message : 'git failed'}`);
   }

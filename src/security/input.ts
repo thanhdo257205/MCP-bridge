@@ -17,7 +17,7 @@ export const delegateSchema = z.object({
   owns: z.array(ownPath).max(100).default([]),
   autonomy: z.enum(['suggest', 'auto', 'full']).optional(),
   /** Continue an Antigravity conversation the bridge itself ran, by the `conversation_id` in that task's output. */
-  resume_conversation: z.uuid().optional().describe('Continue an earlier Antigravity conversation instead of starting one: pass the conversation_id of a finished task in this same workspace. The bridge only accepts conversations it ran itself')
+  resume_conversation: z.uuid().optional().describe('Continue an earlier Antigravity conversation or Claude Code session instead of starting one: pass the conversation_id of a finished task of the same agent family in this same workspace. The bridge only accepts conversations it ran itself')
 }).strict().superRefine((input, ctx) => {
   if (input.isolation === 'worktree' && input.owns.length === 0) {
     ctx.addIssue({code: 'custom', path: ['owns'], message: 'Worktree isolation requires at least one path in owns'});

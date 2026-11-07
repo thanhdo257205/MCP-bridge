@@ -9,6 +9,7 @@ import {
   type MissionManager, type MissionView
 } from '../missions/missions.js';
 import {readPackageInfo} from '../update.js';
+import { feedbackSchema } from '../review/feedback.js';
 
 /** Best-effort label for who delegated: the client's declared name/version when the request carries it, else the HTTP User-Agent. */
 function clientLabel(envelope: unknown): string | null {
@@ -65,7 +66,7 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     inputSchema: z.object({}).strict(), annotations: {readOnlyHint: true, openWorldHint: false}
   }, async () => response(manager.agentsOverview()));
   server.registerTool('antigravity_delegate', {
-    description: 'Start one supervised agent task. Pick agent (default from config), isolation "worktree" plus owns paths for parallel isolated work, and autonomy. To correct a finished Antigravity task without re-explaining it, pass resume_conversation with that task\'s conversation_id. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
+    description: 'Start one supervised agent task. Pick agent (default from config), isolation "worktree" plus owns paths for parallel isolated work, and autonomy. To correct a finished Antigravity or Claude Code task without re-explaining it, pass resume_conversation with that task\'s conversation_id. Returns running with task_id; poll status/output. Completion always needs Tech Lead diff/test review. Never authorize destructive/system/deploy actions with this tool.',
     inputSchema: delegateSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
   }, async (input, ctx) => guard(() => manager.delegate(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_task_status', {
@@ -89,9 +90,13 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     return withNextStep(manager.summary(task_id), manager.activityNote(task_id));
   }));
   server.registerTool('antigravity_task_output', {
-    description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. conversation_id names the Antigravity session a follow-up task can continue with resume_conversation. Does not wait for completion.',
+    description: 'Get final response, partial stdout/stderr logs, errors and truncation metadata. conversation_id names the Antigravity conversation or Claude Code session a follow-up task can continue with resume_conversation. Does not wait for completion.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id}) => guard(() => manager.get(task_id)));
+  server.registerTool('task_feedback', {
+    description: 'Send review notes on a finished task back to the same agent as ONE follow-up task. Each note names a file and optionally a line (as the file is now); the bridge quotes those lines in the prompt. A worktree task\'s follow-up gets a new worktree that already holds the reviewed changes (its diff is the whole result; discard the reviewed one after); an Antigravity or Claude Code follow-up continues the same conversation. Notes on files outside the task\'s owns are refused. Returns the new task; wait on it like any other.',
+    inputSchema: feedbackSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
+  }, async (input, ctx) => guard(() => manager.feedback(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_cancel_task', {
     description: 'Terminate only the managed task process tree. Partial file changes remain; no automatic rollback.',
     inputSchema: taskIdSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: false}
