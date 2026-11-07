@@ -73,6 +73,10 @@
       {
         "sha256": "006be28209670d2285ef243952643dade865f2ae063b149d9a5f73894f7d896e",
         "note": "conversation_id and resume_conversation: a correction can continue the same Antigravity conversation"
+      },
+      {
+        "sha256": "c0034a89af47f3aaf8d879cbfef19a124df2be3373e66534b3891fe3199388a7",
+        "note": "Claude Code / OpenCode / Gemini agents, task_feedback (notes and logs), worktree setup failures"
       }
     ],
     "mission-orchestrator": [
