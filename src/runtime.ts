@@ -37,7 +37,10 @@ export async function createRuntime() {
   if (config.notify) console.error(`[bridge] Task notifications (${config.notify.events.join(', ')}) are POSTed to ${new URL(config.notify.url).host}`);
   if (!treeWatchEnabled) console.error('[bridge] WARNING: tree_watch is off; a process tree the agent leaves behind will not be released');
   const manager = new TaskManager(config, {
-    executable: antigravity.executable, prefixArgs: antigravity.prefixArgs, supported: antigravity.supported, stateDirectory: paths.stateDirectory,
+    executable: antigravity.executable, prefixArgs: antigravity.prefixArgs,
+    // `supported` gates the task history on disk. It used to be agy's own probe, so a machine with only Codex or Claude Code ran tasks
+    // but kept none of them across a restart (and lost their approval queue and review notes with them).
+    supported: antigravity.supported || registry.agents.some(agent => agent.enabled && agent.status.available), stateDirectory: paths.stateDirectory,
     agents: registry.agents, defaultAgent: registry.defaultAgent,
     // Without the watch the release can only name the processes that still hang below the agent at the moment it
     // exits, which is exactly the case that left the worktree pinned in a live run.

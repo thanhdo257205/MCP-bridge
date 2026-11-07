@@ -40,7 +40,8 @@ export async function handleReviewRoutes(req: IncomingMessage, res: ServerRespon
   // Review notes from the diff viewer become one follow-up task, exactly as the task_feedback tool does it (notes need a larger body).
   const feedback = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/feedback$`));
   if (feedback && method === 'POST') {
-    const body = await readJson(req, 96 * 1024);
+    // Notes plus a pasted CI log (up to 200 000 characters; the bridge keeps only its end).
+    const body = await readJson(req, 512 * 1024);
     if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
     const {confirm: _confirm, ...rest} = body;
     const created = await ctx.manager.feedback({...rest, task_id: feedback[1]}, {client: 'web UI'});

@@ -139,3 +139,29 @@ test('quoted lines show their numbers and mark the noted range; the prompt stays
     assert.ok(text.length <= 16_000);
   } finally { await rm(root, {recursive: true, force: true}); }
 });
+
+test('a failing log can be sent alone: colour codes and progress redraws go, secrets are filtered, the end is kept', async () => {
+  const {repo, manager, runs, finish} = await setup(['one\nTWO\nthree\nfour\n', 'one\ntwo\nthree\nfour\n']);
+  try {
+    const first = await manager.wait((await manager.delegate({task: 'edit', workspace: repo, acceptance_criteria: ['ok'], agent: 'claude', isolation: 'worktree', owns: ['a.txt']})).task_id);
+    await assert.rejects(manager.feedback({task_id: first.task_id}), /at least one note or a log/);
+    const noise = Array.from({length: 2000}, (_, index) => `ok ${index} - passing case`).join('\n');
+    const text = `${noise}\n\u001b[31mnot ok 2001 - line two is lowercase\u001b[0m\n  expected: 'two'\n  actual: 'TWO'\nprogress 10%\rprogress 100%\napi_key=sk-abcdefghijklmnopqrstuvwxyz123456\n# fail 1\n`;
+    const follow = await manager.feedback({task_id: first.task_id, log: {label: 'CI: test (ubuntu)', text}});
+    const done = await manager.wait(follow.task_id);
+    assert.equal(done.status, 'completed', done.error ?? '');
+    const prompt = runs[1]!.prompt;
+    assert.match(prompt, /Failing log \(CI: test \(ubuntu\)\), last part only/);
+    assert.match(prompt, /not ok 2001 - line two is lowercase/);
+    assert.match(prompt, /# fail 1/);
+    assert.doesNotMatch(prompt, /\\u001b|\u001b/, 'no escape codes reach the agent');
+    assert.doesNotMatch(prompt, /progress 10%/, 'only the last state of a redrawn line is kept');
+    assert.doesNotMatch(prompt, /sk-abcdefghijklmnopqrstuvwxyz123456/);
+    assert.doesNotMatch(prompt, /ok 0 - passing case/, 'the start of a long log is left out');
+    assert.doesNotMatch(prompt, /Notes:/);
+    const request = manager.detail(follow.task_id).request!;
+    assert.match(request.acceptance_criteria.at(-1)!, /^The failure in the attached log is fixed, and nothing else is changed$/);
+    assert.ok((request.feedback?.log?.trimmed_chars ?? 0) > 0);
+    assert.equal(await readFile(path.join(done.worktree!, 'a.txt'), 'utf8'), 'one\ntwo\nthree\nfour\n');
+  } finally { await finish(); }
+});

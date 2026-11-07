@@ -94,7 +94,7 @@ export function createServer(manager: TaskManager, environment: Record<string, u
     inputSchema: taskIdSchema, annotations: {readOnlyHint: true, openWorldHint: false}
   }, async ({task_id}) => guard(() => manager.get(task_id)));
   server.registerTool('task_feedback', {
-    description: 'Send review notes on a finished task back to the same agent as ONE follow-up task. Each note names a file and optionally a line (as the file is now); the bridge quotes those lines in the prompt. A worktree task\'s follow-up gets a new worktree that already holds the reviewed changes (its diff is the whole result; discard the reviewed one after); an Antigravity or Claude Code follow-up continues the same conversation. Notes on files outside the task\'s owns are refused. Returns the new task; wait on it like any other.',
+    description: 'Send review notes on a finished task back to the same agent as ONE follow-up task. Each note names a file and optionally a line (as the file is now); the bridge quotes those lines in the prompt. A worktree task\'s follow-up gets a new worktree that already holds the reviewed changes (its diff is the whole result; discard the reviewed one after); an Antigravity or Claude Code follow-up continues the same conversation. Notes on files outside the task\'s owns are refused. Instead of or beside notes, pass log with a failing CI job or test run (its end is kept, colour codes and secrets removed). Returns the new task; wait on it like any other.',
     inputSchema: feedbackSchema, annotations: {readOnlyHint: false, destructiveHint: true, openWorldHint: true}
   }, async (input, ctx) => guard(() => manager.feedback(input, {client: clientLabel(ctx.mcpReq.envelope)})));
   server.registerTool('antigravity_cancel_task', {

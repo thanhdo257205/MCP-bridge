@@ -9,7 +9,7 @@ import { DEFAULT_MAX_WAIT_SECONDS, delegateSchema, promptFor, type DelegateInput
 import { inside, validateWorkspace } from '../security/workspace.js';
 import { appendDecision, type DecisionAction } from '../decisions.js';
 import { applyWorktreeChanges, carryWorktreeChanges, repositoryRoot, worktreeHead } from '../isolation/apply.js';
-import { assertNotePath, feedbackSchema, feedbackTask, quoteNote, type QuotedNote } from '../review/feedback.js';
+import { assertNotePath, feedbackSchema, feedbackTask, prepareLog, quoteNote, type FeedbackLog, type QuotedNote } from '../review/feedback.js';
 import { isOwned, normalizeOwn } from '../isolation/worktree.js';
 import { readSetupReport, setupFor, wrapWithSetup, type SetupReport } from '../isolation/setup.js';
 import { notifyTaskEnd } from '../notify.js';
@@ -86,7 +86,7 @@ export interface TaskAttempt {
 const RESUMABLE_FAMILIES = new Set<AgentFamily>(['antigravity', 'claude']);
 const ATTEMPT_TAIL_CHARS = 4000;
 /** What a review follow-up carries into admission beside its delegate request. */
-interface FollowUp { of: string; notes: QuotedNote[]; instruction: string | null; seed?: {worktree: string; base: string} }
+interface FollowUp { of: string; notes: QuotedNote[]; instruction: string | null; log: FeedbackLog | null; seed?: {worktree: string; base: string} }
 const tail = (text: string): string => (text.length > ATTEMPT_TAIL_CHARS ? text.slice(-ATTEMPT_TAIL_CHARS) : text);
 export type TaskSummary = Omit<Task, 'stdout' | 'stderr' | 'final_response' | 'attempts'>;
 /** One row of the approval queue, as the web page reads it. */
@@ -111,7 +111,7 @@ export interface TaskRequest {
   /** The conversation this task continues. Provenance a reviewer needs: the task ran with context it did not write. Absent on a task that opens its own conversation. */
   resume_conversation?: string;
   /** The review notes a feedback follow-up was made from, with the lines they quoted. Absent on every other task. */
-  feedback?: {of: string; notes: QuotedNote[]; instruction: string | null; carried_files: number | null};
+  feedback?: {of: string; notes: QuotedNote[]; instruction: string | null; carried_files: number | null; log?: FeedbackLog | null};
 }
 interface Entry {
   task: Task; request?: TaskRequest; child?: ChildProcess; done: Promise<void>; stop?: Status;
@@ -343,7 +343,7 @@ export class TaskManager {
         effort: readEffort(this.runtime.stateDirectory),
         // Only a task that continues a conversation carries the field, so the request of an ordinary task keeps its shape.
         ...(resumeConversation ? {resume_conversation: resumeConversation} : {}),
-        ...(follow ? {feedback: {of: follow.of, notes: follow.notes, instruction: follow.instruction, carried_files: null}} : {})
+        ...(follow ? {feedback: {of: follow.of, notes: follow.notes, instruction: follow.instruction, carried_files: null, ...(follow.log ? {log: follow.log} : {})}} : {})
       }
     };
     this.entries.set(task.task_id, entry);
@@ -954,21 +954,23 @@ export class TaskManager {
       }
       const notes: QuotedNote[] = [];
       for (const note of input.notes) notes.push(await quoteNote(root, note));
+      const log = input.log ? prepareLog(input.log) : null;
       const resumable = RESUMABLE_FAMILIES.has(agent.adapter.family) && agent.status.conversation_resume !== false && source.conversation_id;
       const followUp: DelegateRequest = {
-        task: feedbackTask(source.task_id, request.task, notes, input.instruction),
+        task: feedbackTask(source.task_id, request.task, notes, input.instruction, log),
         workspace: source.workspace,
-        acceptance_criteria: [...request.acceptance_criteria.slice(0, 29), 'Every review note is addressed and nothing else is changed'],
+        acceptance_criteria: [...request.acceptance_criteria.slice(0, 29),
+          `${[notes.length ? 'Every review note is addressed' : null, log ? `${notes.length ? 'the' : 'The'} failure in the attached log is fixed` : null].filter(Boolean).join(' and ')}, and nothing else is changed`],
         ...(request.context ? {context: request.context} : {}),
         timeout_seconds: input.timeout_seconds ?? request.timeout_seconds,
         agent: source.agent, isolation: source.isolation, owns: source.owns, autonomy: source.autonomy,
         ...(resumable ? {resume_conversation: source.conversation_id!} : {})
       };
       const created = await this.admitInOrder(followUp, {client: meta.client ?? request.client ?? null}, undefined,
-        {of: source.task_id, notes, instruction: input.instruction ?? null, ...(seed ? {seed} : {})});
+        {of: source.task_id, notes, instruction: input.instruction ?? null, log, ...(seed ? {seed} : {})});
       source.feedback_tasks = [...(source.feedback_tasks ?? []), created.task_id].slice(-20);
       await this.persist(source);
-      await this.recordDecision(source.task_id, 'feedback', true, `${notes.length} note(s) sent to task ${created.task_id}`);
+      await this.recordDecision(source.task_id, 'feedback', true, `${notes.length} note(s)${log ? ' and a log' : ''} sent to task ${created.task_id}`);
       return created;
     });
   }

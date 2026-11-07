@@ -21,7 +21,7 @@ const MATCH = {
 const state = {
   overview: null, selected: null, detail: null, view: 'tasks', logTab: 'stdout',
   missions: null, selectedMission: null, plan: null,
-  approvals: null, approvalPick: {}, approvalDir: {}, notes: {}, noteInstruction: {},
+  approvals: null, approvalPick: {}, approvalDir: {}, notes: {}, noteInstruction: {}, noteLog: {}, noteLogLabel: {}, logOpen: {},
   open: new Set(), changes: null, connected: true, toast: '', q: '', filter: 'all'
 };
 let timer = null;
@@ -540,12 +540,16 @@ function addNote(task, file, line) {
 }
 async function sendNotes(task) {
   const notes = state.notes[task.task_id] || [];
-  if (!notes.length) return;
+  const logText = (state.noteLog[task.task_id] || '').trim();
+  const label = (state.noteLogLabel[task.task_id] || '').trim();
+  if (!notes.length && !logText) { notify('Thêm ít nhất một nhận xét hoặc dán log lỗi'); return; }
   const instruction = (state.noteInstruction[task.task_id] || '').trim();
-  if (!confirm(`Gửi ${notes.length} nhận xét cho agent "${task.agent}" thành MỘT task sửa tiếp?\n\n${task.isolation === 'worktree' ? 'Task mới chạy trong worktree mới đã chứa sẵn các thay đổi của task này; xem và áp dụng task mới, rồi bỏ worktree cũ.' : 'Task mới chạy ngay trong workspace.'}`)) return;
+  const what = [notes.length ? `${notes.length} nhận xét` : '', logText ? 'log lỗi' : ''].filter(Boolean).join(' và ');
+  if (!confirm(`Gửi ${what} cho agent "${task.agent}" thành MỘT task sửa tiếp?\n\n${task.isolation === 'worktree' ? 'Task mới chạy trong worktree mới đã chứa sẵn các thay đổi của task này; xem và áp dụng task mới, rồi bỏ worktree cũ.' : 'Task mới chạy ngay trong workspace.'}`)) return;
   try {
-    const created = await api(`tasks/${task.task_id}/feedback`, {method: 'POST', body: {confirm: true, notes, ...(instruction ? {instruction} : {})}});
-    delete state.notes[task.task_id]; delete state.noteInstruction[task.task_id];
+    const created = await api(`tasks/${task.task_id}/feedback`, {method: 'POST', body: {confirm: true, notes,
+      ...(logText ? {log: {text: logText.slice(-200000), ...(label ? {label: label.slice(0, 200)} : {})}} : {}), ...(instruction ? {instruction} : {})}});
+    for (const key of ['notes', 'noteInstruction', 'noteLog', 'noteLogLabel', 'logOpen']) delete state[key][task.task_id];
     notify('Đã tạo task sửa theo nhận xét');
     await refresh(true);
     openTask(created.task.task_id);
@@ -553,17 +557,27 @@ async function sendNotes(task) {
 }
 function notesPanel(task) {
   const notes = state.notes[task.task_id] || [];
-  if (!notes.length) return null;
+  const reviewable = task.isolation === 'worktree' && !['queued', 'running'].includes(task.status) && !task.applied_at && !task.discarded_at;
+  if (!reviewable && !notes.length) return null;
+  const logOpen = Boolean(state.logOpen[task.task_id]);
+  if (!notes.length && !logOpen) {
+    return h('div', {class: 'chips'}, h('button', {class: 'btn small', onclick: () => { state.logOpen[task.task_id] = true; patch(); }, text: 'Gửi log lỗi (CI/test) cho agent'}));
+  }
   return h('div', {class: 'diff-box'},
-    h('div', {class: 'msg-head', text: `Nhận xét đang chờ gửi (${notes.length})`}),
+    h('div', {class: 'msg-head', text: notes.length ? `Nhận xét đang chờ gửi (${notes.length})` : 'Gửi log lỗi cho agent'}),
+    logOpen ? h('input', {type: 'text', class: 'search', 'aria-label': 'Nguồn log', placeholder: 'Nguồn log (tùy chọn), ví dụ: CI test (ubuntu, node 22)',
+      value: state.noteLogLabel[task.task_id] || '', oninput: event => { state.noteLogLabel[task.task_id] = event.target.value; }}) : null,
+    logOpen ? h('textarea', {class: 'search log-input', rows: '8', 'aria-label': 'Log lỗi', placeholder: 'Dán output lỗi của CI hoặc test. Bridge bỏ mã màu, lọc secret và chỉ giữ phần cuối.',
+      oninput: event => { state.noteLog[task.task_id] = event.target.value; }}, state.noteLog[task.task_id] || '') : null,
     h('ul', {class: 'notes'}, notes.map((note, index) => h('li', {},
       h('code', {text: `${note.path}${note.line ? `:${note.line}` : ''}`}), ' ', note.note, ' ',
       h('button', {class: 'link-btn', onclick: () => { notes.splice(index, 1); patch(); }, text: 'Xóa'})))),
     h('input', {type: 'text', class: 'search', 'aria-label': 'Chỉ dẫn chung', placeholder: 'Chỉ dẫn chung (tùy chọn), ví dụ: giữ nguyên API công khai',
       value: state.noteInstruction[task.task_id] || '', oninput: event => { state.noteInstruction[task.task_id] = event.target.value; }}),
     h('div', {class: 'chips'},
-      h('button', {class: 'btn primary small', onclick: () => sendNotes(task), text: 'Gửi nhận xét cho agent'}),
-      h('button', {class: 'btn small', onclick: () => { delete state.notes[task.task_id]; patch(); }, text: 'Bỏ hết'})));
+      h('button', {class: 'btn primary small', onclick: () => sendNotes(task), text: 'Gửi cho agent'}),
+      logOpen ? null : h('button', {class: 'btn small', onclick: () => { state.logOpen[task.task_id] = true; patch(); }, text: 'Thêm log lỗi'}),
+      h('button', {class: 'btn small', onclick: () => { for (const key of ['notes', 'noteLog', 'noteLogLabel', 'logOpen']) delete state[key][task.task_id]; patch(); }, text: 'Bỏ hết'})));
 }
 function diffViewer(task) {
   const current = state.diff && state.diff.task_id === task.task_id ? state.diff : null;
@@ -1120,7 +1134,7 @@ function patch() {
     setRegion('list', JSON.stringify([state.q, state.filter, state.selected, o.budget?.task_tokens, o.tasks.map(t => stable(t))]), () => taskItems(o));
     regions.count.textContent = taskCount(o);
     const d = state.detail;
-    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.approvals, state.approvalPick, state.diff, state.notes, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
+    const detailKey = JSON.stringify([state.selected, state.logTab, state.changes, state.decisions, state.approvals, state.approvalPick, state.diff, state.notes, state.logOpen, d && {...d, activity: null, task: {...stable(d.task), stdout: '', stderr: '', stdout_bytes: 0, stderr_bytes: 0, stdout_truncated: false, stderr_truncated: false}}]);
     const rebuilt = signatures.detail !== detailKey;
     setRegion('detail', detailKey, () => detailView());
     if (!rebuilt) patchLogs();
