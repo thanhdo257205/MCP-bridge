@@ -12,13 +12,17 @@ export const codexApprovalSchema = z.enum(['on-request', 'never']);
 // The modes `claude --permission-mode` accepts (2.1.319). Owner-only: no task or tool argument reaches it.
 export const claudePermissionSchema = z.enum(['acceptEdits', 'plan', 'dontAsk', 'manual', 'auto', 'bypassPermissions']);
 
+// `gemini --approval-mode` choices (0.67.0). Owner-only, like the claude mode.
+export const geminiApprovalSchema = z.enum(['auto_edit', 'default', 'plan', 'yolo']);
+
 export const agentProfileSchema = z.object({
-  adapter: z.enum(['codex', 'antigravity', 'opencode', 'claude']),
+  adapter: z.enum(['codex', 'antigravity', 'opencode', 'claude', 'gemini']),
   label: z.string().min(1).max(100).optional(),
   env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).optional(),
   codex_sandbox: codexSandboxSchema.optional(),
   codex_ask_for_approval: codexApprovalSchema.optional(),
   claude_permission_mode: claudePermissionSchema.optional(),
+  gemini_approval_mode: geminiApprovalSchema.optional(),
   model: z.string().min(1).max(200).optional(),
   executable: z.string().min(1).max(4096).optional()
 }).strict();
@@ -62,7 +66,11 @@ const agentsSchema = z.object({
   /** `--permission-mode` for every Claude Code run; `acceptEdits` when unset. `bypassPermissions` is reported in agents_list warnings. */
   claude_permission_mode: claudePermissionSchema.optional(),
   /** `--max-budget-usd` for every Claude Code run: the CLI stops the run when it has spent this much. */
-  claude_max_budget_usd: z.number().positive().max(1000).optional()
+  claude_max_budget_usd: z.number().positive().max(1000).optional(),
+  gemini_executable: z.string().min(1).max(4096).optional(),
+  gemini_model: z.string().min(1).max(200).optional(),
+  /** `--approval-mode` for every Gemini CLI run; `auto_edit` when unset. `yolo` is reported in agents_list warnings. */
+  gemini_approval_mode: geminiApprovalSchema.optional()
 }).strict();
 
 const schema = z.object({

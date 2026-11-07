@@ -56,6 +56,8 @@ export function elevationOptions(family: AgentFamily, denied: DeniedAction[]): E
     ];
   }
   if (family === 'codex') return [{kind: 'codex-add-dir', elevation: null, needs_dir: true, narrowest: true, wide: false}];
+  // Gemini CLI names a refused tool but offers no per-run grant the bridge has verified, so its refusals can only be dismissed.
+  if (family === 'gemini') return [];
   if (family === 'claude') {
     // A refused shell call is allowed again by its exact command (`--allowedTools "Bash(<command>)"`); a refused file tool outside the
     // workspace by one more directory (`--add-dir`). Nothing here maps to bypassPermissions: that stays a setting the owner writes by hand.

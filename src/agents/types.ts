@@ -7,7 +7,7 @@ export type Autonomy = 'suggest' | 'auto' | 'full';
 export type Isolation = 'none' | 'worktree';
 export type AgentCapability = 'code' | 'review' | 'test' | 'research' | 'long-run';
 /** The CLI dialect a task is turned into. Owner settings key on this rather than on `id`, so a profile inherits them with its adapter. */
-export type AgentFamily = 'antigravity' | 'codex' | 'opencode' | 'claude';
+export type AgentFamily = 'antigravity' | 'codex' | 'opencode' | 'claude' | 'gemini';
 
 /**
  * `suspected` marks a denial the bridge only inferred from text (a failed command whose output says "access denied"), as opposed to one the CLI

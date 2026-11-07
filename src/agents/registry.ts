@@ -5,6 +5,7 @@ import { antigravityAdapter } from './antigravity.js';
 import { codexAgent, detectCodex } from './codex.js';
 import { opencodeAgent, opencodeAdapter, detectOpenCode, CAPABILITIES } from './opencode.js';
 import { claudeAdapter, claudeAgent, detectClaude, CLAUDE_CAPABILITIES, type ClaudeProbe } from './claude.js';
+import { detectGemini, geminiAdapter, GEMINI_CAPABILITIES } from './gemini.js';
 import type { AgentRuntime, AgentStatus, PublicAgentStatus } from './types.js';
 
 export interface AntigravityInspection {
@@ -21,9 +22,9 @@ export interface AgentRegistry {
   warnings: string[];
 }
 
-const KNOWN = ['antigravity', 'codex', 'opencode', 'claude'] as const;
-const DEFAULT_PRIORITY = ['antigravity', 'codex', 'opencode', 'claude'];
-// OpenCode and Claude Code are opt-in: list them in agents.enabled. Probing them by default would add an extra CLI to every pool for owners who never asked for it.
+const KNOWN = ['antigravity', 'codex', 'opencode', 'claude', 'gemini'] as const;
+const DEFAULT_PRIORITY = ['antigravity', 'codex', 'opencode', 'claude', 'gemini'];
+// OpenCode, Claude Code and Gemini CLI are opt-in: list them in agents.enabled. Probing them by default would add an extra CLI to every pool for owners who never asked for it.
 const DEFAULT_ENABLED = ['antigravity', 'codex'];
 
 export async function createAgentRegistry(config: Config, antigravity: AntigravityInspection): Promise<AgentRegistry> {
@@ -135,11 +136,35 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     }), enabled: claudeEnabled});
   }
 
+  const geminiEnabled = enabled.includes('gemini');
+  const geminiDanger = (id: string, mode: string | undefined) => mode === 'yolo'
+    ? [`Agent "${id}" is configured with dangerous permissions (gemini --approval-mode yolo): every tool call is approved`] : [];
+  const profileUsesGemini = Object.entries(settings.profiles ?? {}).some(([id, profile]) =>
+    profile.adapter === 'gemini' && !profile.executable && (enabled.includes(id) || !settings.enabled));
+  let geminiProbe: AgentStatus = {id: 'gemini', label: 'Gemini CLI', available: false, version: null, executable: null, capabilities: GEMINI_CAPABILITIES, warnings: ['Disabled in the bridge config']};
+  let geminiCommand: ResolvedCommand = {executable: 'gemini', prefixArgs: [], source: 'gemini'};
+  if (geminiEnabled || profileUsesGemini) {
+    try {
+      geminiCommand = await resolveCommand(settings.gemini_executable ?? 'gemini');
+      geminiProbe = await detectGemini(geminiCommand, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+    } catch (error) {
+      geminiProbe = {...geminiProbe, warnings: [`Gemini CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+    }
+  }
+  {
+    const danger = geminiEnabled ? geminiDanger('gemini', settings.gemini_approval_mode) : [];
+    warnings.push(...danger);
+    const status: AgentStatus = geminiEnabled ? {...geminiProbe, warnings: [...geminiProbe.warnings, ...danger]}
+      : {...geminiProbe, available: false, warnings: ['Disabled in the bridge config']};
+    agents.push({adapter: geminiAdapter(geminiCommand, {model: settings.gemini_model, approvalMode: settings.gemini_approval_mode}),
+      status, enabled: geminiEnabled, prefixArgs: geminiCommand.prefixArgs});
+  }
+
   if (settings.profiles) {
     for (const [profileId, profile] of Object.entries(settings.profiles)) {
       const isProfileEnabled = enabled.includes(profileId) || (!settings.enabled && true);
       const adapterType = profile.adapter;
-      const label = profile.label ?? `${{codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode', claude: 'Claude Code'}[adapterType]} (${profileId})`;
+      const label = profile.label ?? `${{codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode', claude: 'Claude Code', gemini: 'Gemini CLI'}[adapterType]} (${profileId})`;
       const profileWarnings: string[] = [];
       if (!isProfileEnabled) profileWarnings.push('Disabled in the bridge config');
 
@@ -257,6 +282,30 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
         agents.push({
           adapter: claudeAdapter(cmd, {id: profileId, label, model: profile.model ?? settings.claude_model, permissionMode: mode,
             maxBudgetUsd: settings.claude_max_budget_usd, env: profile.env, permissionPrompts: probe.permission_prompts}),
+          status, enabled: isProfileEnabled, prefixArgs: cmd.prefixArgs
+        });
+      } else if (adapterType === 'gemini') {
+        // A gemini profile with its own GEMINI_CLI_HOME (or HOME) in `env` keeps its own settings and login.
+        let cmd = geminiCommand;
+        let probe = geminiProbe;
+        if (profile.executable) {
+          try {
+            cmd = await resolveCommand(profile.executable);
+            probe = await detectGemini(cmd, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+          } catch (error) {
+            probe = {...probe, available: false, warnings: [`Gemini CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+          }
+        }
+        const mode = profile.gemini_approval_mode ?? settings.gemini_approval_mode;
+        const danger = geminiDanger(profileId, mode);
+        if (isProfileEnabled) warnings.push(...danger);
+        const status: AgentStatus = {
+          id: profileId, label, available: isProfileEnabled && probe.available, version: probe.version, executable: cmd.source || null,
+          capabilities: GEMINI_CAPABILITIES,
+          warnings: isProfileEnabled ? [...probe.warnings.filter(w => !w.includes('Disabled')), ...profileWarnings, ...danger] : profileWarnings
+        };
+        agents.push({
+          adapter: geminiAdapter(cmd, {id: profileId, label, model: profile.model ?? settings.gemini_model, approvalMode: mode, env: profile.env}),
           status, enabled: isProfileEnabled, prefixArgs: cmd.prefixArgs
         });
       }

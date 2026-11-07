@@ -1,0 +1,9 @@
+Approval mode overridden to "default" because the current folder is not trusted.
+{
+  "session_id": "1bda1947-ce3b-46b1-9377-1f2deb90d8b6",
+  "error": {
+    "type": "Error",
+    "message": "Please set an Auth method in your /tmp/scratch/ghome/.gemini/settings.json or specify one of the following environment variables before running: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA",
+    "code": 41
+  }
+}

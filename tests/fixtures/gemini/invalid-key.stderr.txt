@@ -1,0 +1,46 @@
+Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience.
+Security Warning: Skipping system settings file '/tmp/scratch/gsys.json': Parent directory '/tmp' is insecure: Directory '/tmp' is writable by group or others (mode: 41777). To fix this, run: sudo chmod g-w,o-w "/tmp"
+Error generating content via API. Full report available at: /tmp/gemini-client-error-generateJson-api-2026-11-07T02-08-51-732Z.json _ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com","metadata":{"service":"generativelanguage.googleapis.com"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"API key not valid. Please pass a valid API key."}]}}
+    at throwErrorIfNotOK (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:267940:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:267691:7
+    at async Models.generateContent (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:268750:16)
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:313085:26
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:289147:23
+    at async retryWithBackoff (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309418:23)
+    at async BaseLlmClient._generateWithRetry (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309714:14)
+    at async BaseLlmClient.generateJson (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309607:21)
+    at async NumericalClassifierStrategy.route (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:363074:28) {
+  status: 400
+}
+[Routing] NumericalClassifierStrategy failed: Error: Failed to generate content: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com","metadata":{"service":"generativelanguage.googleapis.com"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"API key not valid. Please pass a valid API key."}]}}
+    at BaseLlmClient._generateWithRetry (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309744:13)
+    at async BaseLlmClient.generateJson (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309607:21)
+    at async NumericalClassifierStrategy.route (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:363074:28)
+    at async CompositeStrategy.route (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:363146:26)
+    at async ModelRouterService.route (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:363310:18)
+    at async GeminiClient.processTurn (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:349372:24)
+    at async GeminiClient.sendMessageStream (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:349491:14)
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/gemini-VF5FS3OM.js:13658:26
+    at async main (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/gemini-VF5FS3OM.js:19036:5)
+Error when talking to Gemini API Full report available at: /tmp/gemini-client-error-Turn.run-sendMessageStream-2026-11-07T02-08-51-846Z.json _ApiError: {"error":{"message":"{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API key not valid. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API key not valid. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n","code":400,"status":"Bad Request"}}
+    at throwErrorIfNotOK (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:267940:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:267703:7
+    at async Models.generateContentStream (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:268799:16)
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:313130:19
+    at async file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:289147:23
+    at async retryWithBackoff (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:309418:23)
+    at async GeminiChat.makeApiCallAndProcessStream (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:334666:28)
+    at async GeminiChat.streamWithRetries (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:334361:29)
+    at async Turn.run (file:///tmp/scratch/gemini/node_modules/@google/gemini-cli/bundle/chunk-NGQU3QTQ.js:335403:24) {
+  status: 400
+}
+{
+  "session_id": "99843c29-80be-4bd8-85ce-af538b585d6d",
+  "error": {
+    "type": "Error",
+    "message": "{\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"API key not valid. Please pass a valid API key.\\\",\\n    \\\"status\\\": \\\"INVALID_ARGUMENT\\\",\\n    \\\"details\\\": [\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.ErrorInfo\\\",\\n        \\\"reason\\\": \\\"API_KEY_INVALID\\\",\\n        \\\"domain\\\": \\\"googleapis.com\\\",\\n        \\\"metadata\\\": {\\n          \\\"service\\\": \\\"generativelanguage.googleapis.com\\\"\\n        }\\n      },\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.LocalizedMessage\\\",\\n        \\\"locale\\\": \\\"en-US\\\",\\n        \\\"message\\\": \\\"API key not valid. Please pass a valid API key.\\\"\\n      }\\n    ]\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}",
+    "code": 400
+  }
+}

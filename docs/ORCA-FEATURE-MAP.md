@@ -34,4 +34,7 @@
 
 ## Agents Orca supports that could follow
 
-Orca drives agents in a terminal, so its list is not proof of a headless mode. An adapter here needs a non-interactive run that reads the prompt from stdin or a file, a parseable final result, and a way to refuse instead of prompting. Before adding one, measure those three on the real CLI the way `src/agents/claude.ts` records it — Gemini CLI, Cursor (`cursor-agent -p`), Qwen Code and GitHub Copilot CLI are the likeliest next candidates.
+Orca drives agents in a terminal, so its list is not proof of a headless mode. An adapter here needs a non-interactive run that reads the prompt from stdin or a file, a parseable final result, and a way to refuse instead of prompting.
+
+- **Gemini CLI** is in, opt-in and marked unverified: flags and error output measured on 0.67.0, the success shape read from its bundle, no real task run (README "Gemini CLI").
+- Cursor (`cursor-agent -p`), Qwen Code and GitHub Copilot CLI are the likeliest next candidates; measure the three requirements on the real CLI first, as `src/agents/claude.ts` records it.
