@@ -645,10 +645,26 @@ function applyBlock(task) {
   if (task.scope && task.scope.out_of_scope.length) return `Task sửa file ngoài phạm vi được giao (${task.scope.out_of_scope.slice(0, 3).join(', ')}); xem trong worktree.`;
   return null;
 }
+/** What the owner's worktree setup commands did before the agent started; absent when the workspace has none configured. */
+function setupBody(task) {
+  const s = task.setup;
+  if (!s) return null;
+  const rows = s.commands.map(item => h('li', {class: 'change-row'},
+    h('span', {class: `change-kind ${item.exit_code === 0 ? 'added' : 'deleted'}`, text: item.exit_code === 0 ? 'OK' : item.signal || `exit ${item.exit_code ?? '?'}`}),
+    h('span', {class: 'change-path mono', text: item.command.join(' ')}),
+    h('span', {class: 'change-count mono', text: `${(item.duration_ms / 1000).toFixed(1)}s`})));
+  const failed = s.commands.find(item => item.exit_code !== 0);
+  return h('div', {},
+    h('div', {class: 'msg-head', text: `Lệnh setup worktree (${(s.duration_ms / 1000).toFixed(1)}s)`}),
+    s.ok ? null : h('div', {class: 'callout bad', text: `Setup thất bại, agent chưa được chạy: ${s.error || 'không rõ lỗi'}`}),
+    h('ul', {class: 'change-list'}, rows),
+    failed && failed.output_tail ? h('pre', {class: 'log', text: failed.output_tail}) : null);
+}
 function reviewBody(task) {
   const block = applyBlock(task);
   const mine = (state.decisions || []).filter(item => item.task_id === task.task_id);
   return [
+    setupBody(task),
     h('p', {class: 'muted', text: 'Kết quả nằm trong worktree riêng, chưa đụng tới workspace của bạn. Áp dụng ghi thay đổi vào workspace dạng chưa commit; bỏ worktree xóa thư mục và nhánh của task.'}),
     task.applied_at ? h('div', {class: 'callout good', text: `Đã áp dụng lúc ${clock(task.applied_at)}: ${(task.applied_files || []).join(', ') || '(không rõ file)'}. Xem git status trong workspace rồi commit hoặc git restore.`}) : null,
     task.discarded_at ? h('div', {class: 'callout', text: `Đã bỏ worktree lúc ${clock(task.discarded_at)}.`}) : null,

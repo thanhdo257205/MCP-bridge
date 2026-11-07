@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { paths, packageRoot } from './paths.js';
 import * as z from 'zod/v4';
+import { worktreeSetupSchema } from './isolation/setup.js';
 
 export const codexSandboxSchema = z.enum(['workspace-write', 'danger-full-access', 'read-only']);
 // The two policies codex-cli 0.163.0 accepts for --ask-for-approval; anything else makes codex exit before it reads the prompt.
@@ -86,6 +87,8 @@ const schema = z.object({
   }).strict().optional(),
   extra_env_passthrough: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(100).default([]),
   prompt_transport:z.enum(['stdin','argv']).default('argv'),
+  /** Commands the owner runs in each new worktree of a workspace before its agent starts (e.g. ["npm", "ci"]); never read from the repository. */
+  worktree_setup: z.array(worktreeSetupSchema).max(50).optional(),
   /** Longest single antigravity_task_wait call (default 55). Keep it below the MCP client's tool timeout. */
   max_wait_seconds: z.number().int().min(5).max(3600).optional()
 }).strict();

@@ -8,6 +8,7 @@
 |---|---|---|
 | **Supported agents** (Claude Code, Codex, Antigravity, OpenCode, … "any CLI agent") | A **Claude Code** adapter, the agent Orca lists first and the bridge did not have. Opt-in, `claude -p --output-format json`, session resume, quota failover, narrow approval-queue grants. | `src/agents/claude.ts`, README "Claude Code" |
 | **Review AI Output** — notes on exact changed lines, sent back to the agent | `task_feedback` (MCP) and click-a-line notes in the web UI diff: notes become one follow-up task that quotes the lines, starts from the reviewed changes and continues the conversation. | `src/review/feedback.ts`, README "Review notes" |
+| **`orca.yaml` setup script** per worktree | `worktree_setup` in the **owner's** config (argv lists, no shell), run in each new worktree before the agent, inside the task's own process. Never read from the repository. | `src/isolation/setup.ts`, README "Worktree setup" |
 | **Usage & Accounts** — switch accounts without logging out | Claude Code profiles with their own `CLAUDE_CONFIG_DIR`, in a pool that fails over on a rate/usage limit. Codex already had this with `CODEX_HOME`. | `config/workspaces.example.json` (`claude-work`) |
 
 ## Already in the bridge before
@@ -27,7 +28,6 @@
 | Run Anywhere (SSH hosts, cloud VMs, a remote Orca server) · Mobile App | Both need the bridge reachable from another machine, which needs TLS, real authentication and per-workspace isolation. The bridge is loopback-only with no auth by design (README "Security model"). |
 | Automations (scheduled prompts on a repo) | The bridge's rule is that nothing starts by itself: a restart re-dispatches nothing and every task comes from a client call. A schedule belongs in the client (a cron that calls the MCP tools), where its owner sees it. |
 | Git Integration (draft commits/PRs, send CI failures back) | The bridge never commits, pushes or merges for the owner. Sending a failing check back is already possible: pass its output as the `instruction` of `task_feedback`. |
-| `orca.yaml` setup script per worktree | It runs commands the repository declares when a worktree is created. The bridge deliberately runs no repository-declared hooks (git hooks are pointed at an empty directory). An owner-config version would be the safe variant if it is ever needed. |
 | GitHub & Linear tasks | The orchestrating client already has those through its own MCP servers; the bridge receives the task text. |
 | Chat or Terminal, Split Anything, Jump Anywhere, Rich Previews, Plugins, Design Mode (browser), Drag files, Dictation, Mobile Emulator, Computer Use | Desktop-app UI. The bridge's UI is a read-mostly status page; the client is where the conversation happens. |
 

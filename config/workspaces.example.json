@@ -10,6 +10,9 @@
   "max_queued_tasks": 3,
   "max_parallel_worktrees": 2,
   "default_autonomy": "auto",
+  "worktree_setup": [
+    {"workspace": "C:/absolute/path/to/approved-project", "commands": [["npm", "ci", "--no-audit", "--no-fund"]], "timeout_seconds": 300}
+  ],
   "agents": {
     "priority": ["antigravity", "codex", "opencode", "claude"],
     "enabled": ["antigravity", "codex", "opencode", "claude", "codex-work", "codex-backup", "opencode-work", "claude-work"],

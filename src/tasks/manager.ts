@@ -11,6 +11,7 @@ import { appendDecision, type DecisionAction } from '../decisions.js';
 import { applyWorktreeChanges, carryWorktreeChanges, repositoryRoot, worktreeHead } from '../isolation/apply.js';
 import { assertNotePath, feedbackSchema, feedbackTask, quoteNote, type QuotedNote } from '../review/feedback.js';
 import { isOwned, normalizeOwn } from '../isolation/worktree.js';
+import { readSetupReport, setupFor, wrapWithSetup, type SetupReport } from '../isolation/setup.js';
 import { worktreeFileDiff, type FileDiff } from '../isolation/diff.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
@@ -66,6 +67,8 @@ export interface Task {
   feedback_of?: string | null;
   /** Follow-ups made from review notes on this task, oldest first. */
   feedback_tasks?: string[];
+  /** What the owner's worktree setup commands did before the agent started (absent when none are configured for the workspace). */
+  setup?: SetupReport | null;
   review_required: true; acceptance_verified: false;
 }
 /** One agent attempt that was given up on and replaced by another profile in the same pool. */
@@ -121,6 +124,8 @@ interface Entry {
   worktreeInfo?: Worktree;
   /** A review follow-up of a worktree task: its worktree is made from this commit and starts with that worktree's changes. */
   seed?: {worktree: string; base: string};
+  /** Where the setup runner writes its report; set once, so a failover attempt in the same worktree does not set it up again. */
+  setupReport?: string;
   holdsLock?: boolean;
   /** When the process last wrote to stdout/stderr (live signal that it is still working; not persisted). */
   lastOutputAt?: number;
@@ -479,9 +484,17 @@ export class TaskManager {
       const compactLine = agent.adapter.compactLine?.bind(agent.adapter);
       const streaming = (invocation.transport !== undefined && invocation.transport !== 'argv') || compactLine !== undefined;
       const options = {extraEnvPassthrough: this.config.extra_env_passthrough, stdin: invocation.stdin, customEnv: invocation.customEnv};
+      // The owner's setup commands for this workspace run in the new worktree before the agent, inside the same launched process (setup.ts).
+      let command = {executable: invocation.executable, args: [...(agent.prefixArgs ?? []), ...invocation.args]};
+      const setup = worktree && !agent.launch && !entry.setupReport ? await setupFor(this.config.worktree_setup, workspace) : null;
+      if (setup) {
+        const wrapped = await wrapWithSetup(setup, this.runtime.stateDirectory, task.task_id, command.executable, command.args);
+        command = {executable: wrapped.executable, args: wrapped.args};
+        entry.setupReport = wrapped.report;
+      }
       const child = agent.launch
         ? agent.launch(invocation.args, execWorkspace, options)
-        : startProcess(invocation.executable, [...(agent.prefixArgs ?? []), ...invocation.args], execWorkspace, options);
+        : startProcess(command.executable, command.args, execWorkspace, options);
       entry.child = child;
       entry.pending = undefined;
       task.status = 'running';
@@ -604,7 +617,12 @@ export class TaskManager {
         task.exit_code = code; task.signal = signal; task.process_running = false;
         task.ended_at = new Date().toISOString(); task.duration_ms = Date.now() - started;
         let finalStatus: Status = entry.stop ?? 'failed';
-        if (!entry.stop) {
+        const setupReport = entry.setupReport && task.setup === undefined ? await readSetupReport(entry.setupReport) : null;
+        if (setupReport) task.setup = setupReport;
+        if (!entry.stop && setupReport && !setupReport.ok) {
+          // The agent never started: its parser would only see the runner's stderr, and a setup failure must never look like a quota hit.
+          task.error = `Worktree setup failed before the agent started: ${setupReport.error ?? 'unknown error'}`;
+        } else if (!entry.stop) {
           try {
             const result = await agent.adapter.parseResult({
               stdout: rawStdout, stderr: rawStderr, exitCode: code, signal, resultFile: invocation.resultFile ?? null,

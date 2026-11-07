@@ -117,6 +117,20 @@ Opt-in like OpenCode: add `claude` to `agents.enabled`. The bridge runs `claude 
 - **The repository's own Claude settings are not loaded.** Measured on 2.1.319: without `--setting-sources user`, a hook declared in the repository's `.claude/settings.json` ran in an untrusted workspace in print mode, before the agent read the task. With it, the hook did not run. `--strict-mcp-config` with no `--mcp-config` starts no MCP server, so a delegated task cannot reach the repository's `.mcp.json` servers or delegate back to this bridge.
 - **Accounts.** A `claude` profile with its own `CLAUDE_CONFIG_DIR` in `env` signs in separately, so a pool of them fails over to another account on a 429 or 529 (`api_error_status`) or a "usage limit reached" result. `agents.claude_model` / a profile's `model` pick `--model`; `agents.claude_max_budget_usd` passes `--max-budget-usd` on every run. `ANTHROPIC_API_KEY` is stripped from the child environment like every `*_API_KEY`, unless you list it in `extra_env_passthrough`.
 
+## Worktree setup
+
+A worktree is a fresh checkout: no `node_modules`, no build, so an agent told to run the tests cannot. `worktree_setup` in the bridge config names commands that make one usable, per workspace (after Orca's `orca.yaml` setup script, but read from **your** config, never from the repository):
+
+```json
+"worktree_setup": [{"workspace": "C:/path/to/project", "commands": [["npm", "ci", "--no-audit", "--no-fund"]], "timeout_seconds": 300}]
+```
+
+- They run for worktree tasks only, in the new worktree, in order, as argv lists without a shell (an npm `.cmd` shim is resolved the same way as an agent CLI), with the agent's filtered environment and no stdin. The workspace must match an entry exactly (by real path), not a parent of it.
+- They run inside the process the bridge launches for the task, so `antigravity_delegate` returns at once (measured: 36 ms with `npm ci` configured), and cancel, the task timeout and the process-tree release cover setup too. Setup time counts toward the task timeout; `timeout_seconds` caps setup alone.
+- The first failing command stops the task before the agent starts: `failed` with "Worktree setup failed before the agent started", never mistaken for a quota hit. Each command's exit code, duration and output tail (secrets filtered) are on the task as `setup` and in the UI under the worktree review; setup output never reaches the stdout the agent's result is parsed from.
+- What setup writes should be ignored by the repository (as `node_modules` is); anything it leaves untracked counts as an out-of-scope change like any other.
+- A follow-up from review notes gets a new worktree, so it is set up again; a pool failover reuses the worktree and does not repeat it.
+
 ## Review notes
 
 Borrowed from [Orca](docs/ORCA-FEATURE-MAP.md)'s "leave notes on exact changed lines and send them back to the agent". After reading a finished task's diff, the reviewer calls `task_feedback` with up to 30 notes:
