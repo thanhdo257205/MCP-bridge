@@ -131,6 +131,19 @@ A worktree is a fresh checkout: no `node_modules`, no build, so an agent told to
 - What setup writes should be ignored by the repository (as `node_modules` is); anything it leaves untracked counts as an out-of-scope change like any other.
 - A follow-up from review notes gets a new worktree, so it is set up again; a pool failover reuses the worktree and does not repeat it.
 
+## Notifications
+
+After Orca's "get pinged when an agent needs you": with `notify` in the bridge config, every finished task POSTs one short message to a URL you choose (an [ntfy](https://ntfy.sh) topic for your phone, a chat webhook, a local script). Off when absent; no task, tool or client can turn it on.
+
+```json
+"notify": {"url": "https://ntfy.sh/<a-topic-only-you-know>", "format": "text", "events": ["completed", "failed", "timeout", "denied", "quota"]}
+```
+
+- `events` picks the endings sent: `completed`, `failed`, `timeout`, `canceled`, and two failures named for what you would do about them — `denied` (the approval queue is waiting for you) and `quota` (a pool ran out of accounts). The default is all but `canceled`.
+- `format: "text"` sends one line (`[bridge] codex needs approval · shop · 2m14s · 6a1610a1`, then the error), which ntfy and most chat webhooks show as is; `json` sends `{source, event, task_id, status, agent, project, duration_ms, denied_actions, error?}`.
+- **This is the one thing the bridge sends off the machine by itself.** The message carries the project's folder name, never its path, and no prompt, answer, log or diff; `include_title: true` adds the task's first line (secrets filtered, 140 characters). A public ntfy topic is readable by anyone who guesses its name. The startup log names the host notifications go to.
+- Sent after the task's final status is written, detached from it: a slow or failing endpoint is logged and never delays the next task or changes this one. Node's `fetch` does not use `HTTPS_PROXY`, so a machine that only reaches the internet through a proxy needs a URL it can reach directly.
+
 ## Review notes
 
 Borrowed from [Orca](docs/ORCA-FEATURE-MAP.md)'s "leave notes on exact changed lines and send them back to the agent". After reading a finished task's diff, the reviewer calls `task_feedback` with up to 30 notes:

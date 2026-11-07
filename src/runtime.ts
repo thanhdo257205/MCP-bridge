@@ -34,6 +34,7 @@ export async function createRuntime() {
   const maxParallelWorktrees = config.max_parallel_worktrees ?? 2;
   const treeWatch = config.tree_watch ?? {};
   const treeWatchEnabled = treeWatch.enabled !== false;
+  if (config.notify) console.error(`[bridge] Task notifications (${config.notify.events.join(', ')}) are POSTed to ${new URL(config.notify.url).host}`);
   if (!treeWatchEnabled) console.error('[bridge] WARNING: tree_watch is off; a process tree the agent leaves behind will not be released');
   const manager = new TaskManager(config, {
     executable: antigravity.executable, prefixArgs: antigravity.prefixArgs, supported: antigravity.supported, stateDirectory: paths.stateDirectory,

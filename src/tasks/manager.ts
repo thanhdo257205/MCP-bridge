@@ -12,6 +12,7 @@ import { applyWorktreeChanges, carryWorktreeChanges, repositoryRoot, worktreeHea
 import { assertNotePath, feedbackSchema, feedbackTask, quoteNote, type QuotedNote } from '../review/feedback.js';
 import { isOwned, normalizeOwn } from '../isolation/worktree.js';
 import { readSetupReport, setupFor, wrapWithSetup, type SetupReport } from '../isolation/setup.js';
+import { notifyTaskEnd } from '../notify.js';
 import { worktreeFileDiff, type FileDiff } from '../isolation/diff.js';
 import { redact } from '../security/redact.js';
 import { delegationState } from '../delegation.js';
@@ -744,6 +745,7 @@ export class TaskManager {
           permission: entry.request?.permission ?? null, duration_ms: task.duration_ms, agy_duration_seconds: entry.stats?.agy_duration_seconds ?? null,
           num_turns: entry.stats?.num_turns ?? null, steps: entry.steps?.total ?? null, usage: entry.stats?.usage ?? null
         });
+        this.notifyEnd(entry);
         this.release(entry);
         entry.finish?.();
         void this.startNext();
@@ -813,7 +815,16 @@ export class TaskManager {
     entry.task.status = status; entry.task.ended_at = new Date().toISOString(); entry.task.error = error;
     entry.pending = undefined;
     await this.persist(entry.task);
+    this.notifyEnd(entry);
     entry.finish?.();
+  }
+  /** Tells the owner's notification URL how a task ended (owner config `notify`). Detached: a slow endpoint never holds a task or the lane. */
+  private notifyEnd(entry: Entry): void {
+    if (!this.config.notify) return;
+    const title = entry.request?.task.split('\n').find(line => line.trim())?.trim() ?? null;
+    const sent = notifyTaskEnd(this.config.notify, entry.task, title).then(() => undefined);
+    this.pendingRelease.add(sent);
+    void sent.finally(() => { this.pendingRelease.delete(sent); });
   }
 
   /**
