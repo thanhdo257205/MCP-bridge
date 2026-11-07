@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { UiContext } from './routes.js';
 
 /**
- * The owner's approval queue over HTTP (docs/APPROVAL-QUEUE-PLAN.md). Only the web UI can reach it: there is deliberately no MCP tool to read the
+ * The owner's approval queue and review notes over HTTP (docs/APPROVAL-QUEUE-PLAN.md). Only the web UI can reach it: there is deliberately no MCP tool to read the
  * queue, approve, or raise a permission, so an agent or a client cannot approve what its own run was refused. Every change needs `confirm: true`.
  */
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -12,12 +12,12 @@ function json(res: ServerResponse, code: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = 4096): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 4096) throw new Error('Request body too large');
+    if (size > limit) throw new Error('Request body too large');
     chunks.push(chunk as Buffer);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as unknown;
@@ -35,6 +35,16 @@ export async function handleReviewRoutes(req: IncomingMessage, res: ServerRespon
     if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
     const result = await ctx.manager.approveTask(approve[1], body.elevation);
     json(res, 200, {rerun_of: result.rerun_of, task: ctx.manager.summary(result.task.task_id)}); return true;
+  }
+
+  // Review notes from the diff viewer become one follow-up task, exactly as the task_feedback tool does it (notes need a larger body).
+  const feedback = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/feedback$`));
+  if (feedback && method === 'POST') {
+    const body = await readJson(req, 96 * 1024);
+    if (body.confirm !== true) { json(res, 400, {error: 'confirm must be true'}); return true; }
+    const {confirm: _confirm, ...rest} = body;
+    const created = await ctx.manager.feedback({...rest, task_id: feedback[1]}, {client: 'web UI'});
+    json(res, 200, {feedback_of: feedback[1], task: ctx.manager.summary(created.task_id)}); return true;
   }
 
   const dismiss = pathname.match(new RegExp(`^/ui/api/tasks/(${UUID})/dismiss$`));

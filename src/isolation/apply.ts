@@ -65,6 +65,28 @@ export async function repositoryRoot(directory: string): Promise<string> {
 
 const literal = (file: string) => `:(literal)${file}`;
 
+/**
+ * Copies a finished worktree's uncommitted changes into a fresh worktree of the same repository made from the same commit, so a review
+ * follow-up starts where the earlier task stopped. Both checkouts are bridge-owned; the owner's workspace is not touched.
+ * Returns the number of files carried (0 when the earlier task changed nothing).
+ */
+export async function carryWorktreeChanges(source: string, target: string): Promise<number> {
+  // Staging only includes new files in the diff; it is the earlier worktree's own index, and that task has ended.
+  await git(source, ['add', '-A', '--', '.']);
+  const names = (await git(source, ['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD', '--', '.'])).split('\0').filter(Boolean);
+  if (!names.length) return 0;
+  if (names.length > MAX_FILES) throw new Error(`The earlier task changed ${names.length} files; a follow-up carries at most ${MAX_FILES}`);
+  const patch = await git(source, ['diff', '--cached', '--no-renames', '--binary', '--full-index', '--no-ext-diff', '--no-textconv', 'HEAD', '--', '.']);
+  if (Buffer.byteLength(patch) > MAX_PATCH_BYTES) throw new Error('The earlier task\'s changes are larger than the carry limit');
+  await git(target, ['apply', '--whitespace=nowarn', '-'], patch);
+  return names.length;
+}
+
+/** The commit a worktree is checked out at. */
+export async function worktreeHead(worktree: string): Promise<string> {
+  return (await git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+}
+
 export async function applyWorktreeChanges(input: ApplyInput): Promise<ApplyResult> {
   try {
     const prefix = await prefixOf(input.toplevel, input.workspace);

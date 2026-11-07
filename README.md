@@ -2,11 +2,11 @@
 
 # agy-mcp-bridge.
 
-**An MCP server that hands bounded coding tasks to the CLI agents already logged in on your machine.** One TypeScript process speaks MCP Streamable HTTP on `127.0.0.1` and drives `agy` (Antigravity) and/or `codex`. Every task declares its workspace, acceptance criteria, which agent runs it, how isolated it is, and how much it may self-approve. The orchestrating agent (Codex, Claude Code, any MCP client) keeps the review; the bridge does the reading, writing and waiting.
+**An MCP server that hands bounded coding tasks to the CLI agents already logged in on your machine.** One TypeScript process speaks MCP Streamable HTTP on `127.0.0.1` and drives `agy` (Antigravity), `codex`, and opt-in `opencode` and `claude` (Claude Code). Every task declares its workspace, acceptance criteria, which agent runs it, how isolated it is, and how much it may self-approve. The orchestrating agent (Codex, Claude Code, any MCP client) keeps the review; the bridge does the reading, writing and waiting.
 
 > **There is no authentication, on purpose.** The bridge binds `127.0.0.1` only, but any process running as your user on this machine can call its tools, read and cancel tasks, and shut it down. Do not expose the port, do not put it behind a public reverse proxy, do not run it where you do not control local processes. [Security model](#security-model).
 
-Package `agy-mcp-bridge` on npm · requires Node.js ≥ 20 · Git · a logged-in `agy` 1.x and/or Codex CLI.
+Package `agy-mcp-bridge` on npm · requires Node.js ≥ 20 · Git · a logged-in `agy` 1.x, Codex CLI, OpenCode or Claude Code 2.x.
 
 ## Install
 
@@ -79,11 +79,12 @@ Then call `antigravity_environment` from a fresh session — that is the proof; 
 | `antigravity_task_wait` | blocks up to `wait_seconds` (default cap 55 s), returns early when the task ends |
 | `antigravity_task_output` | final response, stdout/stderr, errors, `denied_actions`, `conversation_id`, truncation |
 | `antigravity_cancel_task` | kills the task's process tree; does not revert file changes |
+| `task_feedback` | review notes anchored to `path` + `line` on a finished task become **one** follow-up task for the same agent ([Review notes](#review-notes)) |
 | `code_search` | XERJ passage/definition lookup; registered always but **refused while `xerj.enabled` is off** |
 
 `completed` means the CLI exited with a parseable result — always `review_required: true`, `acceptance_verified: false`. A 0 exit code can still be reported as `failed` after a permission denial or a timeout. While a task runs, `wait`/`status` return a short `activity` line instead of making the client read logs.
 
-Antigravity names each session (`conversation_id`), so a correction can continue the conversation that already read the code instead of re-explaining it: pass that id as `resume_conversation`. The token cost is the honest part — `agy` re-sends the whole conversation every turn. Measured on `agy` 1.4.12 with the bridge's own flags: a first turn cost 6.107 input tokens beside 12.223 cached, the resumed turn 8.394 input beside 28.500 cached. Continuing is cheap compared with writing the same context into a new task, but it is not free. Codex and OpenCode tasks start fresh: the bridge reads no session id out of their output, so it records none and offers no resume. That is a statement about what the bridge parses, not a claim that those CLIs cannot continue a session.
+Antigravity names each session (`conversation_id`), so a correction can continue the conversation that already read the code instead of re-explaining it: pass that id as `resume_conversation`. The token cost is the honest part — `agy` re-sends the whole conversation every turn. Measured on `agy` 1.4.12 with the bridge's own flags: a first turn cost 6.107 input tokens beside 12.223 cached, the resumed turn 8.394 input beside 28.500 cached. Continuing is cheap compared with writing the same context into a new task, but it is not free. Claude Code tasks record their `session_id` the same way and resume with `claude --resume` (measured on 2.1.319: the resumed run answered from the earlier turn and kept the same session id, also from another working directory, so a worktree follow-up can continue it). An id is only continued by an agent of the family that ran it. Codex and OpenCode tasks start fresh: the bridge reads no session id out of their output, so it records none and offers no resume. That is a statement about what the bridge parses, not a claim that those CLIs cannot continue a session.
 
 Two switches control delegation itself: `agy-mcp-bridge delegation off` blocks new tasks immediately without a restart, and `BRIDGE_DELEGATION=off` pins it at startup. Tasks still refuse to be delegated by policy the skill describes (security, auth, secrets, data deletion, deploy, CI and public API changes are not delegated).
 
@@ -109,6 +110,51 @@ Three knobs are opt-in because they widen what the bridge can reach. None is rea
 - `codex_sandbox: "danger-full-access"` / `codex_ask_for_approval: "never"` — readable from the bridge's own config file only. No task, tool argument or MCP client can ask for them, and `--ask-for-approval` is passed where codex accepts it (before `exec`).
 - `agents.opencode_auto_approve: true` — passes `opencode run --auto`, which approves every permission OpenCode's own config does not deny. OpenCode itself is opt-in (list it in `agents.enabled`). A task's `autonomy: "full"` never adds the flag, for the same reason it never changes the codex sandbox: `autonomy` is an instruction, not a permission grant.
 - `xerj.enabled` / `xerj.auto_reference` — both default to `false`. Turning them on sends task text to another local service and can place a retrieved passage inside the prompt an agent follows, which is a decision for the machine's owner, not for a delegating client.
+
+### Claude Code
+
+Opt-in like OpenCode: add `claude` to `agents.enabled`. The bridge runs `claude -p --output-format json --permission-mode <mode> --setting-sources user --strict-mcp-config` (plus `--permission-prompts none` where the CLI has it), sends the prompt on stdin and reads the one result object: `result`, `session_id`, `num_turns`, `usage` and `total_cost_usd` (kept in the Usage tab). The probe requires a 2.x release whose help lists every flag it passes.
+
+- **Permission mode is the owner's.** `agents.claude_permission_mode` (per profile too) defaults to `acceptEdits`, the counterpart of codex `workspace-write`: edits inside the working directory are accepted, a shell command that needs approval is refused on the spot and listed in `permission_denials`. A refused call fails the task (as for codex and Antigravity) and puts it in the approval queue, which offers the narrowest grant the CLI has: `--allowedTools "Bash(<that exact command>)"` for a refused command, `--add-dir <directory>` for a file tool refused outside the workspace — verified live on 2.1.319, the rerun completed. `bypassPermissions` is accepted only from the config file and is reported as a warning in `agents_list`; no grant from the queue maps to it, and a task's `autonomy` never reaches any of these flags.
+- **The repository's own Claude settings are not loaded.** Measured on 2.1.319: without `--setting-sources user`, a hook declared in the repository's `.claude/settings.json` ran in an untrusted workspace in print mode, before the agent read the task. With it, the hook did not run. `--strict-mcp-config` with no `--mcp-config` starts no MCP server, so a delegated task cannot reach the repository's `.mcp.json` servers or delegate back to this bridge.
+- **Accounts.** A `claude` profile with its own `CLAUDE_CONFIG_DIR` in `env` signs in separately, so a pool of them fails over to another account on a 429 or 529 (`api_error_status`) or a "usage limit reached" result. `agents.claude_model` / a profile's `model` pick `--model`; `agents.claude_max_budget_usd` passes `--max-budget-usd` on every run. `ANTHROPIC_API_KEY` is stripped from the child environment like every `*_API_KEY`, unless you list it in `extra_env_passthrough`.
+
+## Worktree setup
+
+A worktree is a fresh checkout: no `node_modules`, no build, so an agent told to run the tests cannot. `worktree_setup` in the bridge config names commands that make one usable, per workspace (after Orca's `orca.yaml` setup script, but read from **your** config, never from the repository):
+
+```json
+"worktree_setup": [{"workspace": "C:/path/to/project", "commands": [["npm", "ci", "--no-audit", "--no-fund"]], "timeout_seconds": 300}]
+```
+
+- They run for worktree tasks only, in the new worktree, in order, as argv lists without a shell (an npm `.cmd` shim is resolved the same way as an agent CLI), with the agent's filtered environment and no stdin. The workspace must match an entry exactly (by real path), not a parent of it.
+- They run inside the process the bridge launches for the task, so `antigravity_delegate` returns at once (measured: 36 ms with `npm ci` configured), and cancel, the task timeout and the process-tree release cover setup too. Setup time counts toward the task timeout; `timeout_seconds` caps setup alone.
+- The first failing command stops the task before the agent starts: `failed` with "Worktree setup failed before the agent started", never mistaken for a quota hit. Each command's exit code, duration and output tail (secrets filtered) are on the task as `setup` and in the UI under the worktree review; setup output never reaches the stdout the agent's result is parsed from.
+- What setup writes should be ignored by the repository (as `node_modules` is); anything it leaves untracked counts as an out-of-scope change like any other.
+- A follow-up from review notes gets a new worktree, so it is set up again; a pool failover reuses the worktree and does not repeat it.
+
+## Notifications
+
+After Orca's "get pinged when an agent needs you": with `notify` in the bridge config, every finished task POSTs one short message to a URL you choose (an [ntfy](https://ntfy.sh) topic for your phone, a chat webhook, a local script). Off when absent; no task, tool or client can turn it on.
+
+```json
+"notify": {"url": "https://ntfy.sh/<a-topic-only-you-know>", "format": "text", "events": ["completed", "failed", "timeout", "denied", "quota"]}
+```
+
+- `events` picks the endings sent: `completed`, `failed`, `timeout`, `canceled`, and two failures named for what you would do about them — `denied` (the approval queue is waiting for you) and `quota` (a pool ran out of accounts). The default is all but `canceled`.
+- `format: "text"` sends one line (`[bridge] codex needs approval · shop · 2m14s · 6a1610a1`, then the error), which ntfy and most chat webhooks show as is; `json` sends `{source, event, task_id, status, agent, project, duration_ms, denied_actions, error?}`.
+- **This is the one thing the bridge sends off the machine by itself.** The message carries the project's folder name, never its path, and no prompt, answer, log or diff; `include_title: true` adds the task's first line (secrets filtered, 140 characters). A public ntfy topic is readable by anyone who guesses its name. The startup log names the host notifications go to.
+- Sent after the task's final status is written, detached from it: a slow or failing endpoint is logged and never delays the next task or changes this one. Node's `fetch` does not use `HTTPS_PROXY`, so a machine that only reaches the internet through a proxy needs a URL it can reach directly.
+
+## Review notes
+
+Borrowed from [Orca](docs/ORCA-FEATURE-MAP.md)'s "leave notes on exact changed lines and send them back to the agent". After reading a finished task's diff, the reviewer calls `task_feedback` with up to 30 notes:
+
+```json
+{"task_id": "…", "notes": [{"path": "src/count.ts", "line": 14, "note": "0 must stay valid"}, {"path": "test/count.test.ts", "note": "add a case for -1"}], "instruction": "Touch nothing else"}
+```
+
+The bridge quotes each noted line (two lines around it, the noted range marked `>`) from the task's files as they are now, and starts **one** follow-up for the same agent with the original task, its criteria plus "every review note is addressed", the same `owns`, isolation and autonomy. Antigravity and Claude Code follow-ups continue the same conversation. A worktree task's follow-up gets a **new** worktree made from the same commit that already holds the reviewed changes, so its diff is the whole result: review and apply the follow-up, then discard the reviewed worktree. Refused before any agent starts: a task still running, an applied or discarded worktree, a note on a file outside `owns`, a path that leaves the workspace, a line past the end of the file. In the web UI, click a line of a worktree diff to add a note and send them all from the panel under the diff; the decision log records each send.
 
 ## Missions
 
@@ -162,7 +208,7 @@ npm test          # build + unit/integration with fake executables; no AI calls
 npm run test:live # REAL agent calls, scratch workspace, disconnect/reconnect, cancel, shutdown
 ```
 
-`npm test` runs serially (`--test-concurrency=1`, ~158 s): most cases start a real loopback server and time its output, so a parallel failure reflects machine load, not code. CI runs Windows and Linux on Node 20/22. Source map: `src/index.ts` entry, `src/http.ts` routing/shutdown, `src/runtime.ts` shared CLI + TaskManager, `src/agents` adapters and registry, `src/missions` the plan store and its dispatch gates, `src/isolation` worktrees and `owns`, `src/tasks` lifecycle/lock/output, `src/security` validation and redaction, `src/tools` tool definitions, `src/antigravity` child process, `ui/` plain HTML/CSS/JS with `src/ui/` behind it.
+`npm test` runs serially (`--test-concurrency=1`, ~158 s): most cases start a real loopback server and time its output, so a parallel failure reflects machine load, not code. CI runs Windows and Linux on Node 20/22. Source map: `src/index.ts` entry, `src/http.ts` routing/shutdown, `src/runtime.ts` shared CLI + TaskManager, `src/agents` adapters and registry, `src/review` review notes, `src/missions` the plan store and its dispatch gates, `src/isolation` worktrees and `owns`, `src/tasks` lifecycle/lock/output, `src/security` validation and redaction, `src/tools` tool definitions, `src/antigravity` child process, `ui/` plain HTML/CSS/JS with `src/ui/` behind it.
 
 Pushing or merging to `main` runs CI and, when it passes, publishes to npm automatically: the [publish workflow](.github/workflows/publish.yml) bumps the patch version, tags, pushes and publishes through OIDC Trusted Publishing — no npm token in secrets, no manual version bump, nothing published if CI fails. PRs run [CI](.github/workflows/ci.yml) only. Set up once under the package's **Trusted Publisher** settings: user `thanhdo257205`, repository `MCP-bridge`, workflow `publish.yml`, empty environment, allow direct npm publish.
 
@@ -172,6 +218,7 @@ Pushing or merging to `main` runs CI and, when it passes, publishes to npm autom
 - [docs/VERIFICATION.md](docs/VERIFICATION.md) — client CLI versions and live connection results.
 - [docs/MULTI-AGENT-PLAN.md](docs/MULTI-AGENT-PLAN.md) — the multi-agent roadmap and per-phase status.
 - [docs/HANDOFF.md](docs/HANDOFF.md) — open work (Job Object, POSIX E2E, worktree TTL) with mutation-test evidence.
+- [docs/ORCA-FEATURE-MAP.md](docs/ORCA-FEATURE-MAP.md) — every feature of the Orca desktop app, which ones the bridge took (Claude Code agent, review notes), which it already had, and why the rest do not fit a loopback MCP server.
 - [docs/FREEBUFF-INTEGRATION.md](docs/FREEBUFF-INTEGRATION.md) — why Freebuff is a client and not an agent, the measurement behind that, and what `setup freebuff` writes.
 - [docs/PROMPTS.md](docs/PROMPTS.md) — review and follow-up task prompts.
 - [skills/antigravity-bridge/SKILL.md](skills/antigravity-bridge/SKILL.md), [skills/mission-orchestrator/SKILL.md](skills/mission-orchestrator/SKILL.md) and [docs/SKILL-EVAL.md](docs/SKILL-EVAL.md) — the client-side contract and manual evaluation cases.

@@ -10,13 +10,18 @@
   "max_queued_tasks": 3,
   "max_parallel_worktrees": 2,
   "default_autonomy": "auto",
+  "worktree_setup": [
+    {"workspace": "C:/absolute/path/to/approved-project", "commands": [["npm", "ci", "--no-audit", "--no-fund"]], "timeout_seconds": 300}
+  ],
   "agents": {
-    "priority": ["antigravity", "codex", "opencode"],
-    "enabled": ["antigravity", "codex", "opencode", "codex-work", "codex-backup", "opencode-work"],
+    "priority": ["antigravity", "codex", "opencode", "claude"],
+    "enabled": ["antigravity", "codex", "opencode", "claude", "codex-work", "codex-backup", "opencode-work", "claude-work"],
     "codex_sandbox": "workspace-write",
     "codex_ask_for_approval": "on-request",
     "opencode_executable": "opencode",
     "opencode_model": "opencode/big-pickle",
+    "claude_executable": "claude",
+    "claude_permission_mode": "acceptEdits",
     "profiles": {
       "codex-work": {
         "adapter": "codex",
@@ -40,6 +45,13 @@
           "XDG_CONFIG_HOME": "C:/Users/name/.opencode-work/config"
         },
         "model": "opencode/big-pickle"
+      },
+      "claude-work": {
+        "adapter": "claude",
+        "label": "Claude Code (Work Account)",
+        "env": {
+          "CLAUDE_CONFIG_DIR": "C:/Users/name/.claude-work"
+        }
       }
     },
     "pools": {

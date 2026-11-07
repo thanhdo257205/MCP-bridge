@@ -7,7 +7,7 @@ export type Autonomy = 'suggest' | 'auto' | 'full';
 export type Isolation = 'none' | 'worktree';
 export type AgentCapability = 'code' | 'review' | 'test' | 'research' | 'long-run';
 /** The CLI dialect a task is turned into. Owner settings key on this rather than on `id`, so a profile inherits them with its adapter. */
-export type AgentFamily = 'antigravity' | 'codex' | 'opencode';
+export type AgentFamily = 'antigravity' | 'codex' | 'opencode' | 'claude';
 
 /**
  * `suspected` marks a denial the bridge only inferred from text (a failed command whose output says "access denied"), as opposed to one the CLI
@@ -24,12 +24,14 @@ export type Elevation =
   | {kind: 'agy-level'; level: 'accept-edits' | 'auto' | 'full'}
   | {kind: 'codex-add-dir'; dir: string}
   | {kind: 'opencode-allow'; permission: 'bash' | 'edit'}
-  | {kind: 'opencode-auto'};
+  | {kind: 'opencode-auto'}
+  | {kind: 'claude-allow-bash'; rule: string}
+  | {kind: 'claude-add-dir'; dir: string};
 
 export interface AgentStatus {
   id: string; label: string; available: boolean; version: string | null;
   executable: string | null; capabilities: AgentCapability[]; warnings: string[];
-  /** The CLI was probed and its help shows `--conversation`. Undefined means this status did not come from a probe, so nothing is refused. */
+  /** The CLI was probed and can continue a session (agy `--conversation`, claude `--resume`). Undefined means this status did not come from a probe, so nothing is refused. */
   conversation_resume?: boolean;
 }
 
@@ -42,7 +44,7 @@ export interface AgentTask {
   promptTransport?: PromptTransport;
   /** Extra permission for this one run, granted by the owner (see Elevation). Antigravity's is applied by the manager, through its permission level. */
   elevation?: Elevation;
-  /** agy conversation to continue, already checked by the manager (see `resume_conversation`). Antigravity only. */
+  /** Conversation (agy) or session (claude) to continue, already checked by the manager (see `resume_conversation`). */
   conversationId?: string | null;
 }
 
@@ -78,7 +80,7 @@ export interface AgentResult {
   timeout?: boolean;
   /** Indicates if the failure was caused by rate limit, token or billing quota exhaustion. */
   isQuotaExceeded?: boolean;
-  /** Set when the CLI names the conversation a later task could continue (Antigravity only). */
+  /** Set when the CLI names the conversation a later task could continue (Antigravity conversation, Claude Code session). */
   conversationId?: string | null;
 }
 

@@ -9,8 +9,8 @@ export const DECISIONS_FILE = 'decisions.jsonl';
 const MAX_FILE_BYTES = 512 * 1024;
 const KEEP_RECORDS = 500;
 
-export type DecisionAction = 'apply' | 'discard' | 'approve' | 'rerun' | 'dismiss';
-const ACTIONS: readonly string[] = ['apply', 'discard', 'approve', 'rerun', 'dismiss'];
+export type DecisionAction = 'apply' | 'discard' | 'approve' | 'rerun' | 'dismiss' | 'feedback';
+const ACTIONS: readonly string[] = ['apply', 'discard', 'approve', 'rerun', 'dismiss', 'feedback'];
 export interface Decision {
   at: string;
   task_id: string;

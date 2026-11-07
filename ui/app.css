@@ -159,6 +159,10 @@ details.more .body { padding: 10px 12px 12px; }
 .diff .del { color: var(--bad); background: var(--bad-soft); }
 .diff .hunk { color: var(--warn); }
 .diff .meta { color: var(--muted); }
+.diff .notable { cursor: pointer; }
+.diff .notable:hover { outline: 1px solid var(--warn); }
+.diff .noted { box-shadow: inset 3px 0 0 var(--warn); }
+.notes { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .change-path { overflow-wrap: anywhere; }
 .change-count { color: var(--muted); white-space: nowrap; font-size: 12.5px; }
 .change-kind { text-align: center; padding: 1px 6px; border-radius: 6px; font-size: 11.5px; font-weight: 650; background: var(--idle-soft); color: var(--idle); }

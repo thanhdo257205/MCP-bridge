@@ -4,6 +4,7 @@ import type { PromptTransport } from '../antigravity/invocation.js';
 import { antigravityAdapter } from './antigravity.js';
 import { codexAgent, detectCodex } from './codex.js';
 import { opencodeAgent, opencodeAdapter, detectOpenCode, CAPABILITIES } from './opencode.js';
+import { claudeAdapter, claudeAgent, detectClaude, CLAUDE_CAPABILITIES, type ClaudeProbe } from './claude.js';
 import type { AgentRuntime, AgentStatus, PublicAgentStatus } from './types.js';
 
 export interface AntigravityInspection {
@@ -20,9 +21,9 @@ export interface AgentRegistry {
   warnings: string[];
 }
 
-const KNOWN = ['antigravity', 'codex', 'opencode'] as const;
-const DEFAULT_PRIORITY = ['antigravity', 'codex', 'opencode'];
-// OpenCode is opt-in: list it in agents.enabled. Probing it by default would add an extra CLI to every pool for owners who never asked for it.
+const KNOWN = ['antigravity', 'codex', 'opencode', 'claude'] as const;
+const DEFAULT_PRIORITY = ['antigravity', 'codex', 'opencode', 'claude'];
+// OpenCode and Claude Code are opt-in: list them in agents.enabled. Probing them by default would add an extra CLI to every pool for owners who never asked for it.
 const DEFAULT_ENABLED = ['antigravity', 'codex'];
 
 export async function createAgentRegistry(config: Config, antigravity: AntigravityInspection): Promise<AgentRegistry> {
@@ -103,11 +104,42 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
     autoApprove: settings.opencode_auto_approve
   }));
 
+  const claudeEnabled = enabled.includes('claude');
+  const claudeDangerWarning = (id: string, mode: string | undefined) => mode === 'bypassPermissions'
+    ? [`Agent "${id}" is configured with dangerous permissions (claude --permission-mode bypassPermissions): every tool call is approved`] : [];
+  const profileUsesClaude = Object.entries(settings.profiles ?? {}).some(([id, profile]) =>
+    profile.adapter === 'claude' && !profile.executable && (enabled.includes(id) || !settings.enabled));
+  let claudeProbe: ClaudeProbe = {
+    id: 'claude', label: 'Claude Code', available: false, version: null, executable: null,
+    capabilities: CLAUDE_CAPABILITIES, warnings: ['Disabled in the bridge config'], permission_prompts: false
+  };
+  let claudeCommand: ResolvedCommand = {executable: 'claude', prefixArgs: [], source: 'claude'};
+  if (claudeEnabled || profileUsesClaude) {
+    try {
+      claudeCommand = await resolveCommand(settings.claude_executable ?? 'claude');
+      claudeProbe = await detectClaude(claudeCommand, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+    } catch (error) {
+      claudeProbe = {...claudeProbe, warnings: [`Claude Code CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+    }
+  }
+  {
+    const {permission_prompts: _prompts, ...probe} = claudeProbe;
+    const danger = claudeEnabled ? claudeDangerWarning('claude', settings.claude_permission_mode) : [];
+    warnings.push(...danger);
+    const status: AgentStatus = claudeEnabled
+      ? {...probe, warnings: [...probe.warnings, ...danger]}
+      : {...probe, available: false, conversation_resume: undefined, warnings: ['Disabled in the bridge config']};
+    agents.push({...claudeAgent(claudeCommand, status, {
+      model: settings.claude_model, permissionMode: settings.claude_permission_mode,
+      maxBudgetUsd: settings.claude_max_budget_usd, permissionPrompts: claudeProbe.permission_prompts
+    }), enabled: claudeEnabled});
+  }
+
   if (settings.profiles) {
     for (const [profileId, profile] of Object.entries(settings.profiles)) {
       const isProfileEnabled = enabled.includes(profileId) || (!settings.enabled && true);
       const adapterType = profile.adapter;
-      const label = profile.label ?? `${{codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode'}[adapterType]} (${profileId})`;
+      const label = profile.label ?? `${{codex: 'Codex', antigravity: 'Antigravity', opencode: 'OpenCode', claude: 'Claude Code'}[adapterType]} (${profileId})`;
       const profileWarnings: string[] = [];
       if (!isProfileEnabled) profileWarnings.push('Disabled in the bridge config');
 
@@ -200,6 +232,32 @@ export async function createAgentRegistry(config: Config, antigravity: Antigravi
         agents.push({
           adapter: opencodeAdapter({executable: cmd, prefixArgs, source: 'opencode-profile'}, {id: profileId, label, model: profile.model ?? settings.opencode_model, env: profile.env, autoApprove: settings.opencode_auto_approve}),
           status, enabled: isProfileEnabled, prefixArgs
+        });
+      } else if (adapterType === 'claude') {
+        // A claude profile with its own CLAUDE_CONFIG_DIR in `env` signs in separately, so a pool of them can fail over to another account.
+        let cmd = claudeCommand;
+        let probe = claudeProbe;
+        if (profile.executable) {
+          try {
+            cmd = await resolveCommand(profile.executable);
+            probe = await detectClaude(cmd, {cwd: process.cwd(), extraEnvPassthrough: config.extra_env_passthrough});
+          } catch (error) {
+            probe = {...probe, available: false, warnings: [`Claude Code CLI not found: ${error instanceof Error ? error.message : 'unknown error'}`]};
+          }
+        }
+        const mode = profile.claude_permission_mode ?? settings.claude_permission_mode;
+        const danger = claudeDangerWarning(profileId, mode);
+        if (isProfileEnabled) warnings.push(...danger);
+        const status: AgentStatus = {
+          id: profileId, label, available: isProfileEnabled && probe.available,
+          version: probe.version, executable: cmd.source || null, capabilities: CLAUDE_CAPABILITIES,
+          conversation_resume: probe.available ? true : undefined,
+          warnings: isProfileEnabled ? [...probe.warnings.filter(w => !w.includes('Disabled')), ...profileWarnings, ...danger] : profileWarnings
+        };
+        agents.push({
+          adapter: claudeAdapter(cmd, {id: profileId, label, model: profile.model ?? settings.claude_model, permissionMode: mode,
+            maxBudgetUsd: settings.claude_max_budget_usd, env: profile.env, permissionPrompts: probe.permission_prompts}),
+          status, enabled: isProfileEnabled, prefixArgs: cmd.prefixArgs
         });
       }
     }

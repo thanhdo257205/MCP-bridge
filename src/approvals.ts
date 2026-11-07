@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import type { AgentFamily, DeniedAction, Elevation } from './agents/types.js';
+import { claudeBashRule } from './agents/claude.js';
 
 /**
  * The owner's approval queue (docs/APPROVAL-QUEUE-PLAN.md): a task that ended with actions its agent was refused can be run again, as a new task,
@@ -14,7 +15,9 @@ export const elevationSchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('agy-level'), level: z.enum(['accept-edits', 'auto', 'full'])}).strict(),
   z.object({kind: z.literal('codex-add-dir'), dir: z.string().min(1).max(4096)}).strict(),
   z.object({kind: z.literal('opencode-allow'), permission: z.enum(['bash', 'edit'])}).strict(),
-  z.object({kind: z.literal('opencode-auto')}).strict()
+  z.object({kind: z.literal('opencode-auto')}).strict(),
+  z.object({kind: z.literal('claude-allow-bash'), rule: z.string().min(7).max(220)}).strict(),
+  z.object({kind: z.literal('claude-add-dir'), dir: z.string().min(1).max(4096)}).strict()
 ]);
 
 export function parseElevation(value: unknown): Elevation {
@@ -27,7 +30,7 @@ export function parseElevation(value: unknown): Elevation {
 export interface ElevationOption {
   kind: Elevation['kind'];
   elevation: Elevation | null;
-  /** Needs a directory typed by the owner (codex only). */
+  /** Needs a directory typed by the owner (codex, and claude for a refused file tool). */
   needs_dir: boolean;
   /** The narrowest option the CLI offers for this case; the page preselects it. */
   narrowest: boolean;
@@ -53,6 +56,16 @@ export function elevationOptions(family: AgentFamily, denied: DeniedAction[]): E
     ];
   }
   if (family === 'codex') return [{kind: 'codex-add-dir', elevation: null, needs_dir: true, narrowest: true, wide: false}];
+  if (family === 'claude') {
+    // A refused shell call is allowed again by its exact command (`--allowedTools "Bash(<command>)"`); a refused file tool outside the
+    // workspace by one more directory (`--add-dir`). Nothing here maps to bypassPermissions: that stays a setting the owner writes by hand.
+    const rules = [...new Set(claudeRulesOf(denied))];
+    const fileTool = denied.some(item => item.action !== 'Bash');
+    return [
+      ...rules.map((rule): ElevationOption => ({kind: 'claude-allow-bash', elevation: {kind: 'claude-allow-bash', rule}, needs_dir: false, narrowest: true, wide: false})),
+      ...(fileTool ? [{kind: 'claude-add-dir', elevation: null, needs_dir: true, narrowest: !rules.length, wide: false} satisfies ElevationOption] : [])
+    ];
+  }
   const allowed = opencodePermissionsOf(denied);
   return [
     ...allowed.map((permission): ElevationOption => ({kind: 'opencode-allow', elevation: {kind: 'opencode-allow', permission}, needs_dir: false, narrowest: true, wide: false})),
@@ -66,6 +79,7 @@ export function elevationRefusal(family: AgentFamily, denied: DeniedAction[], el
   if (!offered.some(option => option.kind === elevation.kind)) return `This agent cannot be given "${elevation.kind}"`;
   if (elevation.kind === 'agy-level') return null;
   if (elevation.kind === 'opencode-auto') return null;
+  if (elevation.kind === 'claude-allow-bash') return claudeRulesOf(denied).includes(elevation.rule) ? null : 'The task was not refused that command';
   if (elevation.kind === 'opencode-allow') return opencodePermissionsOf(denied).includes(elevation.permission) ? null : `The task was not refused "${elevation.permission}"`;
   const dir = elevation.dir;
   if (dir.includes('\0') || !path.isAbsolute(dir)) return 'The directory must be an absolute path';
@@ -75,7 +89,12 @@ export function elevationRefusal(family: AgentFamily, denied: DeniedAction[], el
 
 /** The agent family an elevation belongs to: one given for codex must never reach an opencode launch, and the other way round. */
 export const elevationFamily = (elevation: Elevation): AgentFamily =>
-  elevation.kind === 'agy-level' ? 'antigravity' : elevation.kind === 'codex-add-dir' ? 'codex' : 'opencode';
+  elevation.kind === 'agy-level' ? 'antigravity' : elevation.kind === 'codex-add-dir' ? 'codex'
+    : elevation.kind === 'claude-allow-bash' || elevation.kind === 'claude-add-dir' ? 'claude' : 'opencode';
+
+function claudeRulesOf(denied: DeniedAction[]): string[] {
+  return denied.flatMap(item => claudeBashRule(item) ?? []);
+}
 
 /** One line for the decision log and the page: what was granted, in the CLI's own terms. */
 export function describeElevation(elevation: Elevation): string {
@@ -84,6 +103,8 @@ export function describeElevation(elevation: Elevation): string {
     case 'codex-add-dir': return `codex --add-dir ${elevation.dir}`;
     case 'opencode-allow': return `opencode permission ${elevation.permission}=allow`;
     case 'opencode-auto': return 'opencode --auto';
+    case 'claude-allow-bash': return `claude --allowedTools "${elevation.rule}"`;
+    case 'claude-add-dir': return `claude --add-dir ${elevation.dir}`;
   }
 }
 
